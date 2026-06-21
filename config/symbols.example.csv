@@ -1,0 +1,15 @@
+# Your watch-list — the CSV that replaces the Excel sheet.
+# Columns:
+#   symbol            Binance symbol, e.g. BTCUSDT, ETHUSDT
+#   asset_class       crypto (Phase 1). stock/etf reserved for a later phase.
+#   current_position  your CURRENT signed size: +long / -short / 0 flat (notional units)
+#   target_notional   optional per-symbol size; blank = use --default-notional
+#   ref_time          MANUAL start time for the BTC relative-strength gate.
+#                     ISO (2026-06-01, "2026-06-01 08:00", 2026-06-01T08:00:00Z)
+#                     or epoch seconds/ms. Blank = gate skipped for that symbol.
+symbol,asset_class,current_position,target_notional,ref_time
+BTCUSDT,crypto,0,,
+ETHUSDT,crypto,0,,2026-06-01
+SOLUSDT,crypto,0,,2026-06-10 12:00
+BNBUSDT,crypto,0,,
+XRPUSDT,crypto,0,,2026-06-15

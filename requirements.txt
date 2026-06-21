@@ -1,0 +1,7 @@
+# Phase 1 signal engine has ONE runtime dependency, used only for live
+# Binance fetches. The indicator/signal logic is pure standard library, so
+# tests and the offline demo (`python run.py --demo`) need nothing here.
+requests>=2.25
+
+# Optional, for the Phase 2+ backtesting/analysis work (not imported yet):
+# pandas>=2.0
