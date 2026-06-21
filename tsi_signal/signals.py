@@ -47,6 +47,8 @@ class SignalParams:
     require_zero_1h: bool = False  # 1h must also agree with zero (stricter timing)
     hysteresis: bool = False  # hold through weak states; exit only on reversal/gate flip
     exit_state_4h: int = -2  # with hysteresis, exit a long once 4h state <= this (short mirror)
+    long_only: bool = False  # never take short positions
+    short_only: bool = False  # never take long positions
     require_ref: bool = False  # if True, a missing RS start time blocks signals
     benchmark: str = "BTCUSDT"
     # conviction (|4h state + 1h state|) -> fraction of target notional
@@ -107,6 +109,8 @@ def decide(
     the gate flips. ``prev_direction``/``prev_size`` carry the current position
     (the live engine reads them from your current_position).
     """
+    long_ok = long_ok and not params.short_only
+    short_ok = short_ok and not params.long_only
     bull_4h = _is_bull(state_4h, params.require_zero_4h)
     bear_4h = _is_bear(state_4h, params.require_zero_4h)
     bull_1h = _is_bull(state_1h, params.require_zero_1h)

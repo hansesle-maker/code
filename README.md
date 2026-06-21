@@ -123,8 +123,9 @@ python backtest.py --symbols config/symbols.csv
 # 변형 비교 (Confirmed/Aggressive × 게이트 × 히스테리시스, 포트폴리오 기준)
 python backtest.py --symbols config/symbols.csv --compare
 ```
-옵션: `--aggressive`, `--hysteresis`, `--no-gate`, `--fee-bps 5`, `--slippage-bps 2`,
-`--funding-apr 0.10`, `--rs-lookback 30`, `--sweep`, `--market spot`, `--equity-csv eq.csv`.
+옵션: `--aggressive`, `--hysteresis`, `--long-only`/`--short-only`, `--no-gate`, `--fee-bps 5`,
+`--slippage-bps 2`, `--funding-apr 0.10`, `--rs-lookback 30`, `--sweep`, `--market spot`,
+`--equity-csv eq.csv`.
 
 - **`--hysteresis`**: 진입은 확정(+2)으로 엄격히, 보유는 약한 상태(−1 등)를 견디고 **4h가 −2로
   반전하거나 게이트가 뒤집힐 때만 청산**. 아래 "발견"(강추세 과소참여)을 직접 보완 — 데모에서

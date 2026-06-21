@@ -234,6 +234,12 @@ def test_hysteresis_holds_through_weak_state_and_exits_on_reversal():
     assert d is Direction.FLAT
 
 
+def test_long_only_blocks_shorts():
+    p = SignalParams(long_only=True)
+    assert decide(-2, -2, True, True, p)[0] is Direction.FLAT  # short setup blocked
+    assert decide(2, 2, True, True, p)[0] is Direction.LONG    # long still fires
+
+
 # --------------------------------------------------------------------------- #
 # action mapping
 # --------------------------------------------------------------------------- #
