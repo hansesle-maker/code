@@ -1,28 +1,32 @@
-"""Trigger logic: turn candles into a LONG / SHORT / FLAT decision.
+"""Trigger logic: turn candles into a LONG / SHORT / FLAT decision plus a
+conviction-scaled size.
 
 Two independent stages, matching the user's system:
 
-1. Relative-strength GATE (vs BTC, measured from a MANUAL start time).
-   Strength only decides *which direction is allowed* — it never enters a
-   position by itself:
-       stronger than BTC since the start time  -> long permitted
-       weaker  than BTC since the start time   -> short permitted
-   The start time is supplied by you per symbol (e.g. a prior low/high, but
-   that choice is yours); this module just receives the symbol/benchmark
-   closes at that time.
+1. Relative-strength GATE (vs BTC, from a MANUAL start time) decides which
+   *direction is allowed* (stronger than BTC -> long-only, weaker ->
+   short-only). It never enters a position by itself.
 
-2. TSI TRIGGER (the symbol's own 4h & 1h TSI) makes the actual entry call:
-       long  : 4h TSI direction up   AND 1h TSI >= +threshold
-       short : 4h TSI direction down  AND 1h TSI <= -threshold
+2. TSI TRIGGER reads each timeframe's TSI through TWO reference lines instead
+   of a raw 1-bar slope (which is noisy and context-blind):
+       - zero line   : TSI > 0 bullish regime / < 0 bearish regime
+       - signal line : TSI > signal momentum up / < signal momentum down
+   giving a 4-level state per timeframe:
+       +2  TSI>0 and TSI>signal   (confirmed up)
+       +1  TSI<0 and TSI>signal   (turning up, still below zero)
+       -1  TSI>0 and TSI<signal   (rolling over, still above zero)
+       -2  TSI<0 and TSI<signal   (confirmed down)
 
-A position is taken only when the gate permits the direction *and* the
-trigger fires; otherwise FLAT. Every knob lives in :class:`SignalParams`.
+Default ("confirmed"): long needs 4h state == +2 AND 1h above its signal
+line; short is the mirror. With ``require_zero_4h=False`` ("aggressive") a 4h
+state of +1/-1 also qualifies. The position SIZE scales with conviction =
+4h state + 1h state (e.g. +-4 full, +-3 partial) via ``size_by_conviction``.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from .data import Candle
 from .indicators import relative_strength, true_strength_index
@@ -39,11 +43,14 @@ class SignalParams:
     tsi_long: int = 25
     tsi_short: int = 13
     tsi_signal: int = 13
-    slope_lookback: int = 1  # bars used to measure the 4h TSI direction
-    one_h_threshold: float = 0.0  # long needs 1h TSI >= +t ; short needs <= -t
-    require_reversal: bool = False  # if True the 4h TSI must *turn* this bar
+    require_zero_4h: bool = True  # confirmed: 4h must also be on the right side of zero
+    require_zero_1h: bool = False  # 1h must also agree with zero (stricter timing)
     require_ref: bool = False  # if True, a missing RS start time blocks signals
     benchmark: str = "BTCUSDT"
+    # conviction (|4h state + 1h state|) -> fraction of target notional
+    size_by_conviction: Dict[int, float] = field(
+        default_factory=lambda: {4: 1.0, 3: 0.6, 2: 0.3}
+    )
 
 
 @dataclass
@@ -53,31 +60,31 @@ class SymbolSignal:
     rs_vs_bench: Optional[float]  # fraction since the start time; None if unavailable
     gate: str  # 'long' | 'short' | 'both' | 'neutral' | 'n/a'
     tsi_4h: float
-    tsi_4h_slope: int  # +1 up, -1 down, 0 flat
+    state_4h: int  # +2 / +1 / -1 / -2
     tsi_1h: float
+    state_1h: int
+    conviction: int  # state_4h + state_1h (signed)
+    size_fraction: float  # 0..1, scales the target notional
     note: str = ""
 
 
-def _sign(x: float, eps: float = 1e-12) -> int:
-    if x > eps:
-        return 1
-    if x < -eps:
-        return -1
-    return 0
+def tsi_state(tsi: float, signal: float) -> int:
+    """4-level momentum read from the zero line and the signal line.
+
+    +2 (TSI>0 & TSI>signal), +1 (TSI<0 & TSI>signal),
+    -1 (TSI>0 & TSI<signal), -2 (TSI<0 & TSI<signal).
+    """
+    if tsi > signal:
+        return 2 if tsi > 0 else 1
+    return -2 if tsi < 0 else -1
 
 
-def _slope(series: List[float], lookback: int) -> int:
-    if len(series) <= lookback:
-        return 0
-    return _sign(series[-1] - series[-1 - lookback])
+def _is_bull(state: int, require_zero: bool) -> bool:
+    return state == 2 or (state == 1 and not require_zero)
 
 
-def _turned_up(series: List[float]) -> bool:
-    return len(series) >= 3 and series[-1] > series[-2] and series[-2] <= series[-3]
-
-
-def _turned_down(series: List[float]) -> bool:
-    return len(series) >= 3 and series[-1] < series[-2] and series[-2] >= series[-3]
+def _is_bear(state: int, require_zero: bool) -> bool:
+    return state == -2 or (state == -1 and not require_zero)
 
 
 def evaluate_symbol(
@@ -90,7 +97,7 @@ def evaluate_symbol(
     params: SignalParams,
     is_benchmark: bool = False,
 ) -> SymbolSignal:
-    """Evaluate one symbol and return its target :class:`Direction`.
+    """Evaluate one symbol -> direction + conviction-scaled size.
 
     ``sym_ref_close`` / ``bench_ref_close`` are the symbol's and benchmark's
     closes at the user's chosen start time; ``bench_now_close`` is the
@@ -100,19 +107,20 @@ def evaluate_symbol(
     close_4h = [c.close for c in candles_4h]
     close_1h = [c.close for c in candles_1h]
 
-    tsi4, _ = true_strength_index(close_4h, params.tsi_long, params.tsi_short, params.tsi_signal)
-    tsi1, _ = true_strength_index(close_1h, params.tsi_long, params.tsi_short, params.tsi_signal)
+    tsi4, sig4 = true_strength_index(close_4h, params.tsi_long, params.tsi_short, params.tsi_signal)
+    tsi1, sig1 = true_strength_index(close_1h, params.tsi_long, params.tsi_short, params.tsi_signal)
     last_tsi4 = tsi4[-1] if tsi4 else 0.0
+    last_sig4 = sig4[-1] if sig4 else 0.0
     last_tsi1 = tsi1[-1] if tsi1 else 0.0
-    slope4 = _slope(tsi4, params.slope_lookback)
+    last_sig1 = sig1[-1] if sig1 else 0.0
 
-    # --- TSI trigger (symbol's own 4h direction + 1h level) ---------------
-    if params.require_reversal:
-        bull_4h, bear_4h = _turned_up(tsi4), _turned_down(tsi4)
-    else:
-        bull_4h, bear_4h = slope4 > 0, slope4 < 0
-    long_trigger = bull_4h and last_tsi1 >= params.one_h_threshold
-    short_trigger = bear_4h and last_tsi1 <= -params.one_h_threshold
+    state4 = tsi_state(last_tsi4, last_sig4)
+    state1 = tsi_state(last_tsi1, last_sig1)
+
+    bull_4h = _is_bull(state4, params.require_zero_4h)
+    bear_4h = _is_bear(state4, params.require_zero_4h)
+    bull_1h = _is_bull(state1, params.require_zero_1h)
+    bear_1h = _is_bear(state1, params.require_zero_1h)
 
     # --- relative-strength gate (vs BTC, from the manual start time) ------
     rs: Optional[float] = None
@@ -137,10 +145,17 @@ def evaluate_symbol(
         gate, long_ok, short_ok = "neutral", False, False
 
     direction = Direction.FLAT
-    if long_ok and long_trigger:
+    if long_ok and bull_4h and bull_1h:
         direction = Direction.LONG
-    elif short_ok and short_trigger:
+    elif short_ok and bear_4h and bear_1h:
         direction = Direction.SHORT
+
+    conviction = state4 + state1
+    size_fraction = (
+        params.size_by_conviction.get(abs(conviction), 0.0)
+        if direction is not Direction.FLAT
+        else 0.0
+    )
 
     return SymbolSignal(
         symbol=symbol,
@@ -148,7 +163,10 @@ def evaluate_symbol(
         rs_vs_bench=rs,
         gate=gate,
         tsi_4h=last_tsi4,
-        tsi_4h_slope=slope4,
+        state_4h=state4,
         tsi_1h=last_tsi1,
+        state_1h=state1,
+        conviction=conviction,
+        size_fraction=size_fraction,
         note=note,
     )

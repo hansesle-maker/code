@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tsi_signal.data import synthetic_candles, trend_closes
 from tsi_signal.engine import _action, parse_time
 from tsi_signal.indicators import ema, relative_strength, true_strength_index
-from tsi_signal.signals import Direction, SignalParams, evaluate_symbol
+from tsi_signal.signals import Direction, SignalParams, evaluate_symbol, tsi_state
 
 
 # --------------------------------------------------------------------------- #
@@ -50,87 +50,126 @@ def test_parse_time():
     assert parse_time("") is None
     assert parse_time("1700000000000") == 1700000000000
     assert parse_time("1700000000") == 1700000000000  # seconds -> ms
-    # naive values are interpreted as KST by default
-    expect = int(datetime(2026, 6, 1, tzinfo=kst).timestamp() * 1000)
+    expect = int(datetime(2026, 6, 1, tzinfo=kst).timestamp() * 1000)  # naive -> KST
     assert parse_time("2026-06-01") == expect
-    assert parse_time("2026/06/01") == expect  # slash separator
-    # hour precision preserved, even with Excel's text-prefix apostrophe
+    assert parse_time("2026/06/01") == expect
     expect_hm = int(datetime(2026, 6, 1, 8, 0, tzinfo=kst).timestamp() * 1000)
     assert parse_time("2026-06-01 08:00") == expect_hm
-    assert parse_time("'2026-06-01 08:00") == expect_hm
-    # an explicit offset overrides the KST default (Z = UTC)
+    assert parse_time("'2026-06-01 08:00") == expect_hm  # Excel text-prefix
     expect_utc = int(datetime(2026, 6, 1, 8, 0, tzinfo=timezone.utc).timestamp() * 1000)
-    assert parse_time("2026-06-01T08:00:00Z") == expect_utc
+    assert parse_time("2026-06-01T08:00:00Z") == expect_utc  # explicit offset wins
 
 
 # --------------------------------------------------------------------------- #
-# signal decisions — gate (RS vs BTC) x trigger (own 4h/1h TSI)
+# TSI state model: zero line x signal line
 # --------------------------------------------------------------------------- #
-def _series(slope, n_base=200, n_tail=20):
-    """Rippling flat base + a short directional tail (sets TSI sign/direction
-    without saturating it at +-100)."""
-    base = trend_closes(n_base, start=100.0, drift=0.0, ripple=0.02)
-    tail = [base[-1] * (1.0 + slope * i) for i in range(1, n_tail + 1)]
+def test_tsi_state():
+    assert tsi_state(50, 30) == 2    # >0 and >signal  -> confirmed up
+    assert tsi_state(-50, -70) == 1  # <0 and >signal  -> turning up
+    assert tsi_state(50, 70) == -1   # >0 and <signal  -> rolling over
+    assert tsi_state(-50, -30) == -2  # <0 and <signal -> confirmed down
+
+
+def _state_series(regime, recent, n_regime=200, n_recent=14):
+    """Two-phase path: ``regime`` sets the TSI's side of zero, ``recent`` sets
+    its side of the signal line. Magnitudes below land specific states."""
+    base = trend_closes(n_regime, start=100.0, drift=regime, ripple=0.004)
+    tail = [base[-1] * (1.0 + recent * i) for i in range(1, n_recent + 1)]
     return base + tail
 
 
-def test_long_when_strong_and_tsi_up():
-    up = _series(+0.004)
-    c4, c1 = synthetic_candles(up, "4h"), synthetic_candles(up, "1h")
-    sig = evaluate_symbol("ETHUSDT", c4, c1, sym_ref_close=up[0],
-                          bench_ref_close=100.0, bench_now_close=100.0, params=SignalParams())
+# slopes -> intended state (verified by test_state_series_hits_targets)
+S_PLUS2 = (0.0018, 0.004)
+S_MINUS2 = (-0.0018, -0.004)
+S_PLUS1 = (-0.004, 0.004)
+S_MINUS1 = (0.004, -0.002)
+
+
+def _eval(sym, s4, s1, params=None, **kw):
+    return evaluate_symbol(
+        sym, synthetic_candles(s4, "4h"), synthetic_candles(s1, "1h"),
+        params=params or SignalParams(), **kw,
+    )
+
+
+def test_state_series_hits_targets():
+    for slopes, want in [(S_PLUS2, 2), (S_MINUS2, -2), (S_PLUS1, 1), (S_MINUS1, -1)]:
+        tsi, sig = true_strength_index(_state_series(*slopes))
+        assert tsi_state(tsi[-1], sig[-1]) == want, (slopes, want)
+
+
+# --------------------------------------------------------------------------- #
+# decisions: gate (RS) x trigger (state) x conviction sizing
+# --------------------------------------------------------------------------- #
+def test_long_full_size():
+    s = _state_series(*S_PLUS2)
+    sig = _eval("ETHUSDT", s, s, sym_ref_close=s[0], bench_ref_close=100.0, bench_now_close=100.0)
+    assert sig.gate == "long" and sig.state_4h == 2 and sig.state_1h == 2
     assert sig.direction is Direction.LONG
-    assert sig.gate == "long" and sig.rs_vs_bench > 0
-    assert sig.tsi_4h_slope > 0 and sig.tsi_1h >= 0
+    assert sig.conviction == 4 and sig.size_fraction == 1.0
 
 
-def test_short_when_weak_and_tsi_down():
-    down = _series(-0.004)
-    c4, c1 = synthetic_candles(down, "4h"), synthetic_candles(down, "1h")
-    sig = evaluate_symbol("SOLUSDT", c4, c1, sym_ref_close=down[0],
-                          bench_ref_close=100.0, bench_now_close=100.0, params=SignalParams())
-    assert sig.direction is Direction.SHORT
-    assert sig.gate == "short" and sig.rs_vs_bench < 0
-    assert sig.tsi_4h_slope < 0 and sig.tsi_1h <= 0
+def test_long_partial_size_on_lower_conviction():
+    s4, s1 = _state_series(*S_PLUS2), _state_series(*S_PLUS1)  # 4h +2, 1h +1
+    sig = _eval("LINKUSDT", s4, s1, sym_ref_close=s4[0], bench_ref_close=100.0, bench_now_close=100.0)
+    assert sig.state_4h == 2 and sig.state_1h == 1
+    assert sig.direction is Direction.LONG
+    assert sig.conviction == 3 and abs(sig.size_fraction - 0.6) < 1e-9
+
+
+def test_short_full_size():
+    s = _state_series(*S_MINUS2)
+    sig = _eval("SOLUSDT", s, s, sym_ref_close=s[0], bench_ref_close=100.0, bench_now_close=100.0)
+    assert sig.gate == "short" and sig.direction is Direction.SHORT
+    assert sig.conviction == -4 and sig.size_fraction == 1.0
+
+
+def test_flat_when_4h_not_confirmed():
+    # 4h is +1 (rising but still below zero & signal) -> confirmed mode rejects.
+    s4, s1 = _state_series(*S_PLUS1), _state_series(*S_PLUS2)
+    sig = _eval("BTCUSDT", s4, s1, sym_ref_close=None, bench_ref_close=None,
+                bench_now_close=None, is_benchmark=True)
+    assert sig.state_4h == 1 and sig.direction is Direction.FLAT
+
+
+def test_aggressive_mode_allows_state_plus1():
+    s = _state_series(*S_PLUS1)  # +1 on both timeframes
+    aggressive = SignalParams(require_zero_4h=False)
+    sig = _eval("BTCUSDT", s, s, params=aggressive, sym_ref_close=None,
+                bench_ref_close=None, bench_now_close=None, is_benchmark=True)
+    assert sig.direction is Direction.LONG
+    assert sig.conviction == 2 and abs(sig.size_fraction - 0.3) < 1e-9
+
+
+def test_flat_when_1h_rolled_over():
+    # 4h confirmed up (+2) but 1h is -1 (above zero yet below its signal) -> wait.
+    s4, s1 = _state_series(*S_PLUS2), _state_series(*S_MINUS1)
+    sig = _eval("XRPUSDT", s4, s1, sym_ref_close=s4[0], bench_ref_close=100.0, bench_now_close=100.0)
+    assert sig.state_4h == 2 and sig.state_1h == -1
+    assert sig.direction is Direction.FLAT
 
 
 def test_gate_blocks_long_when_weak_vs_btc():
-    # TSI screams long (4h up, 1h>=0) but the coin is WEAKER than BTC since the
-    # start time -> gate forbids long, 4h isn't down -> no short -> FLAT.
-    up = _series(+0.004)
-    c4, c1 = synthetic_candles(up, "4h"), synthetic_candles(up, "1h")
-    sig = evaluate_symbol("XYZUSDT", c4, c1, sym_ref_close=up[0],
-                          bench_ref_close=100.0, bench_now_close=200.0, params=SignalParams())
-    assert sig.gate == "short"
-    assert sig.direction is Direction.FLAT
-
-
-def test_flat_when_1h_below_zero():
-    # Strong vs BTC and 4h up, but 1h TSI < 0 -> long trigger fails -> FLAT.
-    up, down = _series(+0.004), _series(-0.004)
-    c4, c1 = synthetic_candles(up, "4h"), synthetic_candles(down, "1h")
-    sig = evaluate_symbol("XRPUSDT", c4, c1, sym_ref_close=up[0],
-                          bench_ref_close=100.0, bench_now_close=100.0, params=SignalParams())
-    assert sig.gate == "long" and sig.tsi_1h < 0
-    assert sig.direction is Direction.FLAT
+    # TSI is long-ready (+2/+2) but the coin is weaker than BTC -> no long.
+    s = _state_series(*S_PLUS2)
+    sig = _eval("XYZUSDT", s, s, sym_ref_close=s[0], bench_ref_close=100.0, bench_now_close=10000.0)
+    assert sig.gate == "short" and sig.direction is Direction.FLAT
 
 
 def test_benchmark_uses_tsi_only():
-    up = _series(+0.004)
-    c4, c1 = synthetic_candles(up, "4h"), synthetic_candles(up, "1h")
-    sig = evaluate_symbol("BTCUSDT", c4, c1, None, None, None, SignalParams(), is_benchmark=True)
+    s = _state_series(*S_PLUS2)
+    sig = _eval("BTCUSDT", s, s, sym_ref_close=None, bench_ref_close=None,
+                bench_now_close=None, is_benchmark=True)
     assert sig.direction is Direction.LONG
-    assert sig.rs_vs_bench is None and sig.gate == "both"
+    assert sig.gate == "both" and sig.rs_vs_bench is None
 
 
 def test_missing_ref_skips_gate_unless_required():
-    up = _series(+0.004)
-    c4, c1 = synthetic_candles(up, "4h"), synthetic_candles(up, "1h")
-    # no start time -> gate skipped by default, trigger still fires
-    sig = evaluate_symbol("ETHUSDT", c4, c1, None, None, 100.0, SignalParams())
+    s = _state_series(*S_PLUS2)
+    sig = _eval("ETHUSDT", s, s, sym_ref_close=None, bench_ref_close=None, bench_now_close=100.0)
     assert sig.direction is Direction.LONG and sig.gate == "both"
-    # require_ref=True -> blocked
-    sig2 = evaluate_symbol("ETHUSDT", c4, c1, None, None, 100.0, SignalParams(require_ref=True))
+    sig2 = _eval("ETHUSDT", s, s, params=SignalParams(require_ref=True),
+                 sym_ref_close=None, bench_ref_close=None, bench_now_close=100.0)
     assert sig2.direction is Direction.FLAT and sig2.gate == "n/a"
 
 

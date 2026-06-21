@@ -21,22 +21,37 @@
 - 벤치마크(BTC) 자신은 게이트를 건너뛰고 자체 TSI로만 판단합니다.
 
 ### 2) 트리거 — 해당 종목의 4h / 1h TSI (실제 진입 판단)
-- **롱**: 4h TSI 방향이 **상승** AND 1h TSI ≥ 0
-- **숏**: 4h TSI 방향이 **하락** AND 1h TSI ≤ 0
-- 게이트가 그 방향을 허용하고 **동시에** 트리거가 켜질 때만 포지션을 잡습니다.
-  아니면 **FLAT**.
+TSI를 1봉 기울기로 보지 않고 **두 기준선**으로 읽어 **4단계 상태**로 판단합니다.
+- **0선**: TSI>0 강세권 / <0 약세권
+- **시그널선**(TSI의 EMA): TSI>signal 상승 / <signal 하락
 
-> 예) BTC보다 강세(게이트=long)이고, 4h TSI가 상승 전환 + 1h TSI가 0 이상 → **롱**.
-> 반대면 숏.
+| TSI vs 0 | TSI vs signal | 상태 |
+|---|---|---|
+| >0 | >signal | **+2 확정 상승** |
+| <0 | >signal | +1 반등 초기 |
+| >0 | <signal | −1 되돌림 |
+| <0 | <signal | **−2 확정 하락** |
+
+- **롱(기본=확정형)**: 게이트 long + **4h 상태 +2** + **1h 시그널선 위**(상태 ≥ +1)
+- **숏**: 게이트 short + **4h 상태 −2** + **1h 시그널선 아래**(상태 ≤ −1)
+- 그 외 → **FLAT**. (예: 4h가 음수인데 시그널 아래면 올라도 진입 안 함 / 1h가 시그널과
+  엇갈리면 대기)
+
+**확신도 사이징**: `CONV = 4h상태 + 1h상태` 의 절댓값으로 사이즈를 차등합니다
+(기본 `{4: 100%, 3: 60%, 2: 30%}`). 즉 4h·1h가 모두 강할수록 크게 잡습니다.
 
 ### 기본값 / 튜닝 (`tsi_signal/signals.py`의 `SignalParams`)
 | 파라미터 | 기본값 | 의미 |
 |---|---|---|
 | `tsi_long / tsi_short / tsi_signal` | 25 / 13 / 13 | TradingView 기본 TSI와 동일 |
-| `slope_lookback` | 1 | 4h TSI "방향"을 몇 봉 기울기로 볼지 |
-| `require_reversal` | False | True면 4h TSI가 이번 봉에 *전환*(하락→상승)해야 함 (`--require-reversal`) |
-| `one_h_threshold` | 0.0 | 롱은 1h TSI ≥ +t, 숏은 ≤ −t (버퍼를 주고 싶을 때) |
+| `require_zero_4h` | True | 4h가 0선까지 같은 편이어야 진입(확정형). False면 +1/−1도 허용(`--aggressive`) |
+| `require_zero_1h` | False | True면 1h도 0선 조건까지 요구(더 엄격, `--require-zero-1h`) |
+| `size_by_conviction` | {4:1.0, 3:0.6, 2:0.3} | 확신도(CONV)별 사이즈 비율 |
 | `require_ref` | False | True면 `ref_time` 없는 종목은 신호 차단 (`--require-ref`) |
+
+> **얼리 vs 확정**: 기본은 4h가 0선 위(+2)까지 확인된 뒤 진입이라 안전하지만 조금 늦습니다.
+> 반등 초기를 빨리 잡고 싶으면 `--aggressive`(4h +1 허용). 어느 쪽이 나은지는 백테스트로
+> 정하는 게 맞습니다.
 
 ## 사용법
 
@@ -78,14 +93,21 @@ python tests/test_signals.py      # 또는: pytest -q
 
 ### 출력 표 보는 법
 ```
-SYMBOL  RS%vsBTC  GATE   TSI4h 4hDir  TSI1h  SIGNAL  CUR   TARGET  DELTA  ACTION
-ETHUSDT  +4.85    long   +47.4 up     +47.4  LONG    0     1000    +1000  ENTER_LONG
+SYMBOL    RS%vsBTC  GATE   TSI4h   St4h  TSI1h   St1h  CONV  SIGNAL  SIZE%  CUR   TARGET  DELTA  ACTION
+ETHUSDT   +7.04     long   +100.0  +2    +100.0  +2    +4    LONG    100    0     1000    +1000  ENTER_LONG
+LINKUSDT  +7.04     long   +100.0  +2    -72.1   +1    +3    LONG    60     0     600     +600   ENTER_LONG
+XRPUSDT   +7.04     long   +100.0  +2    +9.5    -1    +0    FLAT    0      0     0       +0     HOLD
 ```
 - `GATE` = 상대강도가 허용하는 방향(long/short/both)
-- `SIGNAL` = 최종 판단(LONG/SHORT/FLAT)
+- `St4h` / `St1h` = 각 TF의 TSI 상태(+2/+1/−1/−2)
+- `CONV` = `St4h + St1h` (확신도) → `SIZE%` 결정
+- `SIGNAL` = 최종 판단(LONG/SHORT/FLAT), `SIZE%` = 목표 사이즈 비율
 - `ACTION` = 거래소에서 할 일: `ENTER_*` 진입 / `SWITCH_*` 전환 / `EXIT` 청산 /
   `ADD`·`REDUCE` 증감 / `HOLD` 유지
 - `DELTA` = `TARGET − CUR` (이만큼 조정)
+
+위 예에서 **XRP**는 BTC 대비 강세(게이트 통과)·4h 확정 상승(+2)이지만 **1h TSI 값(+9.5)이
+시그널선 아래(−1 상태)** 라 진입을 보류(FLAT)합니다 — "오르긴 하나 아직 시그널 위가 아님".
 
 ## 4시간 자동 실행 (cron)
 바이낸스 4h 봉은 UTC 00·04·08·12·16·20시에 마감됩니다. 마감 직후 실행:

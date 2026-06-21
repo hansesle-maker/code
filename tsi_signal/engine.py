@@ -2,7 +2,8 @@
 the "to-be" position table that replaces the manual chart-reading step.
 
 Phase 1 is execution-free (semi-automatic): it reports the target position
-and the delta from your current one; you place the orders on Binance.
+(direction x conviction-scaled size) and the delta from your current one; you
+place the orders on Binance.
 """
 from __future__ import annotations
 
@@ -15,13 +16,17 @@ from typing import Dict, List, Optional, Tuple
 from .data import Candle, Fetcher
 from .signals import Direction, SignalParams, evaluate_symbol
 
+# Korea Standard Time has no DST, so a fixed +9 offset is exact (and needs no
+# tzdata, which Windows lacks). Naive ref_time values are interpreted as KST.
+KST = timezone(timedelta(hours=9))
+
 
 @dataclass
 class SymbolConfig:
     symbol: str
     asset_class: str = "crypto"
     current_position: float = 0.0  # signed: +long / -short, in notional units
-    target_notional: Optional[float] = None  # per-symbol size; falls back to default
+    target_notional: Optional[float] = None  # full-size notional; falls back to default
     ref_time_ms: Optional[int] = None  # manual RS start time (epoch ms)
 
 
@@ -32,19 +37,17 @@ class Row:
     rs_vs_bench: Optional[float]
     gate: str
     tsi_4h: float
-    tsi_4h_slope: int
+    state_4h: int
     tsi_1h: float
+    state_1h: int
+    conviction: int
+    size_fraction: float
     direction: Direction
     current_position: float
     target_position: float
     delta: float
     action: str
     note: str = ""
-
-
-# Korea Standard Time has no DST, so a fixed +9 offset is exact (and needs no
-# tzdata, which Windows lacks). Naive ref_time values are interpreted as KST.
-KST = timezone(timedelta(hours=9))
 
 
 def parse_time(value: str, default_tz: timezone = KST) -> Optional[int]:
@@ -119,11 +122,12 @@ def _action(current: float, target: float) -> str:
     return "SWITCH_TO_LONG" if target > 0 else "SWITCH_TO_SHORT"
 
 
-def _target_position(direction: Direction, notional: float) -> float:
+def _signed_target(direction: Direction, size_fraction: float, notional: float) -> float:
+    mag = abs(notional) * size_fraction
     if direction is Direction.LONG:
-        return abs(notional)
+        return mag
     if direction is Direction.SHORT:
-        return -abs(notional)
+        return -mag
     return 0.0
 
 
@@ -167,27 +171,28 @@ def run_engine(
             ref_ot, sym_ref, ref_note = _ref_close(candles_4h, cfg.ref_time_ms)
             bench_ref = bench_by_time.get(ref_ot) if ref_ot is not None else None
 
-            signal = evaluate_symbol(
+            sig = evaluate_symbol(
                 cfg.symbol, candles_4h, candles_1h,
                 sym_ref_close=sym_ref, bench_ref_close=bench_ref,
                 bench_now_close=bench_now, params=params, is_benchmark=is_bench,
             )
-            note = "; ".join(n for n in (ref_note, signal.note) if n)
+            note = "; ".join(n for n in (ref_note, sig.note) if n)
         except Exception as exc:  # one bad symbol must not sink the whole run
             rows.append(
-                Row(cfg.symbol, cfg.asset_class, None, "n/a", 0.0, 0, 0.0,
+                Row(cfg.symbol, cfg.asset_class, None, "n/a", 0.0, 0, 0.0, 0, 0, 0.0,
                     Direction.FLAT, cfg.current_position, cfg.current_position,
                     0.0, "ERROR", f"{type(exc).__name__}: {exc}")
             )
             continue
 
         notional = cfg.target_notional if cfg.target_notional is not None else default_notional
-        target = _target_position(signal.direction, notional)
+        target = _signed_target(sig.direction, sig.size_fraction, notional)
         rows.append(
             Row(
-                symbol=cfg.symbol, asset_class=cfg.asset_class, rs_vs_bench=signal.rs_vs_bench,
-                gate=signal.gate, tsi_4h=signal.tsi_4h, tsi_4h_slope=signal.tsi_4h_slope,
-                tsi_1h=signal.tsi_1h, direction=signal.direction,
+                symbol=cfg.symbol, asset_class=cfg.asset_class, rs_vs_bench=sig.rs_vs_bench,
+                gate=sig.gate, tsi_4h=sig.tsi_4h, state_4h=sig.state_4h,
+                tsi_1h=sig.tsi_1h, state_1h=sig.state_1h, conviction=sig.conviction,
+                size_fraction=sig.size_fraction, direction=sig.direction,
                 current_position=cfg.current_position, target_position=target,
                 delta=target - cfg.current_position,
                 action=_action(cfg.current_position, target), note=note,
@@ -196,23 +201,21 @@ def run_engine(
     return rows
 
 
-def _arrow(slope: int) -> str:
-    return {1: "up", -1: "down"}.get(slope, "flat")
-
-
 def format_table(rows: List[Row]) -> str:
     """Render rows as an aligned, human-readable to-be table."""
     header = [
-        "SYMBOL", "CLASS", "RS%vsBTC", "GATE", "TSI4h", "4hDir",
-        "TSI1h", "SIGNAL", "CUR", "TARGET", "DELTA", "ACTION", "NOTE",
+        "SYMBOL", "RS%vsBTC", "GATE", "TSI4h", "St4h", "TSI1h", "St1h",
+        "CONV", "SIGNAL", "SIZE%", "CUR", "TARGET", "DELTA", "ACTION", "NOTE",
     ]
     lines = [header]
     for r in rows:
         rs = "-" if r.rs_vs_bench is None else f"{r.rs_vs_bench * 100:+.2f}"
         lines.append([
-            r.symbol, r.asset_class, rs, r.gate, f"{r.tsi_4h:+.1f}", _arrow(r.tsi_4h_slope),
-            f"{r.tsi_1h:+.1f}", r.direction.value, f"{r.current_position:g}",
-            f"{r.target_position:g}", f"{r.delta:+g}", r.action, r.note,
+            r.symbol, rs, r.gate, f"{r.tsi_4h:+.1f}", f"{r.state_4h:+d}",
+            f"{r.tsi_1h:+.1f}", f"{r.state_1h:+d}", f"{r.conviction:+d}",
+            r.direction.value, f"{r.size_fraction * 100:.0f}",
+            f"{r.current_position:g}", f"{r.target_position:g}",
+            f"{r.delta:+g}", r.action, r.note,
         ])
     widths = [max(len(row[i]) for row in lines) for i in range(len(header))]
     return "\n".join("  ".join(c.ljust(widths[i]) for i, c in enumerate(row)) for row in lines)
@@ -223,16 +226,17 @@ def to_csv(rows: List[Row]) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([
-        "symbol", "asset_class", "rs_vs_btc", "gate", "tsi_4h", "tsi_4h_dir",
-        "tsi_1h", "signal", "current_position", "target_position", "delta",
-        "action", "note",
+        "symbol", "asset_class", "rs_vs_btc", "gate", "tsi_4h", "state_4h",
+        "tsi_1h", "state_1h", "conviction", "signal", "size_pct",
+        "current_position", "target_position", "delta", "action", "note",
     ])
     for r in rows:
         writer.writerow([
             r.symbol, r.asset_class,
             "" if r.rs_vs_bench is None else f"{r.rs_vs_bench:.6f}", r.gate,
-            f"{r.tsi_4h:.4f}", _arrow(r.tsi_4h_slope), f"{r.tsi_1h:.4f}",
-            r.direction.value, f"{r.current_position:g}", f"{r.target_position:g}",
+            f"{r.tsi_4h:.4f}", r.state_4h, f"{r.tsi_1h:.4f}", r.state_1h,
+            r.conviction, r.direction.value, f"{r.size_fraction * 100:.0f}",
+            f"{r.current_position:g}", f"{r.target_position:g}",
             f"{r.delta:g}", r.action, r.note,
         ])
     return buf.getvalue()
