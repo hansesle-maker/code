@@ -44,11 +44,11 @@
 # 1) 오프라인 데모 (네트워크 불필요 — 출력 형식과 로직 확인용)
 python run.py --demo
 
-# 2) 라이브 (바이낸스 현물 klines)
+# 2) 라이브 (기본값 = 바이낸스 USDⓈ-M 선물 klines)
 python run.py --symbols config/symbols.csv --out signals.csv
 
-# 3) 바이낸스 USDⓈ-M 선물 klines 사용
-python run.py --symbols config/symbols.csv --market futures
+# 3) 현물(spot) klines를 쓰고 싶으면
+python run.py --symbols config/symbols.csv --market spot
 
 # 테스트
 python tests/test_signals.py      # 또는: pytest -q
@@ -64,6 +64,14 @@ python tests/test_signals.py      # 또는: pytest -q
 | `current_position` | 현재 포지션, 부호 포함: +롱 / −숏 / 0 플랫 (명목 단위) |
 | `target_notional` | (선택) 종목별 목표 사이즈. 비우면 `--default-notional` |
 | `ref_time` | **상대강도 측정 시작점**. ISO(`2026-06-01`, `2026-06-01 08:00`, `...T08:00:00Z`) 또는 epoch 초/ms. 비우면 게이트 생략 |
+
+> **엑셀 주의:** `ref_time`에 **시:분**까지 넣을 때는 셀 맨 앞에 작은따옴표를 붙이세요 →
+> `'2026-06-01 08:00`. 안 그러면 엑셀이 저장할 때 시간을 떼고 날짜만 남깁니다.
+> 저장된 CSV에선 따옴표가 빠지고 엔진이 시:분까지 정확히 인식합니다. 시작점은 4시간봉
+> 단위로 매칭되므로, 그 시점 이후 첫 4h봉이 기준이 됩니다.
+
+> **데이터 마켓:** 기본은 **선물(USDⓈ-M)** klines(`fapi.binance.com/fapi/v1/klines`)라
+> 선물 전용 심볼도 받아옵니다. 현물을 쓰려면 `--market spot`.
 
 ### 출력 표 보는 법
 ```

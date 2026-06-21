@@ -14,6 +14,16 @@ from typing import Callable, Dict, List, Optional
 SPOT_BASE_URL = "https://api.binance.com"
 FUTURES_BASE_URL = "https://fapi.binance.com"
 
+# Klines REST paths differ between spot and USDⓈ-M futures (same row format).
+SPOT_KLINES_PATH = "/api/v3/klines"
+FUTURES_KLINES_PATH = "/fapi/v1/klines"
+
+# market name -> (base_url, klines_path)
+MARKETS = {
+    "spot": (SPOT_BASE_URL, SPOT_KLINES_PATH),
+    "futures": (FUTURES_BASE_URL, FUTURES_KLINES_PATH),
+}
+
 # Default epoch (ms) for synthetic candles, so generated series line up in time.
 SYNTH_START_MS = 1_700_000_000_000
 
@@ -44,10 +54,15 @@ def fetch_klines(
     interval: str,
     limit: int = 500,
     base_url: str = SPOT_BASE_URL,
+    path: str = SPOT_KLINES_PATH,
     drop_unclosed: bool = True,
     session: Optional[object] = None,
 ) -> List[Candle]:
     """Fetch OHLCV klines from Binance's public REST API (no auth required).
+
+    Works for spot (``base_url``/``path`` defaults) or USDⓈ-M futures
+    (``FUTURES_BASE_URL`` + ``FUTURES_KLINES_PATH``); the row format is the
+    same. See :data:`MARKETS` for the pairs.
 
     The most recent kline returned by Binance is the still-forming candle;
     with ``drop_unclosed=True`` it is removed so signals are evaluated on
@@ -58,7 +73,7 @@ def fetch_klines(
     """
     import requests  # imported lazily so offline use needs no dependency
 
-    url = f"{base_url}/api/v3/klines"
+    url = f"{base_url}{path}"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
     http = session or requests
     resp = http.get(url, params=params, timeout=15)

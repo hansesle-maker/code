@@ -32,12 +32,7 @@ from tsi_signal import (
     to_csv,
     trend_closes,
 )
-from tsi_signal.data import (
-    FUTURES_BASE_URL,
-    INTERVAL_MS,
-    SPOT_BASE_URL,
-    SYNTH_START_MS,
-)
+from tsi_signal.data import INTERVAL_MS, MARKETS, SYNTH_START_MS
 
 # A shared, manual RS start time for the demo (bar 195 of the synthetic series).
 _DEMO_REF_MS = SYNTH_START_MS + 195 * INTERVAL_MS["4h"]
@@ -92,7 +87,8 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--symbols", help="CSV with symbol,asset_class,current_position[,target_notional]")
     parser.add_argument("--out", help="write the to-be table to this CSV path")
     parser.add_argument("--demo", action="store_true", help="run offline with synthetic data")
-    parser.add_argument("--market", choices=["spot", "futures"], default="spot")
+    parser.add_argument("--market", choices=["spot", "futures"], default="futures",
+                        help="Binance market for klines (default: futures)")
     parser.add_argument("--benchmark", default="BTCUSDT")
     parser.add_argument("--default-notional", type=float, default=1000.0)
     parser.add_argument("--limit", type=int, default=1000,
@@ -116,17 +112,17 @@ def main(argv: List[str] | None = None) -> int:
         if not args.symbols:
             parser.error("--symbols is required unless --demo is given")
         symbols = load_symbols(args.symbols)
-        base_url = FUTURES_BASE_URL if args.market == "futures" else SPOT_BASE_URL
-        fetch = partial(fetch_klines, base_url=base_url)
+        base_url, path = MARKETS[args.market]
+        fetch = partial(fetch_klines, base_url=base_url, path=path)
 
     try:
         rows = run_engine(symbols, fetch, params, default_notional=args.default_notional,
                           kline_limit=args.limit)
     except Exception as exc:  # benchmark fetch / data source failure
+        host = MARKETS[args.market][0]
         print(f"ERROR: failed to fetch market data: {type(exc).__name__}: {exc}", file=sys.stderr)
-        print("Hint: api.binance.com may be blocked by the network allowlist. "
-              "Run locally or allowlist the host (fapi.binance.com for --market futures).",
-              file=sys.stderr)
+        print(f"Hint: {host} may be blocked by the network/region. Run locally, "
+              "or check Binance access for your region/host.", file=sys.stderr)
         return 1
 
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")

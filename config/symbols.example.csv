@@ -7,6 +7,8 @@
 #   ref_time          MANUAL start time for the BTC relative-strength gate.
 #                     ISO (2026-06-01, "2026-06-01 08:00", 2026-06-01T08:00:00Z)
 #                     or epoch seconds/ms. Blank = gate skipped for that symbol.
+#                     In Excel, to keep the hour, prefix with an apostrophe:
+#                       '2026-06-01 08:00   (Excel otherwise drops the time)
 symbol,asset_class,current_position,target_notional,ref_time
 BTCUSDT,crypto,0,,
 ETHUSDT,crypto,0,,2026-06-01

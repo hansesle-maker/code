@@ -46,15 +46,17 @@ def parse_time(value: str) -> Optional[int]:
     """Parse a manual reference time into epoch milliseconds.
 
     Accepts epoch seconds / milliseconds, or ISO-8601 (``2026-06-01``,
-    ``2026-06-01 08:00``, ``2026-06-01T08:00:00Z``). Naive times are UTC.
+    ``2026-06-01 08:00``, ``2026-06-01T08:00:00Z``). Naive times are UTC. A
+    leading apostrophe (Excel's "store as text" prefix) and ``/`` date
+    separators are tolerated.
     """
-    s = (value or "").strip()
+    s = (value or "").strip().lstrip("'").strip()
     if not s:
         return None
     if s.isdigit():
         v = int(s)
         return v * 1000 if len(s) == 10 else v  # 10 digits => seconds
-    iso = s.replace("Z", "+00:00")
+    iso = s.replace("/", "-").replace("Z", "+00:00")
     if "T" not in iso and " " in iso:
         iso = iso.replace(" ", "T", 1)
     dt = datetime.fromisoformat(iso)

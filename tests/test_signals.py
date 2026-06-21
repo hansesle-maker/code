@@ -51,6 +51,11 @@ def test_parse_time():
     assert parse_time("1700000000") == 1700000000000  # seconds -> ms
     expect = int(datetime(2026, 6, 1, tzinfo=timezone.utc).timestamp() * 1000)
     assert parse_time("2026-06-01") == expect
+    assert parse_time("2026/06/01") == expect  # slash separator
+    # hour precision preserved, even with Excel's text-prefix apostrophe
+    expect_hm = int(datetime(2026, 6, 1, 8, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    assert parse_time("2026-06-01 08:00") == expect_hm
+    assert parse_time("'2026-06-01 08:00") == expect_hm
 
 
 # --------------------------------------------------------------------------- #
