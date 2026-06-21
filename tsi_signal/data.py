@@ -96,6 +96,59 @@ def fetch_klines(
     return candles
 
 
+def _raw_to_candles(raw) -> List[Candle]:
+    return [
+        Candle(int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5]))
+        for k in raw
+    ]
+
+
+def fetch_klines_range(
+    symbol: str,
+    interval: str,
+    start_ms: int,
+    end_ms: Optional[int] = None,
+    base_url: str = SPOT_BASE_URL,
+    path: str = SPOT_KLINES_PATH,
+    max_per_req: int = 1000,
+    drop_unclosed: bool = True,
+    session: Optional[object] = None,
+) -> List[Candle]:
+    """Fetch ALL klines in ``[start_ms, end_ms]`` (epoch ms), paginating past
+    Binance's per-request cap so you can backtest an arbitrary date range.
+
+    ``end_ms=None`` means "up to now" (the still-forming last bar is dropped
+    when ``drop_unclosed``). Bars are returned oldest-first, de-duplicated.
+    """
+    import requests  # imported lazily so offline use needs no dependency
+
+    http = session or requests
+    url = f"{base_url}{path}"
+    step = INTERVAL_MS.get(interval, INTERVAL_MS["4h"])
+    out: List[Candle] = []
+    cur = start_ms
+    while True:
+        params = {"symbol": symbol, "interval": interval, "startTime": cur, "limit": max_per_req}
+        if end_ms is not None:
+            params["endTime"] = end_ms
+        resp = http.get(url, params=params, timeout=20)
+        resp.raise_for_status()
+        raw = resp.json()
+        if not raw:
+            break
+        out.extend(_raw_to_candles(raw))
+        nxt = int(raw[-1][0]) + step  # advance past the last bar (no overlap)
+        if len(raw) < max_per_req or (end_ms is not None and nxt > end_ms):
+            break
+        cur = nxt
+
+    if end_ms is not None:
+        out = [c for c in out if c.open_time <= end_ms]
+    elif drop_unclosed and out:
+        out = out[:-1]  # only the live tail can be a forming bar
+    return out
+
+
 def synthetic_candles(
     closes: List[float],
     interval: str = "4h",

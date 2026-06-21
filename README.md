@@ -122,10 +122,24 @@ python backtest.py --symbols config/symbols.csv
 
 # 변형 비교 (Confirmed/Aggressive × 게이트 × 히스테리시스, 포트폴리오 기준)
 python backtest.py --symbols config/symbols.csv --compare
+
+# 특정 날짜 구간 (KST; 1500봉 한계를 넘어 자동 페이지네이션)
+python backtest.py --symbols config/symbols.csv --start 2024-01-01 --end 2024-06-30 --compare
 ```
 옵션: `--aggressive`, `--hysteresis`, `--long-only`/`--short-only`, `--no-gate`, `--fee-bps 5`,
 `--slippage-bps 2`, `--funding-apr 0.10`, `--rs-lookback 30`, `--sweep`, `--market spot`,
 `--equity-csv eq.csv`.
+
+**백테스트 구간(중요):** 기본은 **"현재 시점 기준 최근 N봉"** 입니다(`--limit`, 바이낸스 1회
+상한 ~1500봉 = 4h로 약 250일). 워밍업 150봉을 빼면 보통 ~1348봉이 평가됩니다. 특정 날짜
+구간은 **`--start`/`--end`(KST)** 로 지정 — 1500봉 한계를 넘어 자동 페이지네이션합니다. 실행
+때마다 **실제 평가 구간**이 상단에 출력됩니다:
+```
+# Evaluated window: 2025-10-14 00:00 ~ 2026-06-20 20:00 KST  (1348 bars × 4h ≈ 225 days)
+```
+> CSV의 `ref_time`은 라이브 게이트용이며 **백테스트 구간과 무관**합니다. `B&H%`는 종목별
+> 매수후보유의 **평균**이라 일부 급등 종목이 값을 끌어올릴 수 있으니, 종목별 표(`--compare` 없이
+> 실행)로 어떤 종목이 끌어올렸는지 확인하세요.
 
 - **`--hysteresis`**: 진입은 확정(+2)으로 엄격히, 보유는 약한 상태(−1 등)를 견디고 **4h가 −2로
   반전하거나 게이트가 뒤집힐 때만 청산**. 아래 "발견"(강추세 과소참여)을 직접 보완 — 데모에서

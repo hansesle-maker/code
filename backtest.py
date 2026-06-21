@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Dict, List, Tuple
 
@@ -28,7 +29,15 @@ from tsi_signal.backtest import (
     combine_portfolio,
     format_results,
 )
-from tsi_signal.data import MARKETS
+from tsi_signal.data import INTERVAL_MS, MARKETS, fetch_klines_range
+from tsi_signal.engine import parse_time
+
+_KST = timezone(timedelta(hours=9))
+_WARMUP_BARS = 150  # must match BacktestParams.warmup default (window/print + range padding)
+
+
+def _fmt_kst(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, _KST).strftime("%Y-%m-%d %H:%M")
 
 
 # --------------------------------------------------------------------------- #
@@ -109,7 +118,10 @@ def main(argv: List[str] | None = None) -> int:
     ap.add_argument("--compare", action="store_true", help="compare the four variants")
     ap.add_argument("--market", choices=["spot", "futures"], default="futures")
     ap.add_argument("--benchmark", default="BTCUSDT")
-    ap.add_argument("--limit", type=int, default=1500, help="klines per request (history length)")
+    ap.add_argument("--limit", type=int, default=1500,
+                    help="last-N mode: bars to fetch (Binance caps ~1500/req for 4h)")
+    ap.add_argument("--start", help="backtest from this date (KST), e.g. 2024-01-01; paginates past the 1500 cap")
+    ap.add_argument("--end", help="backtest until this date (KST); default = now")
     ap.add_argument("--aggressive", action="store_true", help="single run: 4h state +1 also qualifies")
     ap.add_argument("--no-gate", action="store_true", help="single run: disable the RS gate")
     ap.add_argument("--hysteresis", action="store_true", help="single run: hold through weak states, exit on reversal")
@@ -135,8 +147,16 @@ def main(argv: List[str] | None = None) -> int:
             ap.error("--symbols is required unless --demo is given")
         symbols = [s.symbol for s in load_symbols(args.symbols)]
         base_url, path = MARKETS[args.market]
-        fetch = partial(fetch_klines, base_url=base_url, path=path)
         benchmark = args.benchmark
+        if args.start:  # explicit date range, paginated past the per-request cap
+            start_ms = parse_time(args.start)
+            end_ms = parse_time(args.end) if args.end else None
+            pad = _WARMUP_BARS * INTERVAL_MS["4h"]  # extra history so warmup doesn't eat your range
+
+            def fetch(symbol, interval, limit, _s=start_ms, _e=end_ms, _b=base_url, _p=path):
+                return fetch_klines_range(symbol, interval, _s - pad, _e, base_url=_b, path=_p)
+        else:
+            fetch = partial(fetch_klines, base_url=base_url, path=path)
 
     # fetch every series once, then run variants offline against the cache
     try:
@@ -169,7 +189,13 @@ def main(argv: List[str] | None = None) -> int:
 
     # --- run --------------------------------------------------------------
     print(f"# Backtest  (benchmark={benchmark}, {'DEMO' if args.demo else args.market}, "
-          f"fee={args.fee_bps}bps)\n")
+          f"fee={args.fee_bps}bps)")
+    bench_c = cached(benchmark, "4h", args.limit)
+    if not args.demo and len(bench_c) > _WARMUP_BARS + 1:
+        n = len(bench_c) - 1 - _WARMUP_BARS
+        print(f"# Evaluated window: {_fmt_kst(bench_c[_WARMUP_BARS].open_time)} ~ "
+              f"{_fmt_kst(bench_c[-2].open_time)} KST  ({n} bars × 4h ≈ {n * 4 / 24:.0f} days)")
+    print()
 
     if args.sweep:
         rows: List[BacktestResult] = []
