@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -46,16 +46,21 @@ def test_relative_strength_sign():
 
 
 def test_parse_time():
+    kst = timezone(timedelta(hours=9))
     assert parse_time("") is None
     assert parse_time("1700000000000") == 1700000000000
     assert parse_time("1700000000") == 1700000000000  # seconds -> ms
-    expect = int(datetime(2026, 6, 1, tzinfo=timezone.utc).timestamp() * 1000)
+    # naive values are interpreted as KST by default
+    expect = int(datetime(2026, 6, 1, tzinfo=kst).timestamp() * 1000)
     assert parse_time("2026-06-01") == expect
     assert parse_time("2026/06/01") == expect  # slash separator
     # hour precision preserved, even with Excel's text-prefix apostrophe
-    expect_hm = int(datetime(2026, 6, 1, 8, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    expect_hm = int(datetime(2026, 6, 1, 8, 0, tzinfo=kst).timestamp() * 1000)
     assert parse_time("2026-06-01 08:00") == expect_hm
     assert parse_time("'2026-06-01 08:00") == expect_hm
+    # an explicit offset overrides the KST default (Z = UTC)
+    expect_utc = int(datetime(2026, 6, 1, 8, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    assert parse_time("2026-06-01T08:00:00Z") == expect_utc
 
 
 # --------------------------------------------------------------------------- #

@@ -9,7 +9,7 @@ from __future__ import annotations
 import csv
 import io
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 from .data import Candle, Fetcher
@@ -42,13 +42,19 @@ class Row:
     note: str = ""
 
 
-def parse_time(value: str) -> Optional[int]:
+# Korea Standard Time has no DST, so a fixed +9 offset is exact (and needs no
+# tzdata, which Windows lacks). Naive ref_time values are interpreted as KST.
+KST = timezone(timedelta(hours=9))
+
+
+def parse_time(value: str, default_tz: timezone = KST) -> Optional[int]:
     """Parse a manual reference time into epoch milliseconds.
 
     Accepts epoch seconds / milliseconds, or ISO-8601 (``2026-06-01``,
-    ``2026-06-01 08:00``, ``2026-06-01T08:00:00Z``). Naive times are UTC. A
-    leading apostrophe (Excel's "store as text" prefix) and ``/`` date
-    separators are tolerated.
+    ``2026-06-01 08:00``, ``2026-06-01T08:00:00Z``). Naive times use
+    ``default_tz`` (KST by default); add an explicit offset (``Z`` or
+    ``+00:00`` for UTC) to override. A leading apostrophe (Excel's "store as
+    text" prefix) and ``/`` date separators are tolerated.
     """
     s = (value or "").strip().lstrip("'").strip()
     if not s:
@@ -61,7 +67,7 @@ def parse_time(value: str) -> Optional[int]:
         iso = iso.replace(" ", "T", 1)
     dt = datetime.fromisoformat(iso)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=default_tz)
     return int(dt.timestamp() * 1000)
 
 
