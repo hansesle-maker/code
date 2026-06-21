@@ -109,6 +109,41 @@ XRPUSDT   +7.04     long   +100.0  +2    +9.5    -1    +0    FLAT    0      0   
 위 예에서 **XRP**는 BTC 대비 강세(게이트 통과)·4h 확정 상승(+2)이지만 **1h TSI 값(+9.5)이
 시그널선 아래(−1 상태)** 라 진입을 보류(FLAT)합니다 — "오르긴 하나 아직 시그널 위가 아님".
 
+## 백테스트
+전략을 과거 데이터로 검증·비교합니다. 라이브와 **동일한 결정 규칙**(`signals.decide`)을
+봉마다 적용하므로, 백테스트한 그대로 실거래됩니다.
+
+```bash
+# 오프라인 데모 (합성 다중국면 데이터로 4개 변형 비교)
+python backtest.py --demo
+
+# 라이브 단일 설정 (로컬, 바이낸스 접근 필요)
+python backtest.py --symbols config/symbols.csv
+
+# 라이브: 4개 변형 비교 (Confirmed/Aggressive × 게이트 on/off) + 포트폴리오
+python backtest.py --symbols config/symbols.csv --compare
+```
+옵션: `--aggressive`, `--no-gate`, `--fee-bps 5`, `--rs-lookback 30`, `--market spot`,
+`--equity-csv eq.csv`.
+
+지표: **RET**(총수익) · **CAGR**(연환산) · **SHARPE** · **MDD**(최대낙폭) · **B&H**(매수후보유)
+· **EXP**(평균 노출) · **TRADES** · **WIN**(승률). → RET만 보지 말고 **Sharpe·MDD를 함께**.
+
+방법론(룩어헤드 방지/현실성):
+- t봉 종가 신호 → t→t+1 수익으로 **1봉 지연** 반영, **수수료**(turnover×bps) 차감.
+- 1h 상태는 그 4h봉 안에서 마지막으로 마감된 1h봉 사용.
+- 라이브의 수동 `ref_time` 게이트는 백테스트에선 **롤링 상대강도**(최근 N봉 BTC 대비)로 대체.
+  `--no-gate`로 끄고 효과를 비교할 수 있습니다.
+
+⚠️ 한계/주의:
+- 이 샌드박스는 바이낸스가 막혀 라이브 백테스트는 **로컬에서** 실행.
+- `--demo` 수치(Sharpe/CAGR)는 이상적 합성데이터라 **비현실적으로 높습니다** — 엔진 동작과
+  변형 비교를 보는 용도이지 실거래 기대치가 아닙니다.
+- **발견**: 시그널선 방식은 추세전환은 잘 잡지만, TSI가 +100에 포화되는 "완만하고 꾸준한
+  상승"에는 덜 참여합니다(자주 −1로 빠짐). 추세 추종 비중을 높이려면 `--aggressive`, 또는 추후
+  히스테리시스(진입은 확정 +2, 청산은 −2에서만) 도입을 검토.
+- 펀딩비·슬리피지는 미반영(수수료만). 필요 시 추가 가능.
+
 ## 4시간 자동 실행 (cron)
 바이낸스 4h 봉은 UTC 00·04·08·12·16·20시에 마감됩니다. 마감 직후 실행:
 ```cron
@@ -130,17 +165,19 @@ XRPUSDT   +7.04     long   +100.0  +2    +9.5    -1    +0    FLAT    0      0   
   (드라이런 → 한도/안전장치 → 실거래). API 키 필요.
 - **Phase 3 (주식/ETF)**: 데이터·증권사 연동이 다르고, 상대강도 벤치마크도 BTC가
   아니라 지수(SPY/QQQ 등)로 바뀌어야 함.
-- **백테스트**: 과거 데이터로 이 규칙의 성과를 검증/튜닝 (지표 로직이 순수 함수라
-  그대로 재사용 가능).
+- **백테스트**: `backtest.py` 제공(위 "백테스트" 참고). 펀딩비·워크포워드·파라미터
+  스윕 등은 추가 여지.
 
 ## 프로젝트 구조
 ```
-run.py                      # CLI 진입점 (cron이 4h마다 호출)
+run.py                      # 신호 CLI 진입점 (cron이 4h마다 호출)
+backtest.py                 # 백테스트 CLI (--demo / --symbols / --compare)
 tsi_signal/
   indicators.py             # EMA, TSI, 상대강도 (순수 파이썬, 무의존성)
   data.py                   # 바이낸스 klines fetch + 합성 데이터 생성
-  signals.py                # 게이트 + 트리거 → LONG/SHORT/FLAT (핵심 로직/파라미터)
+  signals.py                # 게이트 + 트리거 + decide() (핵심 규칙/파라미터)
   engine.py                 # 워치리스트 로드 → 평가 → to-be 표/CSV
+  backtest.py               # 봉별 백테스트(같은 decide 규칙) + 지표/비교
 config/symbols.example.csv  # 워치리스트 양식
-tests/test_signals.py       # 로직 검증 (네트워크 불필요)
+tests/test_signals.py       # 로직·백테스트 검증 (네트워크 불필요)
 ```

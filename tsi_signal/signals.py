@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .data import Candle
 from .indicators import relative_strength, true_strength_index
@@ -87,6 +87,32 @@ def _is_bear(state: int, require_zero: bool) -> bool:
     return state == -2 or (state == -1 and not require_zero)
 
 
+def decide(
+    state_4h: int, state_1h: int, long_ok: bool, short_ok: bool, params: SignalParams
+) -> Tuple[Direction, float, int]:
+    """Core rule shared by the live engine and the backtester: turn the two
+    timeframe states + the gate's permission into (direction, size, conviction).
+    """
+    bull_4h = _is_bull(state_4h, params.require_zero_4h)
+    bear_4h = _is_bear(state_4h, params.require_zero_4h)
+    bull_1h = _is_bull(state_1h, params.require_zero_1h)
+    bear_1h = _is_bear(state_1h, params.require_zero_1h)
+
+    direction = Direction.FLAT
+    if long_ok and bull_4h and bull_1h:
+        direction = Direction.LONG
+    elif short_ok and bear_4h and bear_1h:
+        direction = Direction.SHORT
+
+    conviction = state_4h + state_1h
+    size = (
+        params.size_by_conviction.get(abs(conviction), 0.0)
+        if direction is not Direction.FLAT
+        else 0.0
+    )
+    return direction, size, conviction
+
+
 def evaluate_symbol(
     symbol: str,
     candles_4h: List[Candle],
@@ -117,11 +143,6 @@ def evaluate_symbol(
     state4 = tsi_state(last_tsi4, last_sig4)
     state1 = tsi_state(last_tsi1, last_sig1)
 
-    bull_4h = _is_bull(state4, params.require_zero_4h)
-    bear_4h = _is_bear(state4, params.require_zero_4h)
-    bull_1h = _is_bull(state1, params.require_zero_1h)
-    bear_1h = _is_bear(state1, params.require_zero_1h)
-
     # --- relative-strength gate (vs BTC, from the manual start time) ------
     rs: Optional[float] = None
     if not is_benchmark and sym_ref_close and bench_ref_close and bench_now_close:
@@ -144,18 +165,7 @@ def evaluate_symbol(
     else:
         gate, long_ok, short_ok = "neutral", False, False
 
-    direction = Direction.FLAT
-    if long_ok and bull_4h and bull_1h:
-        direction = Direction.LONG
-    elif short_ok and bear_4h and bear_1h:
-        direction = Direction.SHORT
-
-    conviction = state4 + state1
-    size_fraction = (
-        params.size_by_conviction.get(abs(conviction), 0.0)
-        if direction is not Direction.FLAT
-        else 0.0
-    )
+    direction, size_fraction, conviction = decide(state4, state1, long_ok, short_ok, params)
 
     return SymbolSignal(
         symbol=symbol,

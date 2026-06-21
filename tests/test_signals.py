@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tsi_signal.backtest import BacktestParams, backtest_symbol
 from tsi_signal.data import synthetic_candles, trend_closes
 from tsi_signal.engine import _action, parse_time
 from tsi_signal.indicators import ema, relative_strength, true_strength_index
@@ -171,6 +172,30 @@ def test_missing_ref_skips_gate_unless_required():
     sig2 = _eval("ETHUSDT", s, s, params=SignalParams(require_ref=True),
                  sym_ref_close=None, bench_ref_close=None, bench_now_close=100.0)
     assert sig2.direction is Direction.FLAT and sig2.gate == "n/a"
+
+
+# --------------------------------------------------------------------------- #
+# backtester
+# --------------------------------------------------------------------------- #
+def test_backtest_long_uptrend_is_profitable():
+    c4 = synthetic_candles(trend_closes(500, drift=0.004, ripple=0.01), "4h")
+    c1 = synthetic_candles(trend_closes(2000, drift=0.001, ripple=0.01), "1h")
+    bench_by_time = {c.open_time: 100.0 for c in c4}  # flat benchmark
+    res = backtest_symbol("X", c4, c1, bench_by_time, SignalParams(),
+                          BacktestParams(rs_gate="off", warmup=150))
+    assert res.n_bars > 0 and len(res.equity) == res.n_bars + 1
+    assert res.exposure > 0          # took long exposure during the uptrend
+    assert res.total_return > 0      # and made money net of fees
+
+
+def test_backtest_short_downtrend_beats_buyhold():
+    c4 = synthetic_candles(trend_closes(500, drift=-0.004, ripple=0.01), "4h")
+    c1 = synthetic_candles(trend_closes(2000, drift=-0.001, ripple=0.01), "1h")
+    bench_by_time = {c.open_time: 100.0 for c in c4}
+    res = backtest_symbol("X", c4, c1, bench_by_time, SignalParams(),
+                          BacktestParams(rs_gate="off", warmup=150))
+    assert res.buyhold_return < 0     # falling market
+    assert res.total_return > res.buyhold_return  # shorting helps
 
 
 # --------------------------------------------------------------------------- #
