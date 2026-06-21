@@ -103,6 +103,7 @@ _VARIANTS = [
 
 def _variant_params(sig_over: dict, bt_over: dict, args) -> Tuple[SignalParams, BacktestParams]:
     sig = SignalParams(benchmark=args.benchmark, require_zero_1h=args.require_zero_1h,
+                       exit_state_4h=args.exit_state,
                        long_only=args.long_only, short_only=args.short_only, **sig_over)
     bt = BacktestParams(
         fee_rate=args.fee_bps / 10000.0, slippage_rate=args.slippage_bps / 10000.0,
@@ -125,6 +126,9 @@ def main(argv: List[str] | None = None) -> int:
     ap.add_argument("--aggressive", action="store_true", help="single run: 4h state +1 also qualifies")
     ap.add_argument("--no-gate", action="store_true", help="single run: disable the RS gate")
     ap.add_argument("--hysteresis", action="store_true", help="single run: hold through weak states, exit on reversal")
+    ap.add_argument("--exit-state", type=int, default=-2,
+                    help="with hysteresis, exit a long when 4h state <= this "
+                         "(-1 = at TSI/signal cross; -2 = at full reversal)")
     ap.add_argument("--long-only", action="store_true", help="never take short positions")
     ap.add_argument("--short-only", action="store_true", help="never take long positions")
     ap.add_argument("--require-zero-1h", action="store_true")
@@ -206,6 +210,7 @@ def main(argv: List[str] | None = None) -> int:
                         sig = SignalParams(
                             benchmark=benchmark, require_zero_1h=args.require_zero_1h,
                             require_zero_4h=(mode == "confirmed"), hysteresis=hyst,
+                            exit_state_4h=args.exit_state,
                             long_only=args.long_only, short_only=args.short_only,
                             tsi_long=tsi[0], tsi_short=tsi[1], tsi_signal=tsi[2])
                         bt = BacktestParams(

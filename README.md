@@ -126,9 +126,9 @@ python backtest.py --symbols config/symbols.csv --compare
 # 특정 날짜 구간 (KST; 1500봉 한계를 넘어 자동 페이지네이션)
 python backtest.py --symbols config/symbols.csv --start 2024-01-01 --end 2024-06-30 --compare
 ```
-옵션: `--aggressive`, `--hysteresis`, `--long-only`/`--short-only`, `--no-gate`, `--fee-bps 5`,
-`--slippage-bps 2`, `--funding-apr 0.10`, `--rs-lookback 30`, `--sweep`, `--market spot`,
-`--equity-csv eq.csv`.
+옵션: `--aggressive`, `--hysteresis`, `--exit-state -1`, `--long-only`/`--short-only`, `--no-gate`,
+`--fee-bps 5`, `--slippage-bps 2`, `--funding-apr 0.10`, `--rs-lookback 30`, `--sweep`,
+`--market spot`, `--equity-csv eq.csv`.
 
 **백테스트 구간(중요):** 기본은 **"현재 시점 기준 최근 N봉"** 입니다(`--limit`, 바이낸스 1회
 상한 ~1500봉 = 4h로 약 250일). 워밍업 150봉을 빼면 보통 ~1348봉이 평가됩니다. 특정 날짜
@@ -141,10 +141,13 @@ python backtest.py --symbols config/symbols.csv --start 2024-01-01 --end 2024-06
 > 매수후보유의 **평균**이라 일부 급등 종목이 값을 끌어올릴 수 있으니, 종목별 표(`--compare` 없이
 > 실행)로 어떤 종목이 끌어올렸는지 확인하세요.
 
-- **`--hysteresis`**: 진입은 확정(+2)으로 엄격히, 보유는 약한 상태(−1 등)를 견디고 **4h가 −2로
+- **`--hysteresis`**: 진입은 확정(+2)으로 엄격히, 보유는 약한 상태(−1 등)를 견디고 **4h가
   반전하거나 게이트가 뒤집힐 때만 청산**. 아래 "발견"(강추세 과소참여)을 직접 보완 — 데모에서
   노출 43%→72%, 수익 +139%→+220% (단 MDD는 악화, 트레이드오프). 라이브에선
   `current_position`을 직전 포지션으로 읽어 보유 판단에 사용합니다.
+- **`--exit-state`**: 히스테리시스의 청산 임계값. **`-1`이면 "TSI가 signal선 아래로 내려갈 때 청산"**
+  (즉 TSI가 signal 위에 있는 한 — 조금 흔들려도 — 롱 유지. 숏은 반대), **`-2`(기본)는 "0선까지
+  깨는 완전반전에서만 청산"**(눌림 더 오래 버팀). −1은 더 민감(휩쏘↑), −2는 추세를 더 오래 탐.
 - **`--funding-apr` / `--slippage-bps`**: 펀딩비(롱이 부담, 연환산 상수 가정)와 슬리피지를 비용에
   반영. (실제 과거 펀딩요율 연동은 추후 과제.)
 - **`--sweep`**: TSI기간 × rs_lookback × (confirmed/aggressive) × (hysteresis) 그리드를 돌려 Sharpe

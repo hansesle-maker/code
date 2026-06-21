@@ -240,6 +240,17 @@ def test_long_only_blocks_shorts():
     assert decide(2, 2, True, True, p)[0] is Direction.LONG    # long still fires
 
 
+def test_exit_state_signal_cross_vs_full_reversal():
+    p_cross = SignalParams(hysteresis=True, exit_state_4h=-1)  # exit when TSI<signal
+    p_rev = SignalParams(hysteresis=True, exit_state_4h=-2)    # hold until full reversal
+    # state +1 = TSI still ABOVE signal (just below zero): both HOLD the long
+    assert decide(1, 1, True, False, p_cross, Direction.LONG, 1.0)[0] is Direction.LONG
+    assert decide(1, 1, True, False, p_rev, Direction.LONG, 1.0)[0] is Direction.LONG
+    # state -1 = TSI just crossed BELOW signal (still >0):
+    assert decide(-1, 1, True, False, p_cross, Direction.LONG, 1.0)[0] is Direction.FLAT  # exit at cross
+    assert decide(-1, 1, True, False, p_rev, Direction.LONG, 1.0)[0] is Direction.LONG    # still held
+
+
 # --------------------------------------------------------------------------- #
 # action mapping
 # --------------------------------------------------------------------------- #

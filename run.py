@@ -103,6 +103,9 @@ def main(argv: List[str] | None = None) -> int:
                         help="enter on 4h TSI>signal even below zero (state +1), not only confirmed +2")
     parser.add_argument("--hysteresis", action="store_true",
                         help="hold an existing position through weak states; exit only on reversal/gate flip")
+    parser.add_argument("--exit-state", type=int, default=-2,
+                        help="with --hysteresis, exit a long when 4h state <= this "
+                             "(-1 = exit when TSI crosses below signal; -2 = hold until full reversal)")
     parser.add_argument("--long-only", action="store_true", help="never take short positions")
     parser.add_argument("--short-only", action="store_true", help="never take long positions")
     parser.add_argument("--require-zero-1h", action="store_true",
@@ -116,6 +119,7 @@ def main(argv: List[str] | None = None) -> int:
         require_zero_4h=not args.aggressive,
         require_zero_1h=args.require_zero_1h,
         hysteresis=args.hysteresis,
+        exit_state_4h=args.exit_state,
         long_only=args.long_only,
         short_only=args.short_only,
         require_ref=args.require_ref,
