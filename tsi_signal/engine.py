@@ -164,6 +164,11 @@ def run_engine(
     rows: List[Row] = []
     for cfg in symbols:
         is_bench = cfg.symbol == params.benchmark
+        notional = cfg.target_notional if cfg.target_notional is not None else default_notional
+        # current position -> prior direction/size, so hysteresis can HOLD it
+        prev_dir = (Direction.LONG if cfg.current_position > 0
+                    else Direction.SHORT if cfg.current_position < 0 else Direction.FLAT)
+        prev_size = abs(cfg.current_position) / notional if notional else 0.0
         try:
             candles_4h = bench_4h if is_bench else fetch(cfg.symbol, "4h", kline_limit)
             candles_1h = fetch(cfg.symbol, "1h", kline_limit)
@@ -175,6 +180,7 @@ def run_engine(
                 cfg.symbol, candles_4h, candles_1h,
                 sym_ref_close=sym_ref, bench_ref_close=bench_ref,
                 bench_now_close=bench_now, params=params, is_benchmark=is_bench,
+                prev_direction=prev_dir, prev_size=prev_size,
             )
             note = "; ".join(n for n in (ref_note, sig.note) if n)
         except Exception as exc:  # one bad symbol must not sink the whole run
@@ -185,7 +191,6 @@ def run_engine(
             )
             continue
 
-        notional = cfg.target_notional if cfg.target_notional is not None else default_notional
         target = _signed_target(sig.direction, sig.size_fraction, notional)
         rows.append(
             Row(

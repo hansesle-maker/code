@@ -123,8 +123,17 @@ python backtest.py --symbols config/symbols.csv
 # 라이브: 4개 변형 비교 (Confirmed/Aggressive × 게이트 on/off) + 포트폴리오
 python backtest.py --symbols config/symbols.csv --compare
 ```
-옵션: `--aggressive`, `--no-gate`, `--fee-bps 5`, `--rs-lookback 30`, `--market spot`,
-`--equity-csv eq.csv`.
+옵션: `--aggressive`, `--hysteresis`, `--no-gate`, `--fee-bps 5`, `--slippage-bps 2`,
+`--funding-apr 0.10`, `--rs-lookback 30`, `--sweep`, `--market spot`, `--equity-csv eq.csv`.
+
+- **`--hysteresis`**: 진입은 확정(+2)으로 엄격히, 보유는 약한 상태(−1 등)를 견디고 **4h가 −2로
+  반전하거나 게이트가 뒤집힐 때만 청산**. 아래 "발견"(강추세 과소참여)을 직접 보완 — 데모에서
+  노출 43%→72%, 수익 +139%→+220% (단 MDD는 악화, 트레이드오프). 라이브에선
+  `current_position`을 직전 포지션으로 읽어 보유 판단에 사용합니다.
+- **`--funding-apr` / `--slippage-bps`**: 펀딩비(롱이 부담, 연환산 상수 가정)와 슬리피지를 비용에
+  반영. (실제 과거 펀딩요율 연동은 추후 과제.)
+- **`--sweep`**: TSI기간 × rs_lookback × (confirmed/aggressive) × (hysteresis) 그리드를 돌려 Sharpe
+  상위를 출력. ⚠️ **과적합 주의** — 한 종목·한 구간의 스파이크를 일반화하지 말 것.
 
 지표: **RET**(총수익) · **CAGR**(연환산) · **SHARPE** · **MDD**(최대낙폭) · **B&H**(매수후보유)
 · **EXP**(평균 노출) · **TRADES** · **WIN**(승률). → RET만 보지 말고 **Sharpe·MDD를 함께**.
@@ -140,9 +149,8 @@ python backtest.py --symbols config/symbols.csv --compare
 - `--demo` 수치(Sharpe/CAGR)는 이상적 합성데이터라 **비현실적으로 높습니다** — 엔진 동작과
   변형 비교를 보는 용도이지 실거래 기대치가 아닙니다.
 - **발견**: 시그널선 방식은 추세전환은 잘 잡지만, TSI가 +100에 포화되는 "완만하고 꾸준한
-  상승"에는 덜 참여합니다(자주 −1로 빠짐). 추세 추종 비중을 높이려면 `--aggressive`, 또는 추후
-  히스테리시스(진입은 확정 +2, 청산은 −2에서만) 도입을 검토.
-- 펀딩비·슬리피지는 미반영(수수료만). 필요 시 추가 가능.
+  상승"에는 덜 참여합니다(자주 −1로 빠짐). → **`--hysteresis`** 로 보완(진입 +2 / 청산 −2),
+  또는 `--aggressive`.
 
 ## 4시간 자동 실행 (cron)
 바이낸스 4h 봉은 UTC 00·04·08·12·16·20시에 마감됩니다. 마감 직후 실행:
@@ -165,8 +173,8 @@ python backtest.py --symbols config/symbols.csv --compare
   (드라이런 → 한도/안전장치 → 실거래). API 키 필요.
 - **Phase 3 (주식/ETF)**: 데이터·증권사 연동이 다르고, 상대강도 벤치마크도 BTC가
   아니라 지수(SPY/QQQ 등)로 바뀌어야 함.
-- **백테스트**: `backtest.py` 제공(위 "백테스트" 참고). 펀딩비·워크포워드·파라미터
-  스윕 등은 추가 여지.
+- **백테스트**: `backtest.py` 제공(히스테리시스·펀딩/슬리피지·파라미터 스윕 포함).
+  워크포워드 검증·실제 펀딩요율 연동 등은 추가 여지.
 
 ## 프로젝트 구조
 ```

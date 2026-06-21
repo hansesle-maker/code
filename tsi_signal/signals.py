@@ -45,6 +45,8 @@ class SignalParams:
     tsi_signal: int = 13
     require_zero_4h: bool = True  # confirmed: 4h must also be on the right side of zero
     require_zero_1h: bool = False  # 1h must also agree with zero (stricter timing)
+    hysteresis: bool = False  # hold through weak states; exit only on reversal/gate flip
+    exit_state_4h: int = -2  # with hysteresis, exit a long once 4h state <= this (short mirror)
     require_ref: bool = False  # if True, a missing RS start time blocks signals
     benchmark: str = "BTCUSDT"
     # conviction (|4h state + 1h state|) -> fraction of target notional
@@ -88,28 +90,52 @@ def _is_bear(state: int, require_zero: bool) -> bool:
 
 
 def decide(
-    state_4h: int, state_1h: int, long_ok: bool, short_ok: bool, params: SignalParams
+    state_4h: int,
+    state_1h: int,
+    long_ok: bool,
+    short_ok: bool,
+    params: SignalParams,
+    prev_direction: Direction = Direction.FLAT,
+    prev_size: float = 0.0,
 ) -> Tuple[Direction, float, int]:
     """Core rule shared by the live engine and the backtester: turn the two
     timeframe states + the gate's permission into (direction, size, conviction).
+
+    With ``params.hysteresis`` the entry is strict (a confirmed state) but an
+    open position is HELD through weak states (e.g. a transient -1 in a strong
+    uptrend) and only exited when the 4h state reverses to ``exit_state_4h`` or
+    the gate flips. ``prev_direction``/``prev_size`` carry the current position
+    (the live engine reads them from your current_position).
     """
     bull_4h = _is_bull(state_4h, params.require_zero_4h)
     bear_4h = _is_bear(state_4h, params.require_zero_4h)
     bull_1h = _is_bull(state_1h, params.require_zero_1h)
     bear_1h = _is_bear(state_1h, params.require_zero_1h)
-
-    direction = Direction.FLAT
-    if long_ok and bull_4h and bull_1h:
-        direction = Direction.LONG
-    elif short_ok and bear_4h and bear_1h:
-        direction = Direction.SHORT
-
+    long_entry = long_ok and bull_4h and bull_1h
+    short_entry = short_ok and bear_4h and bear_1h
     conviction = state_4h + state_1h
-    size = (
-        params.size_by_conviction.get(abs(conviction), 0.0)
-        if direction is not Direction.FLAT
-        else 0.0
-    )
+
+    if not params.hysteresis:
+        direction = Direction.LONG if long_entry else (
+            Direction.SHORT if short_entry else Direction.FLAT)
+        size = params.size_by_conviction.get(abs(conviction), 0.0) if direction is not Direction.FLAT else 0.0
+        return direction, size, conviction
+
+    long_exit = state_4h <= params.exit_state_4h or not long_ok
+    short_exit = state_4h >= -params.exit_state_4h or not short_ok
+    if prev_direction is Direction.LONG:
+        direction = Direction.SHORT if short_entry else (Direction.FLAT if long_exit else Direction.LONG)
+    elif prev_direction is Direction.SHORT:
+        direction = Direction.LONG if long_entry else (Direction.FLAT if short_exit else Direction.SHORT)
+    else:
+        direction = Direction.LONG if long_entry else (Direction.SHORT if short_entry else Direction.FLAT)
+
+    if direction is Direction.FLAT:
+        size = 0.0
+    elif direction is prev_direction:  # holding -> keep the size we entered with
+        size = prev_size
+    else:  # fresh entry or switch -> size from current conviction
+        size = params.size_by_conviction.get(abs(conviction), 0.0)
     return direction, size, conviction
 
 
@@ -122,6 +148,8 @@ def evaluate_symbol(
     bench_now_close: Optional[float],
     params: SignalParams,
     is_benchmark: bool = False,
+    prev_direction: Direction = Direction.FLAT,
+    prev_size: float = 0.0,
 ) -> SymbolSignal:
     """Evaluate one symbol -> direction + conviction-scaled size.
 
@@ -165,7 +193,8 @@ def evaluate_symbol(
     else:
         gate, long_ok, short_ok = "neutral", False, False
 
-    direction, size_fraction, conviction = decide(state4, state1, long_ok, short_ok, params)
+    direction, size_fraction, conviction = decide(
+        state4, state1, long_ok, short_ok, params, prev_direction, prev_size)
 
     return SymbolSignal(
         symbol=symbol,

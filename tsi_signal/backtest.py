@@ -31,6 +31,8 @@ _ONE_HOUR_MS = 60 * 60 * 1000
 @dataclass
 class BacktestParams:
     fee_rate: float = 0.0005  # cost per unit turnover (5 bps ~ futures taker)
+    slippage_rate: float = 0.0  # extra cost per unit turnover (bps/10000)
+    funding_apr: float = 0.0  # perp funding drag on signed exposure (longs pay if >0)
     rs_gate: str = "rolling"  # 'rolling' | 'off'
     rs_lookback: int = 30  # 4h bars for the rolling relative-strength gate
     warmup: int = 150  # skip the first N 4h bars (TSI convergence)
@@ -177,21 +179,27 @@ def backtest_symbol(
     long_ok, short_ok = _gate_series(close4, bench4, bt)
 
     start = max(bt.warmup, bt.rs_lookback if bt.rs_gate == "rolling" else 0)
+    cost_rate = bt.fee_rate + bt.slippage_rate
+    funding_per_bar = bt.funding_apr / bt.bars_per_year
     net: List[float] = []
     exps: List[float] = []
     bh: List[float] = []
     times: List[int] = []
     prev_exp = 0.0
+    prev_dir = Direction.FLAT
+    prev_size = 0.0
     for t in range(start, len(close4) - 1):
-        direction, size, _ = decide(state4[t], state1[t], long_ok[t], short_ok[t], params)
+        direction, size, _ = decide(state4[t], state1[t], long_ok[t], short_ok[t],
+                                    params, prev_dir, prev_size)
         sgn = 1.0 if direction is Direction.LONG else -1.0 if direction is Direction.SHORT else 0.0
         exp = sgn * size
         r = close4[t + 1] / close4[t] - 1.0
-        net.append(exp * r - bt.fee_rate * abs(exp - prev_exp))
+        # PnL: position return - trading cost on turnover - funding drag (longs pay if apr>0)
+        net.append(exp * r - cost_rate * abs(exp - prev_exp) - exp * funding_per_bar)
         exps.append(exp)
         bh.append(r)
         times.append(candles_4h[t].open_time)
-        prev_exp = exp
+        prev_exp, prev_dir, prev_size = exp, direction, size
 
     eq = _equity(net)
     n_trades, win_rate = _trade_stats(net, exps)

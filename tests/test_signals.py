@@ -15,7 +15,7 @@ from tsi_signal.backtest import BacktestParams, backtest_symbol
 from tsi_signal.data import synthetic_candles, trend_closes
 from tsi_signal.engine import _action, parse_time
 from tsi_signal.indicators import ema, relative_strength, true_strength_index
-from tsi_signal.signals import Direction, SignalParams, evaluate_symbol, tsi_state
+from tsi_signal.signals import Direction, SignalParams, decide, evaluate_symbol, tsi_state
 
 
 # --------------------------------------------------------------------------- #
@@ -196,6 +196,42 @@ def test_backtest_short_downtrend_beats_buyhold():
                           BacktestParams(rs_gate="off", warmup=150))
     assert res.buyhold_return < 0     # falling market
     assert res.total_return > res.buyhold_return  # shorting helps
+
+
+def test_funding_drag_reduces_long_returns():
+    c4 = synthetic_candles(trend_closes(500, drift=0.004, ripple=0.01), "4h")
+    c1 = synthetic_candles(trend_closes(2000, drift=0.001, ripple=0.01), "1h")
+    bench_by_time = {c.open_time: 100.0 for c in c4}
+    base = backtest_symbol("X", c4, c1, bench_by_time, SignalParams(),
+                           BacktestParams(rs_gate="off", warmup=150))
+    funded = backtest_symbol("X", c4, c1, bench_by_time, SignalParams(),
+                             BacktestParams(rs_gate="off", warmup=150, funding_apr=0.5))
+    assert funded.total_return < base.total_return  # longs pay funding
+
+
+# --------------------------------------------------------------------------- #
+# hysteresis (stateful hold/exit)
+# --------------------------------------------------------------------------- #
+def test_hysteresis_holds_through_weak_state_and_exits_on_reversal():
+    p = SignalParams(hysteresis=True)
+    # fresh confirmed entry
+    d, sz, _ = decide(2, 2, True, True, p, Direction.FLAT, 0.0)
+    assert d is Direction.LONG and sz == 1.0
+    # 4h rolls over to -1 (not yet -2): HOLD long, size sticky
+    d, sz, _ = decide(-1, 2, True, True, p, Direction.LONG, 1.0)
+    assert d is Direction.LONG and sz == 1.0
+    # 4h reverses to -2 with short allowed: switch to short
+    d, _, _ = decide(-2, -2, True, True, p, Direction.LONG, 1.0)
+    assert d is Direction.SHORT
+    # 4h reverses to -2 but gate forbids short: exit to flat
+    d, _, _ = decide(-2, -2, True, False, p, Direction.LONG, 1.0)
+    assert d is Direction.FLAT
+    # gate flips (long no longer allowed): exit even if TSI still up
+    d, _, _ = decide(2, 2, False, True, p, Direction.LONG, 1.0)
+    assert d is Direction.FLAT
+    # without hysteresis the -1 would already be flat
+    d, _, _ = decide(-1, 2, True, True, SignalParams(), Direction.LONG, 1.0)
+    assert d is Direction.FLAT
 
 
 # --------------------------------------------------------------------------- #

@@ -81,12 +81,17 @@ _VARIANTS = [
     ("confirmed+nogate", dict(), dict(rs_gate="off")),
     ("aggressive+gate", dict(require_zero_4h=False), dict(rs_gate="rolling")),
     ("aggressive+nogate", dict(require_zero_4h=False), dict(rs_gate="off")),
+    ("confirmed+gate+hyst", dict(hysteresis=True), dict(rs_gate="rolling")),
+    ("aggressive+gate+hyst", dict(require_zero_4h=False, hysteresis=True), dict(rs_gate="rolling")),
 ]
 
 
 def _variant_params(sig_over: dict, bt_over: dict, args) -> Tuple[SignalParams, BacktestParams]:
     sig = SignalParams(benchmark=args.benchmark, require_zero_1h=args.require_zero_1h, **sig_over)
-    bt = BacktestParams(fee_rate=args.fee_bps / 10000.0, rs_lookback=args.rs_lookback, **bt_over)
+    bt = BacktestParams(
+        fee_rate=args.fee_bps / 10000.0, slippage_rate=args.slippage_bps / 10000.0,
+        funding_apr=args.funding_apr, rs_lookback=args.rs_lookback, **bt_over,
+    )
     return sig, bt
 
 
@@ -100,9 +105,14 @@ def main(argv: List[str] | None = None) -> int:
     ap.add_argument("--limit", type=int, default=1500, help="klines per request (history length)")
     ap.add_argument("--aggressive", action="store_true", help="single run: 4h state +1 also qualifies")
     ap.add_argument("--no-gate", action="store_true", help="single run: disable the RS gate")
+    ap.add_argument("--hysteresis", action="store_true", help="single run: hold through weak states, exit on reversal")
     ap.add_argument("--require-zero-1h", action="store_true")
     ap.add_argument("--fee-bps", type=float, default=5.0, help="cost per trade in basis points")
+    ap.add_argument("--slippage-bps", type=float, default=0.0, help="extra cost per trade in basis points")
+    ap.add_argument("--funding-apr", type=float, default=0.0,
+                    help="perp funding drag, annualised (longs pay if >0, e.g. 0.10)")
     ap.add_argument("--rs-lookback", type=int, default=30, help="rolling RS lookback (4h bars)")
+    ap.add_argument("--sweep", action="store_true", help="grid-search key params, print top by Sharpe")
     ap.add_argument("--equity-csv", help="write the portfolio equity curve to this CSV")
     args = ap.parse_args(argv)
 
@@ -152,8 +162,30 @@ def main(argv: List[str] | None = None) -> int:
     print(f"# Backtest  (benchmark={benchmark}, {'DEMO' if args.demo else args.market}, "
           f"fee={args.fee_bps}bps)\n")
 
-    if args.compare or args.demo:
+    if args.sweep:
         rows: List[BacktestResult] = []
+        for tsi in [(25, 13, 13), (40, 20, 20), (13, 7, 7)]:
+            for rsl in [20, 30, 50]:
+                for mode in ["confirmed", "aggressive"]:
+                    for hyst in (False, True):
+                        sig = SignalParams(
+                            benchmark=benchmark, require_zero_1h=args.require_zero_1h,
+                            require_zero_4h=(mode == "confirmed"), hysteresis=hyst,
+                            tsi_long=tsi[0], tsi_short=tsi[1], tsi_signal=tsi[2])
+                        bt = BacktestParams(
+                            fee_rate=args.fee_bps / 10000.0, slippage_rate=args.slippage_bps / 10000.0,
+                            funding_apr=args.funding_apr, rs_lookback=rsl, rs_gate="rolling")
+                        label = f"tsi{tsi[0]}/{tsi[1]}/{tsi[2]} rs{rsl} {mode}{'+hyst' if hyst else ''}"
+                        results, portfolio = run_variant(label, sig, bt)
+                        rows.append(results[0] if len(symbols) == 1 else portfolio)
+        rows.sort(key=lambda r: r.sharpe, reverse=True)
+        print(format_results(rows[:12], "Parameter sweep — top 12 by Sharpe"))
+        print("\nHigher Sharpe + shallower MDD is better. Beware overfitting: prefer settings")
+        print("that are good across symbols and not a lone spike in the grid.")
+        return 0
+
+    if args.compare or args.demo:
+        rows = []
         for label, sig_over, bt_over in _VARIANTS:
             sig, bt = _variant_params(sig_over, bt_over, args)
             results, portfolio = run_variant(label, sig, bt)
@@ -168,8 +200,11 @@ def main(argv: List[str] | None = None) -> int:
                   "Use it to read the engine and compare variants, not as live expectations.")
     else:
         sig_over = dict(require_zero_4h=False) if args.aggressive else dict()
+        if args.hysteresis:
+            sig_over["hysteresis"] = True
         bt_over = dict(rs_gate="off") if args.no_gate else dict(rs_gate="rolling")
-        label = ("aggressive" if args.aggressive else "confirmed") + ("+nogate" if args.no_gate else "+gate")
+        label = (("aggressive" if args.aggressive else "confirmed")
+                 + ("+hyst" if args.hysteresis else "") + ("+nogate" if args.no_gate else "+gate"))
         sig, bt = _variant_params(sig_over, bt_over, args)
         results, portfolio = run_variant(label, sig, bt)
         print(format_results([*results, portfolio]))

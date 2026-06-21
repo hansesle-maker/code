@@ -101,6 +101,8 @@ def main(argv: List[str] | None = None) -> int:
                         help="klines per request (warm-up + RS start-time window)")
     parser.add_argument("--aggressive", action="store_true",
                         help="enter on 4h TSI>signal even below zero (state +1), not only confirmed +2")
+    parser.add_argument("--hysteresis", action="store_true",
+                        help="hold an existing position through weak states; exit only on reversal/gate flip")
     parser.add_argument("--require-zero-1h", action="store_true",
                         help="1h must also be on the correct side of zero (stricter timing)")
     parser.add_argument("--require-ref", action="store_true",
@@ -111,6 +113,7 @@ def main(argv: List[str] | None = None) -> int:
         benchmark=args.benchmark,
         require_zero_4h=not args.aggressive,
         require_zero_1h=args.require_zero_1h,
+        hysteresis=args.hysteresis,
         require_ref=args.require_ref,
     )
 
