@@ -114,13 +114,13 @@ XRPUSDT   +7.04     long   +100.0  +2    +9.5    -1    +0    FLAT    0      0   
 봉마다 적용하므로, 백테스트한 그대로 실거래됩니다.
 
 ```bash
-# 오프라인 데모 (합성 다중국면 데이터로 4개 변형 비교)
+# 오프라인 데모 (다종목 합성 데이터) → 종목별 결과 + 포트폴리오
 python backtest.py --demo
 
-# 라이브 단일 설정 (로컬, 바이낸스 접근 필요)
+# 라이브: 종목별 결과 + 포트폴리오 (로컬, 바이낸스 접근 필요)
 python backtest.py --symbols config/symbols.csv
 
-# 라이브: 4개 변형 비교 (Confirmed/Aggressive × 게이트 on/off) + 포트폴리오
+# 변형 비교 (Confirmed/Aggressive × 게이트 × 히스테리시스, 포트폴리오 기준)
 python backtest.py --symbols config/symbols.csv --compare
 ```
 옵션: `--aggressive`, `--hysteresis`, `--no-gate`, `--fee-bps 5`, `--slippage-bps 2`,

@@ -226,13 +226,15 @@ def combine_portfolio(results: List[BacktestResult], bt: BacktestParams,
     times = sorted(acc)
     net = [sum(acc[t]) / len(acc[t]) for t in times]
     eq = _equity(net)
+    bh_vals = [r.buyhold_return for r in results if r.buyhold_return == r.buyhold_return]
+    buyhold = sum(bh_vals) / len(bh_vals) if bh_vals else float("nan")
     return BacktestResult(
         symbol="PORTFOLIO", label=label, n_bars=len(net),
         total_return=eq[-1] - 1.0,
         cagr=_cagr(eq, len(net), bt.bars_per_year),
         sharpe=_sharpe(net, bt.bars_per_year),
         max_drawdown=_max_drawdown(eq),
-        buyhold_return=float("nan"),
+        buyhold_return=buyhold,
         equity=eq, times=times, net=net,
     )
 

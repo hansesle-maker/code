@@ -59,16 +59,22 @@ def _to_1h(drifts_4h: List[float]) -> List[float]:
     return out
 
 
+# Distinct synthetic personalities so per-symbol results differ meaningfully.
+_DEMO_PROFILES = {
+    "TRENDUSDT": _blocks([(0.004, 200), (-0.004, 200), (0.003, 200)]) + _chop(0.006, 200),
+    "MOMOUSDT": _blocks([(0.005, 250), (-0.005, 250), (0.004, 300)]),  # persistent trends
+    "CHOPUSDT": _chop(0.010, 800),                                     # whipsaw / mean-revert
+    "WEAKUSDT": _blocks([(0.001, 400), (-0.0005, 400)]),              # mild, underperforms BTC
+    "BTCUSDT": _blocks([(0.002, 200), (-0.002, 200), (0.0015, 200)]) + _chop(0.003, 200),
+}
+_DEMO_SYMBOLS = [s for s in _DEMO_PROFILES if s != "BTCUSDT"]
+
+
 def _demo_fetch():
-    # symbol: strong trends; BTC: milder (so the rolling RS gate varies).
-    sym4 = _blocks([(0.004, 200), (-0.004, 200), (0.003, 200)]) + _chop(0.006, 200)
-    btc4 = _blocks([(0.002, 200), (-0.002, 200), (0.0015, 200)]) + _chop(0.003, 200)
-    candles = {
-        ("ALTUSDT", "4h"): synthetic_candles(_closes(sym4), "4h"),
-        ("ALTUSDT", "1h"): synthetic_candles(_closes(_to_1h(sym4), ripple=0.003, period=51), "1h"),
-        ("BTCUSDT", "4h"): synthetic_candles(_closes(btc4), "4h"),
-        ("BTCUSDT", "1h"): synthetic_candles(_closes(_to_1h(btc4), ripple=0.003, period=51), "1h"),
-    }
+    candles = {}
+    for sym, d4 in _DEMO_PROFILES.items():
+        candles[(sym, "4h")] = synthetic_candles(_closes(d4), "4h")
+        candles[(sym, "1h")] = synthetic_candles(_closes(_to_1h(d4), ripple=0.003, period=51), "1h")
 
     def fetch(symbol: str, interval: str, limit: int):
         return candles[(symbol, interval)]
@@ -118,7 +124,7 @@ def main(argv: List[str] | None = None) -> int:
 
     # --- assemble the data source -----------------------------------------
     if args.demo:
-        symbols = ["ALTUSDT"]
+        symbols = _DEMO_SYMBOLS
         fetch = _demo_fetch()
         benchmark = "BTCUSDT"
     else:
@@ -184,20 +190,15 @@ def main(argv: List[str] | None = None) -> int:
         print("that are good across symbols and not a lone spike in the grid.")
         return 0
 
-    if args.compare or args.demo:
-        rows = []
+    if args.compare:
+        rows: List[BacktestResult] = []
         for label, sig_over, bt_over in _VARIANTS:
             sig, bt = _variant_params(sig_over, bt_over, args)
-            results, portfolio = run_variant(label, sig, bt)
-            # demo has one symbol -> show that symbol; live -> show portfolio
-            rows.append(results[0] if args.demo else portfolio)
-        scope = symbols[0] if args.demo else "PORTFOLIO (equal-weight)"
-        print(format_results(rows, f"Variant comparison — {scope}"))
+            _, portfolio = run_variant(label, sig, bt)
+            rows.append(portfolio)
+        print(format_results(rows, "Variant comparison — PORTFOLIO (equal-weight)"))
         print("\nRET=total return, CAGR=annualised, MDD=max drawdown, B&H=buy&hold,")
         print("EXP=avg |exposure|, WIN=winning trades. Pick by Sharpe + MDD, not RET alone.")
-        if args.demo:
-            print("NOTE: synthetic idealised data — Sharpe/CAGR here are unrealistically high. "
-                  "Use it to read the engine and compare variants, not as live expectations.")
     else:
         sig_over = dict(require_zero_4h=False) if args.aggressive else dict()
         if args.hysteresis:
@@ -207,13 +208,19 @@ def main(argv: List[str] | None = None) -> int:
                  + ("+hyst" if args.hysteresis else "") + ("+nogate" if args.no_gate else "+gate"))
         sig, bt = _variant_params(sig_over, bt_over, args)
         results, portfolio = run_variant(label, sig, bt)
-        print(format_results([*results, portfolio]))
+        print(format_results([*results, portfolio], f"Per-symbol results + portfolio — {label}"))
+        print("\nEach row is one symbol's standalone result; PORTFOLIO is the equal-weight mix.")
+        print("(use --compare to compare strategy variants instead.)")
         if args.equity_csv:
             with open(args.equity_csv, "w", encoding="utf-8") as fh:
                 fh.write("open_time,equity\n")
                 for t, e in zip(portfolio.times, portfolio.equity[1:]):
                     fh.write(f"{t},{e:.6f}\n")
             print(f"\nWrote portfolio equity ({len(portfolio.times)} pts) to {args.equity_csv}")
+
+    if args.demo:
+        print("\nNOTE: synthetic idealised data — absolute Sharpe/CAGR are unrealistic. "
+              "Use it to read PER-SYMBOL behaviour and compare, not as live expectations.")
     return 0
 
 
