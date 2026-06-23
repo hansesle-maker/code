@@ -31,6 +31,7 @@ from tsi_signal.alerts import (
     send_telegram,
 )
 from tsi_signal.scanner import (
+    KLINE_LIMIT,
     TIMEFRAMES,
     SymbolScan,
     fetch_all_futures_symbols,
@@ -109,8 +110,8 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default="public", help="output directory")
     ap.add_argument("--prev", default=None,
                     help="previous data.json to diff for alerts")
-    ap.add_argument("--workers", type=int, default=8,
-                    help="concurrent fetch workers (keep modest for rate limits)")
+    ap.add_argument("--workers", type=int, default=6,
+                    help="concurrent fetch workers (default 6 keeps weight under Binance 2400/min limit)")
     ap.add_argument("--limit", type=int, default=0,
                     help="scan only the first N symbols (debugging)")
     ap.add_argument("--no-telegram", action="store_true",
@@ -131,16 +132,24 @@ def main(argv=None) -> int:
         symbols = symbols[: args.limit]
 
     print(f"Scanning {len(symbols)} symbols × {len(TIMEFRAMES)} timeframes "
-          f"({args.workers} workers) …")
+          f"({args.workers} workers, KLINE_LIMIT={KLINE_LIMIT}) …")
     results = scan_all(symbols, max_workers=args.workers)
     scanned_at = datetime.datetime.utcnow()
+
+    ok   = sum(1 for r in results if any(r.tf.values()))
+    fail = len(results) - ok
+    print(f"Scan complete: {ok}/{len(results)} with data"
+          + (f", {fail} empty (rate-limited or error)" if fail else "") + ".")
+
+    if fail > len(results) * 0.5:
+        print("WARNING: >50% of symbols have no data — likely rate-limited.",
+              file=sys.stderr)
+        print("Try --workers 3 or wait a minute and re-run.", file=sys.stderr)
 
     run_alerts(args.prev, results, scanned_at, enabled=not args.no_telegram)
 
     render_site(results, scanned_at, args.out)
-    ok = sum(1 for r in results if any(r.tf.values()))
-    print(f"Wrote {args.out}/index.html and {args.out}/data.json "
-          f"({ok}/{len(results)} symbols with data).")
+    print(f"Wrote {args.out}/index.html and {args.out}/data.json.")
     return 0
 
 

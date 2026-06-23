@@ -6,6 +6,8 @@ importable on its own.
 """
 from __future__ import annotations
 
+import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Dict, List, Optional
@@ -15,8 +17,17 @@ import requests as _req
 from .data import FUTURES_BASE_URL, FUTURES_KLINES_PATH, fetch_klines
 from .indicators import true_strength_index
 
+log = logging.getLogger(__name__)
+
 TIMEFRAMES = ("4h", "1h", "15m")
-KLINE_LIMIT = 300  # TSI(25,13,13) needs ~55 bars; 300 gives plenty of warm-up
+
+# Binance USDT-M klines weight tiers (per request):
+#   limit  1-99  → weight 1   ← we use this
+#   limit 100-499 → weight 2
+#   limit 500-999 → weight 5
+# TSI(25,13,13) needs ≥55 bars; 99 gives 44 bars of extra warm-up and
+# keeps weight=1 so we stay well within the 2400-weight/min rate limit.
+KLINE_LIMIT = 99
 
 
 @dataclass
@@ -94,12 +105,9 @@ def _state_from_closes(closes: List[float]) -> Optional[TFState]:
     )
 
 
-def scan_symbol(symbol: str, session=None) -> SymbolScan:
-    """Fetch klines for all three timeframes and compute TSI states."""
-    http = session or _req
-    tf_states: Dict[str, Optional[TFState]] = {}
-    latest_ts = 0
-    for tf in TIMEFRAMES:
+def _fetch_with_retry(symbol: str, tf: str, http, retries: int = 3) -> list:
+    """Fetch klines with up to ``retries`` retries on 429 / 5xx errors."""
+    for attempt in range(retries):
         try:
             candles = fetch_klines(
                 symbol, tf,
@@ -109,32 +117,74 @@ def scan_symbol(symbol: str, session=None) -> SymbolScan:
                 drop_unclosed=True,
                 session=http,
             )
-            if candles:
-                latest_ts = max(latest_ts, candles[-1].open_time)
-                tf_states[tf] = _state_from_closes([c.close for c in candles])
+            return candles
+        except Exception as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status == 429 or status == 418:
+                if attempt < retries - 1:   # don't sleep after the last attempt
+                    wait = 2 ** attempt     # 1s, 2s, 4s …
+                    log.warning("Rate-limited fetching %s %s (attempt %d/%d) — waiting %ds",
+                                symbol, tf, attempt + 1, retries, wait)
+                    time.sleep(wait)
             else:
-                tf_states[tf] = None
-        except Exception:
+                log.debug("Fetch error %s %s: %s", symbol, tf, exc)
+                break
+    return []
+
+
+def scan_symbol(symbol: str, session=None) -> SymbolScan:
+    """Fetch klines for all three timeframes and compute TSI states."""
+    http = session or _req
+    tf_states: Dict[str, Optional[TFState]] = {}
+    latest_ts = 0
+    for tf in TIMEFRAMES:
+        candles = _fetch_with_retry(symbol, tf, http)
+        if candles:
+            latest_ts = max(latest_ts, candles[-1].open_time)
+            tf_states[tf] = _state_from_closes([c.close for c in candles])
+        else:
             tf_states[tf] = None
     return SymbolScan(symbol=symbol, ts=latest_ts, tf=tf_states)
 
 
-def scan_all(symbols: List[str], max_workers: int = 10) -> List[SymbolScan]:
-    """Scan all symbols concurrently and return results sorted by symbol name."""
+def scan_all(
+    symbols: List[str],
+    max_workers: int = 6,
+    progress_every: int = 50,
+) -> List[SymbolScan]:
+    """Scan all symbols concurrently and return results sorted by symbol name.
+
+    ``max_workers=6`` with ``KLINE_LIMIT=99`` (weight=1) keeps us comfortably
+    under Binance's 2400-weight/min limit even for 500+ symbol universes.
+    Each thread gets its own session to avoid connection-pool contention.
+    """
     results: List[SymbolScan] = []
-    session = _req.Session()
-    try:
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futs = {pool.submit(scan_symbol, sym, session): sym for sym in symbols}
-            for fut in as_completed(futs):
-                try:
-                    results.append(fut.result())
-                except Exception as exc:
-                    results.append(
-                        SymbolScan(symbol=futs[fut], ts=0, tf={}, error=str(exc))
-                    )
-    finally:
-        session.close()
+
+    def _make_session() -> _req.Session:
+        s = _req.Session()
+        s.headers.update({"Connection": "keep-alive"})
+        return s
+
+    done = 0
+    total = len(symbols)
+
+    with ThreadPoolExecutor(max_workers=max_workers,
+                            initializer=None) as pool:
+        # Give each future its own session to avoid sharing state.
+        futs = {pool.submit(scan_symbol, sym, _make_session()): sym
+                for sym in symbols}
+        for fut in as_completed(futs):
+            try:
+                results.append(fut.result())
+            except Exception as exc:
+                results.append(
+                    SymbolScan(symbol=futs[fut], ts=0, tf={}, error=str(exc))
+                )
+            done += 1
+            if progress_every and done % progress_every == 0:
+                ok = sum(1 for r in results if any(r.tf.values()))
+                log.info("  %d/%d scanned, %d with data …", done, total, ok)
+
     return sorted(results, key=lambda r: r.symbol)
 
 
