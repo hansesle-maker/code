@@ -20,7 +20,12 @@ from typing import List, Optional
 
 from flask import Flask, jsonify, render_template
 
-from tsi_signal.scanner import SymbolScan, fetch_all_futures_symbols, scan_all
+from tsi_signal.scanner import (
+    SymbolScan,
+    fetch_all_futures_symbols,
+    scan_all,
+    symbolscan_to_dict,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -112,6 +117,7 @@ def dashboard():
         scanned_at=scanned_at,
         scanning=scanning,
         error=error,
+        static_mode=False,
     )
 
 
@@ -120,24 +126,7 @@ def api_data():
     with _lock:
         results = list(_cache["results"])
         scanned_at = _cache["scanned_at"]
-    payload = []
-    for r in results:
-        tfs = {}
-        for tf, s in r.tf.items():
-            if s:
-                tfs[tf] = {
-                    "tsi": s.tsi,
-                    "signal": s.signal,
-                    "above_zero": s.above_zero,
-                    "rising": s.rising,
-                    "above_signal": s.above_signal,
-                }
-        payload.append({
-            "symbol": r.symbol,
-            "bull_score": r.bull_score,
-            "bear_score": r.bear_score,
-            "tf": tfs,
-        })
+    payload = [symbolscan_to_dict(r) for r in results]
     return jsonify({
         "scanned_at": scanned_at.isoformat() + "Z" if scanned_at else None,
         "count": len(payload),

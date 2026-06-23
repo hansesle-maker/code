@@ -322,8 +322,13 @@
       <div class="spinner"></div>
       <p style="margin-top:16px">스캔 중…<br><small>처음 스캔은 1~2분 소요됩니다.</small></p>
     {% else %}
-      <p>데이터가 없습니다.</p>
+      <p>아직 데이터가 없습니다.</p>
+      {% if static_mode %}
+      <p style="font-size:12px;margin-top:6px">다음 자동 갱신(매 15분)을 기다리거나, GitHub Actions에서 워크플로를 수동 실행하세요.</p>
+      <button onclick="reloadFresh()" style="margin-top:12px;padding:8px 20px">새로고침</button>
+      {% else %}
       <button onclick="manualRefresh(this)" style="margin-top:12px;padding:8px 20px">지금 스캔 시작</button>
+      {% endif %}
     {% endif %}
   </div>
 {% endif %}
@@ -332,6 +337,15 @@
 <!-- ── JavaScript ─────────────────────────────────────────────────── -->
 <script>
 "use strict";
+
+// In static mode (GitHub Pages) there is no backend: the page is regenerated
+// every 15 min by GitHub Actions, so "refresh" just re-fetches the page.
+const STATIC_MODE = {{ 'true' if static_mode else 'false' }};
+
+// Reload the page, busting any CDN/browser cache so we get the latest scan.
+function reloadFresh() {
+  location.href = location.pathname + "?t=" + Date.now();
+}
 
 // ── Filter state ──────────────────────────────────────────────
 let activeFilter = "all";
@@ -405,6 +419,7 @@ function applySort() {
 
 // ── Manual refresh ────────────────────────────────────────────
 function manualRefresh(btn) {
+  if (STATIC_MODE) { reloadFresh(); return; }
   if (btn) { btn.disabled = true; btn.textContent = "…"; }
   fetch("/refresh", { method: "POST" })
     .then(() => setTimeout(() => location.reload(), 3000))
@@ -429,9 +444,10 @@ function updateCountdown() {
 setInterval(updateCountdown, 1000);
 updateCountdown();
 
-// Auto-reload ~15 s after next candle close (gives server time to scan)
-const autoReloadMs = (secsToNext15m() + 15) * 1000;
-setTimeout(() => location.reload(), autoReloadMs);
+// Auto-reload ~20 s after next candle close (gives the scanner time to run
+// and, in static mode, GitHub Actions time to redeploy the page).
+const autoReloadMs = (secsToNext15m() + 20) * 1000;
+setTimeout(reloadFresh, autoReloadMs);
 </script>
 </body>
 </html>

@@ -124,3 +124,23 @@ def scan_all(symbols: List[str], max_workers: int = 10) -> List[SymbolScan]:
     finally:
         session.close()
     return sorted(results, key=lambda r: r.symbol)
+
+
+def symbolscan_to_dict(r: SymbolScan) -> dict:
+    """Serialize a scan to a plain dict (for data.json / the JSON API)."""
+    tfs = {}
+    for tf, s in r.tf.items():
+        if s:
+            tfs[tf] = {
+                "tsi": s.tsi,
+                "signal": s.signal,
+                "above_zero": s.above_zero,
+                "rising": s.rising,
+                "above_signal": s.above_signal,
+            }
+    return {
+        "symbol": r.symbol,
+        "bull_score": r.bull_score,
+        "bear_score": r.bear_score,
+        "tf": tfs,
+    }
