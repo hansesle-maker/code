@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="TSI Scanner">
+  <title>TSI Scanner — Binance Futures</title>
+  <style>
+    /* ── Reset & tokens ─────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:        #0b0b18;
+      --surface:   #13132a;
+      --border:    #242450;
+      --text:      #dde0ff;
+      --muted:     #7070a0;
+      --accent:    #6a6aff;
+      --bull:      #00d47e;
+      --bull-dim:  rgba(0,212,126,.14);
+      --bear:      #ff4a5a;
+      --bear-dim:  rgba(255,74,90,.14);
+      --warn:      #ffb340;
+      --warn-dim:  rgba(255,179,64,.14);
+      --radius:    10px;
+    }
+    html { background: var(--bg); }
+    body {
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", monospace;
+      font-size: 13px;
+      min-height: 100vh;
+      -webkit-text-size-adjust: 100%;
+    }
+
+    /* ── Sticky header ──────────────────────────────────────── */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 200;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 14px env(safe-area-inset-bottom,0) 14px;
+      padding-top: max(10px, env(safe-area-inset-top,0));
+    }
+    .topbar-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .title { font-size: 15px; font-weight: 700; color: var(--accent); }
+    .meta  { font-size: 11px; color: var(--muted); margin-top: 1px; }
+
+    .ctrl-group { display: flex; align-items: center; gap: 6px; }
+    .badge-scanning {
+      font-size: 10px; padding: 2px 7px;
+      background: var(--warn-dim); color: var(--warn);
+      border: 1px solid var(--warn); border-radius: 20px;
+      animation: blink 1.2s ease-in-out infinite;
+    }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+    button, select {
+      background: var(--surface); border: 1px solid var(--border);
+      color: var(--muted); border-radius: 8px; font-size: 12px;
+      padding: 5px 10px; cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    button:active, select:active { opacity: .7; }
+
+    /* ── Filter chips ───────────────────────────────────────── */
+    .filters {
+      display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px;
+    }
+    .chip {
+      font-size: 11px; padding: 4px 11px; border-radius: 20px;
+      background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+      cursor: pointer; white-space: nowrap;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .chip.active        { background: rgba(106,106,255,.18); border-color: var(--accent); color: var(--accent); }
+    .chip.bull.active   { background: var(--bull-dim); border-color: var(--bull); color: var(--bull); }
+    .chip.bear.active   { background: var(--bear-dim); border-color: var(--bear); color: var(--bear); }
+
+    /* ── Search ─────────────────────────────────────────────── */
+    .search {
+      width: 100%; padding: 7px 12px;
+      background: var(--surface); border: 1px solid var(--border);
+      color: var(--text); border-radius: 8px; font-size: 13px;
+    }
+    .search::placeholder { color: var(--muted); }
+    .search:focus { outline: none; border-color: var(--accent); }
+
+    /* ── Stats bar ──────────────────────────────────────────── */
+    .statsbar {
+      display: flex; gap: 10px; align-items: center;
+      padding: 6px 14px; font-size: 11px; color: var(--muted);
+      border-bottom: 1px solid var(--border);
+    }
+    .statsbar b { color: var(--text); }
+
+    /* ── Cards grid ─────────────────────────────────────────── */
+    .cards {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+      padding: 10px 10px env(safe-area-inset-bottom,12px) 10px;
+    }
+    @media (min-width: 560px)  { .cards { grid-template-columns: repeat(2,1fr); } }
+    @media (min-width: 860px)  { .cards { grid-template-columns: repeat(3,1fr); } }
+    @media (min-width: 1120px) { .cards { grid-template-columns: repeat(4,1fr); } }
+
+    /* ── Card ───────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: border-color .15s;
+    }
+    .card:active { border-color: var(--accent); }
+
+    .card-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .card-sym {
+      font-weight: 700; font-size: 14px; letter-spacing: .4px;
+    }
+    .dots { display: flex; gap: 4px; }
+    .dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: var(--border);
+    }
+    .dot.bull   { background: var(--bull); }
+    .dot.bear   { background: var(--bear); }
+    .dot.mixed  { background: var(--warn); }
+
+    /* ── TF row inside card ─────────────────────────────────── */
+    .tf-row {
+      display: grid;
+      grid-template-columns: 28px 1fr 18px 56px;
+      align-items: center;
+      gap: 4px;
+      padding: 6px 10px;
+      border-bottom: 1px solid #1b1b38;
+    }
+    .tf-row:last-child { border-bottom: none; }
+
+    .tf-label { font-size: 11px; font-weight: 600; color: var(--muted); }
+
+    .tsi-val {
+      font-size: 13px; font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .tsi-val.bull { color: var(--bull); }
+    .tsi-val.bear { color: var(--bear); }
+
+    .trend { font-size: 15px; text-align: center; line-height: 1; }
+    .trend.up   { color: var(--bull); }
+    .trend.down { color: var(--bear); }
+
+    .sig {
+      font-size: 10px; font-weight: 700; padding: 2px 5px;
+      border-radius: 4px; text-align: center; letter-spacing: .3px;
+    }
+    .sig.above { background: var(--bull-dim); color: var(--bull); }
+    .sig.below { background: var(--bear-dim); color: var(--bear); }
+
+    .tf-na { grid-column: 2 / 5; color: var(--muted); font-size: 11px; }
+
+    /* ── Empty / loading ────────────────────────────────────── */
+    .empty {
+      grid-column: 1 / -1;
+      text-align: center; padding: 60px 20px; color: var(--muted);
+    }
+    .empty p { font-size: 15px; margin-bottom: 8px; }
+    .spinner {
+      width: 28px; height: 28px; margin: 0 auto;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Error banner ───────────────────────────────────────── */
+    .error-bar {
+      margin: 8px 10px; padding: 8px 12px;
+      background: var(--bear-dim); border: 1px solid var(--bear);
+      border-radius: 8px; color: var(--bear); font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Top bar ────────────────────────────────────────────────────── -->
+<div class="topbar">
+  <div class="topbar-row">
+    <div>
+      <div class="title">TSI Scanner</div>
+      <div class="meta" id="metaLine">
+        {% if scanned_at %}
+          갱신: {{ scanned_at.strftime('%Y-%m-%d %H:%M') }} UTC &nbsp;·&nbsp; 다음 갱신 <span id="countdown">—</span>
+        {% elif scanning %}
+          첫 스캔 진행 중…
+        {% else %}
+          데이터 없음
+        {% endif %}
+      </div>
+    </div>
+    <div class="ctrl-group">
+      {% if scanning %}<span class="badge-scanning">Scanning…</span>{% endif %}
+      <button onclick="manualRefresh(this)" title="지금 스캔">↻</button>
+      <select id="sortSel" onchange="applySort()">
+        <option value="sym">A-Z</option>
+        <option value="bull">강세순</option>
+        <option value="bear">약세순</option>
+        <option value="t4h_d">4h TSI ↓</option>
+        <option value="t4h_u">4h TSI ↑</option>
+        <option value="t1h_d">1h TSI ↓</option>
+        <option value="t15m_d">15m TSI ↓</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Filter chips -->
+  <div class="filters">
+    <button class="chip active"    data-f="all"     onclick="setFilter(this)">전체</button>
+    <button class="chip bull"      data-f="bull3"   onclick="setFilter(this)">🟢 3/3 강세</button>
+    <button class="chip bull"      data-f="bull2"   onclick="setFilter(this)">🟢 2/3+ 강세</button>
+    <button class="chip bear"      data-f="bear3"   onclick="setFilter(this)">🔴 3/3 약세</button>
+    <button class="chip bear"      data-f="bear2"   onclick="setFilter(this)">🔴 2/3+ 약세</button>
+    <button class="chip"           data-f="4h_bull" onclick="setFilter(this)">4h 강세</button>
+    <button class="chip"           data-f="4h_bear" onclick="setFilter(this)">4h 약세</button>
+    <button class="chip"           data-f="all_up"  onclick="setFilter(this)">3TF 모두 ↑</button>
+    <button class="chip"           data-f="all_dn"  onclick="setFilter(this)">3TF 모두 ↓</button>
+  </div>
+
+  <input class="search" id="search" type="search"
+         placeholder="심볼 검색 (예: BTC, ETH, SOL…)" oninput="applyFilter()">
+</div>
+
+<!-- ── Stats bar ──────────────────────────────────────────────────── -->
+<div class="statsbar">
+  <span id="countLbl">{{ results|length }} 종목</span>
+  {% if results %}
+  &nbsp;·&nbsp;
+  <span style="color:var(--bull)">🟢 {{ results|selectattr('bull_score','equalto',3)|list|length }}개 완전 강세</span>
+  &nbsp;·&nbsp;
+  <span style="color:var(--bear)">🔴 {{ results|selectattr('bear_score','equalto',3)|list|length }}개 완전 약세</span>
+  {% endif %}
+</div>
+
+{% if error %}
+<div class="error-bar">⚠️ 스캔 오류: {{ error }}</div>
+{% endif %}
+
+<!-- ── Cards ──────────────────────────────────────────────────────── -->
+<div class="cards" id="cards">
+{% if results %}
+  {% for r in results %}
+  {# ── precompute per-symbol data attributes ── #}
+  {% set s4 = r.tf.get('4h') %}
+  {% set s1 = r.tf.get('1h') %}
+  {% set s15 = r.tf.get('15m') %}
+  <div class="card"
+       data-sym="{{ r.symbol }}"
+       data-bull="{{ r.bull_score }}"
+       data-bear="{{ r.bear_score }}"
+       data-t4h="{{ s4.tsi if s4 else 0 }}"
+       data-t1h="{{ s1.tsi if s1 else 0 }}"
+       data-t15="{{ s15.tsi if s15 else 0 }}"
+       data-4az="{{ 'true' if s4 and s4.above_zero else 'false' }}"
+       data-4as="{{ 'true' if s4 and s4.above_signal else 'false' }}"
+       data-allup="{{ 'true' if (s4 and s4.rising) and (s1 and s1.rising) and (s15 and s15.rising) else 'false' }}"
+       data-alldn="{{ 'true' if (s4 and not s4.rising) and (s1 and not s1.rising) and (s15 and not s15.rising) else 'false' }}"
+  >
+    <!-- Card header -->
+    <div class="card-head">
+      <span class="card-sym">{{ r.symbol[:-4] if r.symbol.endswith('USDT') else r.symbol }}</span>
+      <div class="dots">
+        {% for tf in ['4h','1h','15m'] %}
+        {% set s = r.tf.get(tf) %}
+        {% if s %}
+          {% if s.above_zero and s.above_signal %}
+            <div class="dot bull" title="{{ tf }}: TSI>0 &amp; >SIG"></div>
+          {% elif not s.above_zero and not s.above_signal %}
+            <div class="dot bear" title="{{ tf }}: TSI<0 &amp; <SIG"></div>
+          {% else %}
+            <div class="dot mixed" title="{{ tf }}: mixed"></div>
+          {% endif %}
+        {% else %}
+          <div class="dot" title="{{ tf }}: N/A"></div>
+        {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- TF rows -->
+    {% for tf, s in [('4h', r.tf.get('4h')), ('1h', r.tf.get('1h')), ('15m', r.tf.get('15m'))] %}
+    <div class="tf-row">
+      <span class="tf-label">{{ tf }}</span>
+      {% if s %}
+        <span class="tsi-val {{ 'bull' if s.above_zero else 'bear' }}">{{ s.tsi | fmt_tsi }}</span>
+        <span class="trend {{ 'up' if s.rising else 'down' }}">{{ '↑' if s.rising else '↓' }}</span>
+        <span class="sig {{ 'above' if s.above_signal else 'below' }}">{{ '>SIG' if s.above_signal else '<SIG' }}</span>
+      {% else %}
+        <span class="tf-na">—</span>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+
+{% else %}
+  <div class="empty">
+    {% if scanning %}
+      <div class="spinner"></div>
+      <p style="margin-top:16px">스캔 중…<br><small>처음 스캔은 1~2분 소요됩니다.</small></p>
+    {% else %}
+      <p>아직 데이터가 없습니다.</p>
+      {% if static_mode %}
+      <p style="font-size:12px;margin-top:6px">다음 자동 갱신(매 15분)을 기다리거나, GitHub Actions에서 워크플로를 수동 실행하세요.</p>
+      <button onclick="reloadFresh()" style="margin-top:12px;padding:8px 20px">새로고침</button>
+      {% else %}
+      <button onclick="manualRefresh(this)" style="margin-top:12px;padding:8px 20px">지금 스캔 시작</button>
+      {% endif %}
+    {% endif %}
+  </div>
+{% endif %}
+</div>
+
+<!-- ── JavaScript ─────────────────────────────────────────────────── -->
+<script>
+"use strict";
+
+// In static mode (GitHub Pages) there is no backend: the page is regenerated
+// every 15 min by GitHub Actions, so "refresh" just re-fetches the page.
+const STATIC_MODE = {{ 'true' if static_mode else 'false' }};
+
+// Reload the page, busting any CDN/browser cache so we get the latest scan.
+function reloadFresh() {
+  location.href = location.pathname + "?t=" + Date.now();
+}
+
+// ── Filter state ──────────────────────────────────────────────
+let activeFilter = "all";
+
+function setFilter(btn) {
+  document.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
+  btn.classList.add("active");
+  activeFilter = btn.dataset.f;
+  applyFilter();
+}
+
+function applyFilter() {
+  const q  = (document.getElementById("search").value || "").toUpperCase();
+  const cards = document.querySelectorAll("#cards .card");
+  let visible = 0;
+
+  cards.forEach(card => {
+    const sym  = card.dataset.sym;
+    const bull = +card.dataset.bull;
+    const bear = +card.dataset.bear;
+    const az4  = card.dataset["4az"] === "true";
+    const as4  = card.dataset["4as"] === "true";
+    const au   = card.dataset.allup === "true";
+    const ad   = card.dataset.alldn === "true";
+
+    let show = (!q || sym.includes(q));
+
+    if (show) {
+      switch (activeFilter) {
+        case "bull3":   show = bull === 3; break;
+        case "bull2":   show = bull >= 2; break;
+        case "bear3":   show = bear === 3; break;
+        case "bear2":   show = bear >= 2; break;
+        case "4h_bull": show = az4 && as4; break;
+        case "4h_bear": show = !az4 && !as4; break;
+        case "all_up":  show = au; break;
+        case "all_dn":  show = ad; break;
+      }
+    }
+
+    card.style.display = show ? "" : "none";
+    if (show) visible++;
+  });
+
+  document.getElementById("countLbl").textContent = visible + " 종목";
+}
+
+// ── Sort ──────────────────────────────────────────────────────
+function applySort() {
+  const v   = document.getElementById("sortSel").value;
+  const con = document.getElementById("cards");
+  const cards = Array.from(con.querySelectorAll(".card"));
+
+  const num = (card, key) => parseFloat(card.dataset[key] || 0);
+
+  cards.sort((a, b) => {
+    switch (v) {
+      case "sym":   return a.dataset.sym.localeCompare(b.dataset.sym);
+      case "bull":  return num(b,"bull") - num(a,"bull") || a.dataset.sym.localeCompare(b.dataset.sym);
+      case "bear":  return num(b,"bear") - num(a,"bear") || a.dataset.sym.localeCompare(b.dataset.sym);
+      case "t4h_d": return num(b,"t4h") - num(a,"t4h");
+      case "t4h_u": return num(a,"t4h") - num(b,"t4h");
+      case "t1h_d": return num(b,"t1h") - num(a,"t1h");
+      case "t15m_d":return num(b,"t15") - num(a,"t15");
+      default:      return 0;
+    }
+  });
+
+  cards.forEach(c => con.appendChild(c));
+}
+
+// ── Manual refresh ────────────────────────────────────────────
+function manualRefresh(btn) {
+  if (STATIC_MODE) { reloadFresh(); return; }
+  if (btn) { btn.disabled = true; btn.textContent = "…"; }
+  fetch("/refresh", { method: "POST" })
+    .then(() => setTimeout(() => location.reload(), 3000))
+    .catch(() => { if (btn) { btn.disabled = false; btn.textContent = "↻"; } });
+}
+
+// ── Countdown to next 15 m candle close ───────────────────────
+function secsToNext15m() {
+  const now = new Date();
+  const total = now.getUTCMinutes() * 60 + now.getUTCSeconds();
+  const slot  = (Math.floor(total / 900) + 1) * 900;
+  return slot - total;  // seconds until next close
+}
+
+function updateCountdown() {
+  const s = secsToNext15m();
+  const m = Math.floor(s / 60), sec = s % 60;
+  const el = document.getElementById("countdown");
+  if (el) el.textContent = m + ":" + String(sec).padStart(2, "0");
+}
+
+setInterval(updateCountdown, 1000);
+updateCountdown();
+
+// Auto-reload ~20 s after next candle close (gives the scanner time to run
+// and, in static mode, GitHub Actions time to redeploy the page).
+const autoReloadMs = (secsToNext15m() + 20) * 1000;
+setTimeout(reloadFresh, autoReloadMs);
+</script>
+</body>
+</html>

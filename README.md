@@ -53,6 +53,22 @@ TSI를 1봉 기울기로 보지 않고 **두 기준선**으로 읽어 **4단계 
 > 반등 초기를 빨리 잡고 싶으면 `--aggressive`(4h +1 허용). 어느 쪽이 나은지는 백테스트로
 > 정하는 게 맞습니다.
 
+## 📱 모바일 스캐너 (전 종목 4h/1h/15m TSI, 서버 불필요)
+
+매 15분봉 마감마다 바이낸스 선물 **전 종목**의 4h/1h/15m TSI를 스캔해서 (값의
+0 기준 위/아래, 직전 대비 상승/하락, signal 대비 위/아래) 모바일에서 보여주는
+대시보드 + 텔레그램 알림입니다. GitHub Actions(무료 cron) + GitHub Pages로
+**내가 켜둘 서버 없이** 돌아갑니다.
+
+→ 설치는 **[MOBILE_SETUP.md](MOBILE_SETUP.md)** 의 1~100 단계 가이드 참고.
+
+```bash
+# 로컬에서 한 번 생성해 보기 (바이낸스 접속 필요)
+python generate_static.py --out public --limit 20   # 20종목만 빠르게
+# 라이브 웹서버로 보기 (PC가 켜져 있는 동안만)
+python web_scanner.py                                # http://localhost:5000
+```
+
 ## 사용법
 
 ```bash

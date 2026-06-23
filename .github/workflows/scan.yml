@@ -1,0 +1,67 @@
+name: TSI Scan
+
+# Runs every 15 minutes (a few minutes after each candle close), scans all
+# Binance USDT-M futures, publishes a static dashboard to GitHub Pages, and
+# pushes Telegram alerts on notable changes. No always-on server required.
+#
+# NOTE: GitHub's cron can be delayed during peak load, and scheduled workflows
+# are auto-disabled after 60 days of repo inactivity (just re-enable them).
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}   # lets you run it manually from the Actions tab
+
+# Least-privilege token + the scopes GitHub Pages deployment needs.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deployment at a time; queue (don't cancel) overlapping runs.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch previous scan (for alert diff)
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO="${{ github.event.repository.name }}"
+          URL="https://${OWNER}.github.io/${REPO}/data.json"
+          echo "Trying previous data at $URL"
+          curl -sf "$URL" -o prev.json || echo '{}' > prev.json
+
+      - name: Scan & render dashboard
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python generate_static.py --out public --prev prev.json
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
