@@ -3,5 +3,8 @@
 # tests and the offline demo (`python run.py --demo`) need nothing here.
 requests>=2.25
 
+# Web dashboard (web_scanner.py)
+flask>=3.0
+
 # Optional, for the Phase 2+ backtesting/analysis work (not imported yet):
 # pandas>=2.0
