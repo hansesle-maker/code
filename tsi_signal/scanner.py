@@ -23,9 +23,10 @@ KLINE_LIMIT = 300  # TSI(25,13,13) needs ~55 bars; 300 gives plenty of warm-up
 class TFState:
     tsi: float
     signal: float
-    above_zero: bool   # TSI > 0
-    rising: bool       # TSI[n] > TSI[n-1]
-    above_signal: bool # TSI > signal
+    above_zero: bool    # TSI > 0
+    rising: bool        # TSI[n] > TSI[n-1]
+    above_signal: bool  # TSI > signal
+    fresh_cross: int = 0  # +1 = just crossed above signal, -1 = just crossed below, 0 = no cross
 
 
 @dataclass
@@ -72,13 +73,24 @@ def _state_from_closes(closes: List[float]) -> Optional[TFState]:
     tsi_vals, sig_vals = true_strength_index(closes)
     if len(tsi_vals) < 2:
         return None
-    cur, prev, sig = tsi_vals[-1], tsi_vals[-2], sig_vals[-1]
+    cur, prev = tsi_vals[-1], tsi_vals[-2]
+    sig, sig_prev = sig_vals[-1], sig_vals[-2]
+
+    # Detect a fresh signal-line cross on this bar vs the previous bar.
+    if cur > sig and prev <= sig_prev:
+        fresh_cross = 1      # just crossed above signal
+    elif cur < sig and prev >= sig_prev:
+        fresh_cross = -1     # just crossed below signal
+    else:
+        fresh_cross = 0
+
     return TFState(
         tsi=round(cur, 4),
         signal=round(sig, 4),
         above_zero=cur > 0,
         rising=cur > prev,
         above_signal=cur > sig,
+        fresh_cross=fresh_cross,
     )
 
 
@@ -137,6 +149,7 @@ def symbolscan_to_dict(r: SymbolScan) -> dict:
                 "above_zero": s.above_zero,
                 "rising": s.rising,
                 "above_signal": s.above_signal,
+                "fresh_cross": s.fresh_cross,
             }
     return {
         "symbol": r.symbol,

@@ -193,6 +193,35 @@
       background: var(--bear-dim); border: 1px solid var(--bear);
       border-radius: 8px; color: var(--bear); font-size: 12px;
     }
+
+    /* ── 15m 신규 signal 교차 강조 ──────────────────────────── */
+    /* 카드 전체에 발광 테두리 (3/3 정렬 + 15m 교차 한정) */
+    .card--cross-bull {
+      border-color: var(--bull);
+      box-shadow: 0 0 0 1px var(--bull), 0 0 14px rgba(0,212,126,.3);
+    }
+    .card--cross-bear {
+      border-color: var(--bear);
+      box-shadow: 0 0 0 1px var(--bear), 0 0 14px rgba(255,74,90,.3);
+    }
+    /* 카드 헤더 내 교차 뱃지 */
+    .cross-badge {
+      font-size: 10px; font-weight: 800;
+      padding: 1px 6px; border-radius: 4px;
+      animation: cpulse 1.4s ease-in-out infinite;
+    }
+    .cross-badge.bull { background: var(--bull); color: #001a0d; }
+    .cross-badge.bear { background: var(--bear); color: #fff; }
+    @keyframes cpulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+    /* sig 뱃지가 방금 교차 상태일 때 */
+    .sig.cross-up {
+      background: var(--bull); color: #001a0d;
+      animation: cpulse 1.4s ease-in-out infinite;
+    }
+    .sig.cross-dn {
+      background: var(--bear); color: #fff;
+      animation: cpulse 1.4s ease-in-out infinite;
+    }
   </style>
 </head>
 <body>
@@ -216,6 +245,7 @@
       {% if scanning %}<span class="badge-scanning">Scanning…</span>{% endif %}
       <button onclick="manualRefresh(this)" title="지금 스캔">↻</button>
       <select id="sortSel" onchange="applySort()">
+        <option value="cross">🔥 교차 우선</option>
         <option value="sym">A-Z</option>
         <option value="bull">강세순</option>
         <option value="bear">약세순</option>
@@ -229,15 +259,17 @@
 
   <!-- Filter chips -->
   <div class="filters">
-    <button class="chip active"    data-f="all"     onclick="setFilter(this)">전체</button>
-    <button class="chip bull"      data-f="bull3"   onclick="setFilter(this)">🟢 3/3 강세</button>
-    <button class="chip bull"      data-f="bull2"   onclick="setFilter(this)">🟢 2/3+ 강세</button>
-    <button class="chip bear"      data-f="bear3"   onclick="setFilter(this)">🔴 3/3 약세</button>
-    <button class="chip bear"      data-f="bear2"   onclick="setFilter(this)">🔴 2/3+ 약세</button>
-    <button class="chip"           data-f="4h_bull" onclick="setFilter(this)">4h 강세</button>
-    <button class="chip"           data-f="4h_bear" onclick="setFilter(this)">4h 약세</button>
-    <button class="chip"           data-f="all_up"  onclick="setFilter(this)">3TF 모두 ↑</button>
-    <button class="chip"           data-f="all_dn"  onclick="setFilter(this)">3TF 모두 ↓</button>
+    <button class="chip active"    data-f="all"        onclick="setFilter(this)">전체</button>
+    <button class="chip"           data-f="cross_bull" onclick="setFilter(this)">🔥 3/3강세+15m↑교차</button>
+    <button class="chip"           data-f="cross_bear" onclick="setFilter(this)">🔥 3/3약세+15m↓교차</button>
+    <button class="chip bull"      data-f="bull3"      onclick="setFilter(this)">🟢 3/3 강세</button>
+    <button class="chip bull"      data-f="bull2"      onclick="setFilter(this)">🟢 2/3+ 강세</button>
+    <button class="chip bear"      data-f="bear3"      onclick="setFilter(this)">🔴 3/3 약세</button>
+    <button class="chip bear"      data-f="bear2"      onclick="setFilter(this)">🔴 2/3+ 약세</button>
+    <button class="chip"           data-f="4h_bull"    onclick="setFilter(this)">4h 강세</button>
+    <button class="chip"           data-f="4h_bear"    onclick="setFilter(this)">4h 약세</button>
+    <button class="chip"           data-f="all_up"     onclick="setFilter(this)">3TF 모두 ↑</button>
+    <button class="chip"           data-f="all_dn"     onclick="setFilter(this)">3TF 모두 ↓</button>
   </div>
 
   <input class="search" id="search" type="search"
@@ -252,6 +284,19 @@
   <span style="color:var(--bull)">🟢 {{ results|selectattr('bull_score','equalto',3)|list|length }}개 완전 강세</span>
   &nbsp;·&nbsp;
   <span style="color:var(--bear)">🔴 {{ results|selectattr('bear_score','equalto',3)|list|length }}개 완전 약세</span>
+  {% set cross_bull_cnt = results|selectattr('bull_score','equalto',3)|list|selectattr("tf")|list|length %}
+  {# count 3/3 bull + 15m fresh cross up #}
+  {% set hot_bull = namespace(n=0) %}
+  {% set hot_bear = namespace(n=0) %}
+  {% for r in results %}
+    {% set s15 = r.tf.get('15m') %}
+    {% if r.bull_score == 3 and s15 and s15.fresh_cross == 1 %}{% set hot_bull.n = hot_bull.n + 1 %}{% endif %}
+    {% if r.bear_score == 3 and s15 and s15.fresh_cross == -1 %}{% set hot_bear.n = hot_bear.n + 1 %}{% endif %}
+  {% endfor %}
+  {% if hot_bull.n or hot_bear.n %}
+  &nbsp;·&nbsp;
+  <span style="color:var(--warn)">🔥 {{ hot_bull.n + hot_bear.n }}개 15m 신규 교차</span>
+  {% endif %}
   {% endif %}
 </div>
 
@@ -263,11 +308,14 @@
 <div class="cards" id="cards">
 {% if results %}
   {% for r in results %}
-  {# ── precompute per-symbol data attributes ── #}
-  {% set s4 = r.tf.get('4h') %}
-  {% set s1 = r.tf.get('1h') %}
+  {# ── precompute per-symbol data ── #}
+  {% set s4  = r.tf.get('4h') %}
+  {% set s1  = r.tf.get('1h') %}
   {% set s15 = r.tf.get('15m') %}
-  <div class="card"
+  {% set is_cross_bull = (r.bull_score == 3 and s15 and s15.fresh_cross == 1) %}
+  {% set is_cross_bear = (r.bear_score == 3 and s15 and s15.fresh_cross == -1) %}
+  {% set cross15 = (1 if (s15 and s15.fresh_cross == 1) else (-1 if (s15 and s15.fresh_cross == -1) else 0)) %}
+  <div class="card {% if is_cross_bull %}card--cross-bull{% elif is_cross_bear %}card--cross-bear{% endif %}"
        data-sym="{{ r.symbol }}"
        data-bull="{{ r.bull_score }}"
        data-bear="{{ r.bear_score }}"
@@ -278,25 +326,36 @@
        data-4as="{{ 'true' if s4 and s4.above_signal else 'false' }}"
        data-allup="{{ 'true' if (s4 and s4.rising) and (s1 and s1.rising) and (s15 and s15.rising) else 'false' }}"
        data-alldn="{{ 'true' if (s4 and not s4.rising) and (s1 and not s1.rising) and (s15 and not s15.rising) else 'false' }}"
+       data-cross15="{{ cross15 }}"
+       data-crossbull="{{ 'true' if is_cross_bull else 'false' }}"
+       data-crossbear="{{ 'true' if is_cross_bear else 'false' }}"
   >
     <!-- Card header -->
     <div class="card-head">
       <span class="card-sym">{{ r.symbol[:-4] if r.symbol.endswith('USDT') else r.symbol }}</span>
-      <div class="dots">
-        {% for tf in ['4h','1h','15m'] %}
-        {% set s = r.tf.get(tf) %}
-        {% if s %}
-          {% if s.above_zero and s.above_signal %}
-            <div class="dot bull" title="{{ tf }}: TSI>0 &amp; >SIG"></div>
-          {% elif not s.above_zero and not s.above_signal %}
-            <div class="dot bear" title="{{ tf }}: TSI<0 &amp; <SIG"></div>
-          {% else %}
-            <div class="dot mixed" title="{{ tf }}: mixed"></div>
-          {% endif %}
-        {% else %}
-          <div class="dot" title="{{ tf }}: N/A"></div>
+      <div style="display:flex;align-items:center;gap:5px">
+        {# 교차 뱃지: 3/3 정렬 + 15m 신규 교차인 경우만 표시 #}
+        {% if is_cross_bull %}
+          <span class="cross-badge bull">⚡15m↑</span>
+        {% elif is_cross_bear %}
+          <span class="cross-badge bear">⚡15m↓</span>
         {% endif %}
-        {% endfor %}
+        <div class="dots">
+          {% for tf in ['4h','1h','15m'] %}
+          {% set s = r.tf.get(tf) %}
+          {% if s %}
+            {% if s.above_zero and s.above_signal %}
+              <div class="dot bull" title="{{ tf }}: TSI>0 &amp; >SIG"></div>
+            {% elif not s.above_zero and not s.above_signal %}
+              <div class="dot bear" title="{{ tf }}: TSI<0 &amp; <SIG"></div>
+            {% else %}
+              <div class="dot mixed" title="{{ tf }}: mixed"></div>
+            {% endif %}
+          {% else %}
+            <div class="dot" title="{{ tf }}: N/A"></div>
+          {% endif %}
+          {% endfor %}
+        </div>
       </div>
     </div>
 
@@ -307,7 +366,14 @@
       {% if s %}
         <span class="tsi-val {{ 'bull' if s.above_zero else 'bear' }}">{{ s.tsi | fmt_tsi }}</span>
         <span class="trend {{ 'up' if s.rising else 'down' }}">{{ '↑' if s.rising else '↓' }}</span>
-        <span class="sig {{ 'above' if s.above_signal else 'below' }}">{{ '>SIG' if s.above_signal else '<SIG' }}</span>
+        {# 15m 행에서 신규 교차이면 강조 뱃지, 아니면 일반 sig 뱃지 #}
+        {% if s.fresh_cross == 1 %}
+          <span class="sig cross-up">⚡&gt;SIG</span>
+        {% elif s.fresh_cross == -1 %}
+          <span class="sig cross-dn">⚡&lt;SIG</span>
+        {% else %}
+          <span class="sig {{ 'above' if s.above_signal else 'below' }}">{{ '&gt;SIG' if s.above_signal else '&lt;SIG' }}</span>
+        {% endif %}
       {% else %}
         <span class="tf-na">—</span>
       {% endif %}
@@ -370,19 +436,23 @@ function applyFilter() {
     const as4  = card.dataset["4as"] === "true";
     const au   = card.dataset.allup === "true";
     const ad   = card.dataset.alldn === "true";
+    const cbull = card.dataset.crossbull === "true";
+    const cbear = card.dataset.crossbear === "true";
 
     let show = (!q || sym.includes(q));
 
     if (show) {
       switch (activeFilter) {
-        case "bull3":   show = bull === 3; break;
-        case "bull2":   show = bull >= 2; break;
-        case "bear3":   show = bear === 3; break;
-        case "bear2":   show = bear >= 2; break;
-        case "4h_bull": show = az4 && as4; break;
-        case "4h_bear": show = !az4 && !as4; break;
-        case "all_up":  show = au; break;
-        case "all_dn":  show = ad; break;
+        case "cross_bull": show = cbull; break;
+        case "cross_bear": show = cbear; break;
+        case "bull3":      show = bull === 3; break;
+        case "bull2":      show = bull >= 2; break;
+        case "bear3":      show = bear === 3; break;
+        case "bear2":      show = bear >= 2; break;
+        case "4h_bull":    show = az4 && as4; break;
+        case "4h_bear":    show = !az4 && !as4; break;
+        case "all_up":     show = au; break;
+        case "all_dn":     show = ad; break;
       }
     }
 
@@ -401,16 +471,24 @@ function applySort() {
 
   const num = (card, key) => parseFloat(card.dataset[key] || 0);
 
+  // cross priority: 3/3 + cross (2) > 3/3 only (1) > rest (0)
+  const crossPrio = c => {
+    if (c.dataset.crossbull === "true" || c.dataset.crossbear === "true") return 2;
+    if (+c.dataset.bull === 3 || +c.dataset.bear === 3) return 1;
+    return 0;
+  };
+
   cards.sort((a, b) => {
     switch (v) {
-      case "sym":   return a.dataset.sym.localeCompare(b.dataset.sym);
-      case "bull":  return num(b,"bull") - num(a,"bull") || a.dataset.sym.localeCompare(b.dataset.sym);
-      case "bear":  return num(b,"bear") - num(a,"bear") || a.dataset.sym.localeCompare(b.dataset.sym);
-      case "t4h_d": return num(b,"t4h") - num(a,"t4h");
-      case "t4h_u": return num(a,"t4h") - num(b,"t4h");
-      case "t1h_d": return num(b,"t1h") - num(a,"t1h");
-      case "t15m_d":return num(b,"t15") - num(a,"t15");
-      default:      return 0;
+      case "cross":  return crossPrio(b) - crossPrio(a) || +b.dataset.bull - +a.dataset.bull || a.dataset.sym.localeCompare(b.dataset.sym);
+      case "sym":    return a.dataset.sym.localeCompare(b.dataset.sym);
+      case "bull":   return num(b,"bull") - num(a,"bull") || a.dataset.sym.localeCompare(b.dataset.sym);
+      case "bear":   return num(b,"bear") - num(a,"bear") || a.dataset.sym.localeCompare(b.dataset.sym);
+      case "t4h_d":  return num(b,"t4h") - num(a,"t4h");
+      case "t4h_u":  return num(a,"t4h") - num(b,"t4h");
+      case "t1h_d":  return num(b,"t1h") - num(a,"t1h");
+      case "t15m_d": return num(b,"t15") - num(a,"t15");
+      default:       return 0;
     }
   });
 

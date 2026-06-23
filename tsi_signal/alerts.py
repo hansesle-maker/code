@@ -23,6 +23,9 @@ from typing import Dict, List, Optional
 from .scanner import SymbolScan
 
 # Alert category -> emoji-prefixed title (ordering controls message layout).
+# High-priority (fresh cross on already-aligned symbols) listed first.
+CROSS_15M_BULL = "🔥 3/3 강세 + 15m signal 상향 교차 (진입 타이밍)"
+CROSS_15M_BEAR = "🔥 3/3 약세 + 15m signal 하향 교차 (진입 타이밍)"
 BULL3 = "🟢 3/3 강세 정렬 (신규)"
 BEAR3 = "🔴 3/3 약세 정렬 (신규)"
 SIG_UP = "⚡ 4h TSI가 signal 상향 돌파"
@@ -30,7 +33,7 @@ SIG_DN = "🔻 4h TSI가 signal 하향 이탈"
 ZERO_UP = "📈 4h TSI가 0선 상향 돌파"
 ZERO_DN = "📉 4h TSI가 0선 하향 이탈"
 
-_CATEGORIES = (BULL3, BEAR3, SIG_UP, SIG_DN, ZERO_UP, ZERO_DN)
+_CATEGORIES = (CROSS_15M_BULL, CROSS_15M_BEAR, BULL3, BEAR3, SIG_UP, SIG_DN, ZERO_UP, ZERO_DN)
 
 
 def load_prev_map(path: Optional[str]) -> Dict[str, dict]:
@@ -73,6 +76,15 @@ def diff_alerts(
         prev = prev_map.get(r.symbol)
         prev_bull = prev.get("bull_score") if prev else None
         prev_bear = prev.get("bear_score") if prev else None
+
+        # 15m fresh cross on a fully-aligned symbol — highest-priority alert.
+        # fresh_cross is single-bar information (computed from klines), so no
+        # prev-scan diff needed; it fires only on the exact bar of the cross.
+        s15 = r.tf.get("15m")
+        if s15 and s15.fresh_cross == 1 and r.bull_score == 3:
+            groups[CROSS_15M_BULL].append(_line(r))
+        if s15 and s15.fresh_cross == -1 and r.bear_score == 3:
+            groups[CROSS_15M_BEAR].append(_line(r))
 
         if r.bull_score == 3 and prev_bull is not None and prev_bull < 3:
             groups[BULL3].append(_line(r))
