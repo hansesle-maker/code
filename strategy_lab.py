@@ -24,6 +24,7 @@ Usage (run on a host that can reach Binance, e.g. your Oracle VM):
 from __future__ import annotations
 
 import argparse
+import itertools
 import math
 import sys
 from dataclasses import dataclass, field
@@ -620,6 +621,333 @@ def run_lab_backtest(c15: List[Candle], config: dict) -> dict:
         "bh_equity": bh.equity[::step],
         "times":    ind.times[::step],
     }
+
+
+# --------------------------------------------------------------------------- #
+# Auto-optimizer:  search condition combinations for the best strategy
+# --------------------------------------------------------------------------- #
+# The atomic search pool: every condition type, in its BULLISH direction, on
+# each timeframe. A candidate entry rule is an AND of some of these atoms; its
+# bearish mirror provides the short side (or, when shorts are off, the exit).
+_POOL_TYPES_DIRS: List[Tuple[str, str]] = [
+    ("tsi_vs_zero",   "above"),
+    ("sig_vs_zero",   "above"),
+    ("tsi_vs_signal", "above"),
+    ("zero_cross",    "up"),
+    ("fresh_cross",   "up"),
+    ("gap_change",    "expanding"),
+    ("tsi_slope",     "rising"),
+    ("sig_slope",     "rising"),
+]
+ATOMIC: List[Tuple[str, str, str]] = [
+    (tf, t, d) for tf in ("4h", "1h", "15m") for (t, d) in _POOL_TYPES_DIRS
+]
+
+_WARMUP = BARS_PER_4H * 60  # matches run_backtest default
+
+_LABELS = {
+    ("tsi_vs_zero",   "above"): "TSI>0",   ("tsi_vs_zero",   "below"): "TSI<0",
+    ("sig_vs_zero",   "above"): "SIG>0",   ("sig_vs_zero",   "below"): "SIG<0",
+    ("tsi_vs_signal", "above"): "TSI>SIG", ("tsi_vs_signal", "below"): "TSI<SIG",
+    ("zero_cross",    "up"):    "TSI↑0",   ("zero_cross",    "down"):  "TSI↓0",
+    ("fresh_cross",   "up"):    "↑교차",    ("fresh_cross",   "down"):  "↓교차",
+    ("gap_change",    "expanding"): "GAP↗", ("gap_change",  "contracting"): "GAP↘",
+    ("tsi_slope",     "rising"): "TSI↗",   ("tsi_slope",     "falling"): "TSI↘",
+    ("sig_slope",     "rising"): "SIG↗",   ("sig_slope",     "falling"): "SIG↘",
+}
+
+
+def _cond_label(tf: str, t: str, d: str) -> str:
+    return f"{tf} {_LABELS.get((t, d), t + '/' + d)}"
+
+
+def make_rule(conds, tf_logic: str = "AND", group_logic: str = "AND") -> dict:
+    """Build an entry/exit rule dict from a list of (tf, type, dir) atoms."""
+    rule: dict = {"tf_logic": tf_logic}
+    for tf in ("4h", "1h", "15m"):
+        rule[tf] = {
+            "logic": group_logic,
+            "conditions": [{"type": t, "dir": d} for (ctf, t, d) in conds if ctf == tf],
+        }
+    return rule
+
+
+def _and_list(arrs: List[List[bool]], n: int) -> List[bool]:
+    if not arrs:
+        return [False] * n
+    out = list(arrs[0])
+    for a in arrs[1:]:
+        for i in range(n):
+            if out[i] and not a[i]:
+                out[i] = False
+    return out
+
+
+def _simulate(long_sig, short_sig, close, warmup, cost, allow_short):
+    """Fast next-bar-fill sim for a precomputed long/short signal pair.
+
+    Semantics match build_dynamic_strategy with an empty exit (stop-and-reverse)
+    when shorts are allowed, or exit-to-flat on the mirror when they are not —
+    so the emitted config reproduces exactly in the general engine / web lab.
+    """
+    n = len(close)
+    decision = [0] * n
+    pos = 0
+    for i in range(warmup, n):
+        if long_sig[i]:
+            d = 1
+        elif short_sig[i]:
+            d = -1 if allow_short else 0
+        else:
+            d = pos
+        pos = d
+        decision[i] = d
+
+    equity = [1.0]
+    eq = 1.0
+    trades: List[Trade] = []
+    entry_px = 0.0
+    entry_i = 0
+    prev = 0
+    for i in range(1, n):
+        held = decision[i - 1]
+        if held != prev:
+            fill = close[i - 1]
+            if prev != 0:
+                gross = prev * (fill / entry_px - 1.0)
+                trades.append(Trade(prev, entry_i, i, entry_px, fill, gross - 2 * cost))
+            eq *= (1.0 - cost * abs(held - prev))
+            if held != 0:
+                entry_px = fill
+                entry_i = i
+        if held != 0:
+            eq *= (1.0 + held * (close[i] / close[i - 1] - 1.0))
+        equity.append(eq)
+        prev = held
+    if prev != 0 and entry_px:
+        fill = close[-1]
+        gross = prev * (fill / entry_px - 1.0)
+        trades.append(Trade(prev, entry_i, n - 1, entry_px, fill, gross - 2 * cost))
+    return equity, trades
+
+
+def _sub_metrics(eq_slice: List[float], trades: List[Trade], bar_ms: int = MS_15M) -> dict:
+    """Performance metrics over an equity sub-curve + the trades inside it."""
+    out = dict(total_return=0.0, cagr=0.0, max_drawdown=0.0, sharpe=0.0,
+               profit_factor=None, win_rate=0.0, n_trades=len(trades),
+               avg_win=0.0, avg_loss=0.0)
+    if len(eq_slice) >= 2 and eq_slice[0] > 0:
+        base = eq_slice[0]
+        eq = [e / base for e in eq_slice]
+        out["total_return"] = eq[-1] - 1.0
+        peak = eq[0]
+        mdd = 0.0
+        for e in eq:
+            if e > peak:
+                peak = e
+            d = e / peak - 1.0
+            if d < mdd:
+                mdd = d
+        out["max_drawdown"] = mdd
+        rets = [eq[k] / eq[k - 1] - 1.0 for k in range(1, len(eq))]
+        if len(rets) >= 2:
+            m = sum(rets) / len(rets)
+            var = sum((r - m) ** 2 for r in rets) / (len(rets) - 1)
+            sd = math.sqrt(var)
+            if sd > 0:
+                bpy = (365.25 * 24 * 3600) / (bar_ms / 1000)
+                out["sharpe"] = m / sd * math.sqrt(bpy)
+        years = len(eq) * bar_ms / 1000 / (365.25 * 24 * 3600)
+        if years > 0 and eq[-1] > 0:
+            out["cagr"] = eq[-1] ** (1.0 / years) - 1.0
+    if trades:
+        wins = [t.ret for t in trades if t.ret > 0]
+        losses = [t.ret for t in trades if t.ret < 0]
+        out["win_rate"] = len(wins) / len(trades)
+        g = sum(wins)
+        l = -sum(losses)
+        out["profit_factor"] = (math.inf if g > 0 else 0.0) if l == 0 else g / l
+        out["avg_win"] = sum(wins) / len(wins) if wins else 0.0
+        out["avg_loss"] = sum(losses) / len(losses) if losses else 0.0
+    return out
+
+
+def _score(m: Optional[dict], objective: str, min_trades: int) -> float:
+    if not m or m["n_trades"] < min_trades:
+        return -1e18
+    if objective == "return":
+        return m["total_return"]
+    if objective == "calmar":
+        mdd = abs(m["max_drawdown"])
+        return m["cagr"] / mdd if mdd > 1e-9 else (m["cagr"] if m["cagr"] > 0 else 0.0)
+    return m["sharpe"]  # default
+
+
+def optimize(
+    ind: Indicators,
+    *,
+    objective: str = "sharpe",
+    max_depth: int = 2,
+    greedy_depth: int = 4,
+    min_trades: int = 10,
+    allow_short: bool = True,
+    fee_rate: float = 0.0005,
+    slip_rate: float = 0.0001,
+    holdout: float = 0.3,
+    top: int = 15,
+):
+    """Search condition combinations and return the best, ranked.
+
+    Strategy: precompute every atomic condition's boolean array once, then test
+    all singles + all pairs (and up to ``max_depth``-tuples) exhaustively, plus
+    a greedy forward-selection chain for deeper combos. Rank by the in-sample
+    ``objective``; if ``holdout`` > 0, the top survivors are re-ranked by their
+    out-of-sample objective so the winner is the one that generalises.
+
+    Returns a list of ``(conds, is_metrics, oos_metrics, is_score)`` tuples.
+    """
+    n = len(ind.close)
+    if n <= _WARMUP + 50:
+        raise ValueError("not enough data to optimize")
+    split = _WARMUP + int((n - _WARMUP) * (1.0 - holdout)) if holdout > 0 else n
+    cost = fee_rate + slip_rate
+
+    bull: Dict[Tuple[str, str, str], List[bool]] = {}
+    bear: Dict[Tuple[str, str, str], List[bool]] = {}
+    for (tf, t, d) in ATOMIC:
+        bull[(tf, t, d)] = [_eval_cond(ind, i, t, d, tf) for i in range(n)]
+        fd = _flip_dir(t, d)
+        bear[(tf, t, d)] = [_eval_cond(ind, i, t, fd, tf) for i in range(n)]
+
+    cache: Dict[frozenset, tuple] = {}
+
+    def evaluate(conds):
+        key = frozenset(conds)
+        if key in cache:
+            return cache[key]
+        long_sig = _and_list([bull[c] for c in conds], n)
+        short_sig = _and_list([bear[c] for c in conds], n)
+        eq, tr = _simulate(long_sig, short_sig, ind.close, _WARMUP, cost, allow_short)
+        is_m = _sub_metrics(eq[_WARMUP:split], [t for t in tr if t.entry_i < split])
+        oos_m = (_sub_metrics(eq[split:], [t for t in tr if t.entry_i >= split])
+                 if holdout > 0 else None)
+        cache[key] = (is_m, oos_m, list(conds))
+        return cache[key]
+
+    candidates = set()
+    for c in ATOMIC:                                   # singles
+        evaluate([c])
+        candidates.add(frozenset([c]))
+    for k in range(2, max_depth + 1):                  # exhaustive small tuples
+        for combo in itertools.combinations(ATOMIC, k):
+            evaluate(list(combo))
+            candidates.add(frozenset(combo))
+
+    # greedy forward selection from the best single
+    best_key = max((frozenset([c]) for c in ATOMIC),
+                   key=lambda k: _score(cache[k][0], objective, min_trades))
+    cur = list(best_key)
+    cur_s = _score(cache[best_key][0], objective, min_trades)
+    used = set(cur)
+    while len(cur) < greedy_depth:
+        best_add, best_s = None, cur_s
+        for c in ATOMIC:
+            if c in used:
+                continue
+            is_m, _, _ = evaluate(cur + [c])
+            s = _score(is_m, objective, min_trades)
+            if s > best_s:
+                best_s, best_add = s, c
+        if best_add is None:
+            break
+        cur.append(best_add)
+        used.add(best_add)
+        cur_s = best_s
+        candidates.add(frozenset(cur))
+
+    def oos_pass(oos_m: Optional[dict]) -> bool:
+        """Did the combo survive out-of-sample? (lenient trade floor for the
+        shorter OOS window, plus positive risk-adjusted + total return)."""
+        if oos_m is None:
+            return True
+        floor = max(2, round(min_trades * holdout))
+        return (oos_m["n_trades"] >= floor and oos_m["sharpe"] > 0
+                and oos_m["total_return"] > 0)
+
+    ranked = []
+    for key in candidates:
+        is_m, oos_m, conds = cache[key]
+        s = _score(is_m, objective, min_trades)
+        if s <= -1e17:                       # failed the in-sample trade floor
+            continue
+        ranked.append((conds, is_m, oos_m, s, oos_pass(oos_m)))
+
+    # OOS-confirmed combos first, then by in-sample objective. With holdout=0
+    # every combo "passes", so this is a pure in-sample ranking.
+    ranked.sort(key=lambda x: (x[4], x[3]), reverse=True)
+    return [(c, im, om, s) for (c, im, om, s, _p) in ranked[:top]]
+
+
+def _serialise_metrics(m: Optional[dict]) -> Optional[dict]:
+    if not m:
+        return None
+    pf = m["profit_factor"]
+    return dict(
+        total_return=round(m["total_return"] * 100, 2),
+        cagr=round(m["cagr"] * 100, 2),
+        max_drawdown=round(m["max_drawdown"] * 100, 2),
+        sharpe=round(m["sharpe"], 3),
+        profit_factor=None if pf in (None, math.inf) else round(pf, 3),
+        win_rate=round(m["win_rate"] * 100, 2),
+        n_trades=m["n_trades"],
+    )
+
+
+def run_lab_optimize(c15: List[Candle], config: dict) -> dict:
+    """Run the auto-optimizer and return a JSON-serialisable result for the web."""
+    fee = config.get("fee_bps", 5.0) / 10000.0
+    slip = config.get("slip_bps", 1.0) / 10000.0
+    allow_short = bool(config.get("allow_short", True))
+    objective = config.get("objective", "sharpe")
+    min_trades = int(config.get("min_trades", 10))
+    holdout = float(config.get("holdout", 0.3))
+    max_depth = max(1, min(3, int(config.get("depth", 2))))
+    greedy_depth = int(config.get("greedy_depth", 4))
+    top = int(config.get("top", 15))
+    tsi_params = (
+        int(config.get("tsi_long", 25)),
+        int(config.get("tsi_short", 13)),
+        int(config.get("tsi_signal", 13)),
+    )
+
+    ind = build_indicators(c15, tsi_params)
+    ranked = optimize(ind, objective=objective, max_depth=max_depth,
+                      greedy_depth=greedy_depth, min_trades=min_trades,
+                      allow_short=allow_short, fee_rate=fee, slip_rate=slip,
+                      holdout=holdout, top=top)
+
+    bh = buy_hold(ind)
+    bh_stats = _serialise_metrics(_sub_metrics(bh.equity[_WARMUP:], []))
+
+    combos = []
+    for conds, is_m, oos_m, score in ranked:
+        mirror = [(tf, t, _flip_dir(t, d)) for (tf, t, d) in conds]
+        entry_rule = make_rule(conds, "AND", "AND")
+        exit_rule = (make_rule([], "OR", "OR") if allow_short
+                     else make_rule(mirror, "AND", "AND"))
+        combos.append(dict(
+            desc=" + ".join(_cond_label(*c) for c in conds),
+            conds=[list(c) for c in conds],
+            entry=entry_rule,
+            exit=exit_rule,
+            allow_short=allow_short,
+            is_stats=_serialise_metrics(is_m),
+            oos_stats=_serialise_metrics(oos_m),
+            score=round(score, 4),
+        ))
+
+    return dict(ok=True, bars=len(c15), holdout=holdout, objective=objective,
+                allow_short=allow_short, buy_hold=bh_stats, combos=combos)
 
 
 # --------------------------------------------------------------------------- #

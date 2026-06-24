@@ -302,6 +302,54 @@
     </div>
   </div>
 
+  <!-- ── Auto-optimizer ──────────────────────────────────── -->
+  <div class="section">
+    <div class="section-hd">
+      🔎 최적 조합 자동 탐색
+      <span class="hint">— 모든 조건을 조합·백테스트해서 최고 전략을 찾습니다</span>
+    </div>
+    <div class="section-body">
+      <div class="params-grid">
+        <div class="param-group">
+          <label>목적함수 (정렬 기준)</label>
+          <select id="opt_objective">
+            <option value="sharpe">Sharpe (위험대비수익)</option>
+            <option value="calmar">Calmar (CAGR / MDD)</option>
+            <option value="return">총 수익률</option>
+          </select>
+        </div>
+        <div class="param-group">
+          <label>최소 거래수 (미만 제외)</label>
+          <input type="number" id="opt_min_trades" value="10" min="1" max="500">
+        </div>
+        <div class="param-group">
+          <label>탐색 깊이 (전수조사)</label>
+          <select id="opt_depth">
+            <option value="2">2 · 단일+페어 (빠름)</option>
+            <option value="3">3 · 삼중조합 (느림)</option>
+          </select>
+        </div>
+        <div class="param-group" style="justify-content:flex-end">
+          <label>&nbsp;</label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="opt_holdout" checked>
+            OOS 검증 (70/30)
+          </label>
+        </div>
+      </div>
+      <div class="run-wrap" style="margin:14px 0 0">
+        <button id="optBtn" onclick="runOptimize()">🔎 최적 조합 탐색</button>
+        <div class="run-hint">symbol·기간·수수료는 위 Parameters 값을 사용합니다. 수백 개 조합을 백테스트하므로 20~40초 소요될 수 있습니다.</div>
+      </div>
+      <div id="optErr" class="error-bar" style="display:none"></div>
+      <div id="optLoad" style="display:none;text-align:center;padding:20px">
+        <div class="spinner"></div>
+        <p style="color:var(--muted);font-size:12px;margin-top:10px">조합 탐색 중… (수백 개 백테스트)</p>
+      </div>
+      <div id="optResults" style="display:none;margin-top:14px"></div>
+    </div>
+  </div>
+
   <!-- ── Entry conditions ────────────────────────────────── -->
   <div class="section">
     <div class="section-hd">
@@ -746,6 +794,136 @@ function drawChart(data) {
       },
     },
   });
+}
+
+// ═══ Auto-optimizer ═════════════════════════════════════════════════════════
+let _optCombos = [];
+
+async function runOptimize() {
+  const btn = document.getElementById("optBtn");
+  btn.disabled = true;
+  btn.textContent = "⏳ 탐색 중…";
+  document.getElementById("optErr").style.display     = "none";
+  document.getElementById("optResults").style.display = "none";
+  document.getElementById("optLoad").style.display    = "block";
+
+  const cfg = {
+    symbol:     document.getElementById("symbol").value.trim().toUpperCase() || "BTCUSDT",
+    days:       parseInt(document.getElementById("days").value)    || 180,
+    fee_bps:    parseFloat(document.getElementById("feeBps").value) || 5,
+    slip_bps:   parseFloat(document.getElementById("slipBps").value) || 1,
+    allow_short: document.getElementById("allowShort").checked,
+    tsi_long:   parseInt(document.getElementById("tsiLong").value)   || 25,
+    tsi_short:  parseInt(document.getElementById("tsiShort").value)  || 13,
+    tsi_signal: parseInt(document.getElementById("tsiSignal").value) || 13,
+    objective:  document.getElementById("opt_objective").value,
+    min_trades: parseInt(document.getElementById("opt_min_trades").value) || 10,
+    depth:      parseInt(document.getElementById("opt_depth").value) || 2,
+    holdout:    document.getElementById("opt_holdout").checked ? 0.3 : 0.0,
+    top:        15,
+  };
+
+  try {
+    const resp = await fetch("/api/lab/optimize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cfg),
+    });
+    const data = await resp.json();
+    document.getElementById("optLoad").style.display = "none";
+    if (!data.ok) showOptErr(data.error || "Unknown error");
+    else          showOptResults(data);
+  } catch (err) {
+    document.getElementById("optLoad").style.display = "none";
+    showOptErr("네트워크 오류: " + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🔎 최적 조합 탐색";
+  }
+}
+
+function showOptErr(msg) {
+  const el = document.getElementById("optErr");
+  el.textContent = "⚠ " + msg;
+  el.style.display = "block";
+}
+
+function showOptResults(data) {
+  _optCombos = data.combos || [];
+  const box = document.getElementById("optResults");
+  const hasOos = data.holdout > 0;
+  const bh = data.buy_hold || { total_return: 0, sharpe: 0 };
+
+  if (!_optCombos.length) {
+    box.innerHTML = `<div class="error-bar" style="display:block">조건을 만족하는 조합이 없습니다. 최소 거래수를 낮추거나 기간을 늘려보세요.</div>`;
+    box.style.display = "block";
+    return;
+  }
+
+  const sgn = (v, suf = "") => (v >= 0 ? "+" : "") + v.toFixed(1) + suf;
+  const cl  = v => (v >= 0 ? "pos" : "neg");
+
+  const rows = _optCombos.map((c, i) => {
+    const s = c.is_stats, o = c.oos_stats;
+    const oosCells = hasOos
+      ? (o ? `<td class="${cl(o.sharpe)}">${o.sharpe.toFixed(2)}</td><td class="${cl(o.total_return)}">${sgn(o.total_return, "%")}</td>`
+           : `<td>—</td><td>—</td>`)
+      : "";
+    const lonly = c.allow_short ? "" : " <span style='color:var(--muted)'>(L)</span>";
+    return `<tr>
+      <td>${i + 1}</td>
+      <td style="font-size:11px">${c.desc}${lonly}</td>
+      <td class="${cl(s.sharpe)}">${s.sharpe.toFixed(2)}</td>
+      <td class="${cl(s.total_return)}">${sgn(s.total_return, "%")}</td>
+      <td class="neg">${s.max_drawdown.toFixed(0)}%</td>
+      <td>${s.n_trades}</td>
+      ${oosCells}
+      <td><button class="preset-btn" onclick="applyCombo(${i})">적용</button></td>
+    </tr>`;
+  }).join("");
+
+  const oosHd = hasOos ? `<th>OOS Shp</th><th>OOS Ret</th>` : "";
+  box.innerHTML = `
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">
+      Buy&amp;Hold: ${sgn(bh.total_return, "%")} / Sharpe ${bh.sharpe.toFixed(2)} ·
+      ${data.bars.toLocaleString()} bars · 목적함수: ${data.objective}${hasOos ? " · OOS 70/30 검증" : ""}
+    </div>
+    <div style="overflow-x:auto">
+      <table class="stats-table" style="min-width:560px">
+        <thead><tr>
+          <th>#</th><th>조건 조합 (Entry)</th><th>IS Shp</th><th>IS Ret</th>
+          <th>MDD</th><th>#tr</th>${oosHd}<th></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div style="font-size:11px;color:var(--warn);margin-top:8px;line-height:1.5">
+      ⚠ 다수 조합을 탐색해 고른 결과라 과최적화 위험이 있습니다. ${hasOos ? "OOS(검증구간) 수치가 양호한 행을 우선하세요." : "OOS 검증을 켜서 일반화 여부를 확인하세요."}<br>
+      ${data.allow_short
+        ? "Short 허용: 청산 = 반대 신호(stop &amp; reverse). [적용] 시 청산 조건은 비워둡니다."
+        : "Long-only: 청산 = 진입의 반대(mirror) 조건. [적용] 시 청산란에 자동 입력됩니다."}
+    </div>
+  `;
+  box.style.display = "block";
+}
+
+const FLIP = {
+  above: "below", below: "above", up: "down", down: "up",
+  rising: "falling", falling: "rising", expanding: "contracting", contracting: "expanding",
+};
+
+function applyCombo(idx) {
+  const c = _optCombos[idx];
+  if (!c) return;
+  clearAll();
+  document.getElementById("allowShort").checked = c.allow_short;
+  document.getElementById("entry_tf_logic").value = "AND";
+  c.conds.forEach(([tf, t, d]) => addCond("entry", tf, t, d));
+  if (!c.allow_short) {
+    document.getElementById("exit_tf_logic").value = "AND";
+    c.conds.forEach(([tf, t, d]) => addCond("exit", tf, t, FLIP[d]));
+  }
+  document.getElementById("entryTfs").scrollIntoView({ behavior: "smooth", block: "center" });
 }
 </script>
 </body>

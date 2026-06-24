@@ -272,6 +272,49 @@ def lab_run():
     return jsonify(result)
 
 
+@app.route("/api/lab/optimize", methods=["POST"])
+def lab_optimize():
+    """Auto-search condition combinations for the best strategy."""
+    import strategy_lab as sl
+    from tsi_signal.data import (
+        FUTURES_BASE_URL,
+        FUTURES_KLINES_PATH,
+        SPOT_BASE_URL,
+        SPOT_KLINES_PATH,
+        fetch_klines_range,
+    )
+    from datetime import timezone as tz, timedelta
+
+    cfg = request.get_json(force=True) or {}
+    symbol = str(cfg.get("symbol", "BTCUSDT")).upper()
+    days   = max(1, int(cfg.get("days", 180)))
+    market = cfg.get("market", "futures")
+
+    if market == "futures":
+        base, path = FUTURES_BASE_URL, FUTURES_KLINES_PATH
+    else:
+        base, path = SPOT_BASE_URL, SPOT_KLINES_PATH
+
+    start_ms = int((datetime.datetime.now(tz.utc) - timedelta(days=days)).timestamp() * 1000)
+
+    try:
+        c15 = fetch_klines_range(symbol, "15m", start_ms, None, base_url=base, path=path)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"Data fetch failed: {exc}"}), 502
+
+    if len(c15) < 1500:
+        return jsonify({"ok": False,
+                        "error": f"Too few bars ({len(c15)}) to optimize. Try a longer window."}), 400
+
+    try:
+        result = sl.run_lab_optimize(c15, cfg)
+    except Exception as exc:
+        log.exception("Lab optimize failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+    return jsonify(result)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
