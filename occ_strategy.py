@@ -268,11 +268,12 @@ class OCCParams:
     tp_pct: float = 0.0               # take-profit %, 0 = off
     offset_sigma: float = 6.0         # LSMA offset / ALMA sigma
     offset_alma: float = 0.85         # ALMA offset
+    mode: str = "nonrepaint"          # nonrepaint | realtime | lookahead
 
 
 def build_series(c_base: List[Candle], p: OCCParams) -> Tuple[List[int], List[float], List[float]]:
     """Return (base_times, closeMA_alt, openMA_alt) — both forward-filled onto
-    the base grid from CLOSED alternate-resolution bars (non-repainting)."""
+    the base grid from CLOSED alternate-resolution bars (NON-REPAINTING)."""
     base_times = [c.open_time for c in c_base]
     base_step = (c_base[1].open_time - c_base[0].open_time) if len(c_base) > 1 else 1
     factor = p.mult if p.use_res else 1
@@ -285,6 +286,101 @@ def build_series(c_base: List[Candle], p: OCCParams) -> Tuple[List[int], List[fl
     close_alt = _ffill(base_times, alt, close_ma, base_step)
     open_alt = _ffill(base_times, alt, open_ma, base_step)
     return base_times, close_alt, open_alt
+
+
+def realtime_alt_series(c_base: List[Candle], p: OCCParams) -> Tuple[List[float], List[float]]:
+    """REPAINT-AWARE but look-ahead-free. At every base bar we recompute the
+    alternate-resolution MA using the CURRENTLY-FORMING higher-TF bar, exactly
+    as a live trader watching the repainting indicator would see it:
+
+      - the forming alt bar's close = the latest base close (updates each bar),
+      - its open = the alt bucket's first base open (fixed for the bucket).
+
+    So the close-MA wiggles within a bucket and can cross the open-MA back and
+    forth (the "repaint"); each such cross is a real, tradeable event because it
+    only uses data up to the current bar. This captures "entered on the
+    intermediate paint, adjusted when it repainted" — without any peeking.
+    """
+    n = len(c_base)
+    if n == 0:
+        return [], []
+    base_step = (c_base[1].open_time - c_base[0].open_time) if n > 1 else 1
+    factor = p.mult if p.use_res else 1
+    alt_step = base_step * factor
+    N = p.ma_len
+    t = p.ma_type
+    recursive = t in ("EMA", "DEMA", "TEMA", "SMMA", "SSMA")
+    composite = t in ("TMA", "HullMA")
+    W = 320 if recursive else (2 * N + 8 if composite else N + 2)  # tail; exact to float precision
+
+    done_close: List[float] = []   # closes of COMPLETED alt buckets
+    done_open: List[float] = []
+    done_vol: List[float] = []
+    close_rt = [0.0] * n
+    open_rt = [0.0] * n
+    cur_bucket: Optional[int] = None
+    bucket_open = 0.0
+    bucket_vol = 0.0
+
+    def ma_last(hist: List[float], vols: List[float], forming: float, fvol: float) -> float:
+        src = hist[-W:] + [forming]
+        vol = vols[-W:] + [fvol]
+        return moving_average(t, src, vol, N, p.offset_sigma, p.offset_alma)[-1]
+
+    for i, c in enumerate(c_base):
+        b = c.open_time // alt_step
+        if b != cur_bucket:
+            if cur_bucket is not None:                 # previous bucket closed at i-1
+                done_close.append(c_base[i - 1].close)
+                done_open.append(bucket_open)
+                done_vol.append(bucket_vol)
+            cur_bucket = b
+            bucket_open = c.open
+            bucket_vol = 0.0
+        bucket_vol += c.volume
+        close_rt[i] = ma_last(done_close, done_vol, c.close, bucket_vol)
+        open_rt[i] = ma_last(done_open, done_vol, bucket_open, bucket_vol)
+    return close_rt, open_rt
+
+
+def lookahead_alt_series(c_base: List[Candle], p: OCCParams) -> Tuple[List[float], List[float]]:
+    """TradingView-style REPAINTING (look-ahead ON): every base bar uses its own
+    (current) alt bucket's FINAL MA value — which is only known once that bucket
+    closes in the future. This is NOT achievable live; provided only so you can
+    measure how much of the apparent edge is look-ahead fiction."""
+    n = len(c_base)
+    if n == 0:
+        return [], []
+    base_step = (c_base[1].open_time - c_base[0].open_time) if n > 1 else 1
+    factor = p.mult if p.use_res else 1
+    alt_step = base_step * factor
+
+    alt = _resample(c_base, factor)
+    close_ma = moving_average(p.ma_type, [c.close for c in alt], [c.volume for c in alt],
+                              p.ma_len, p.offset_sigma, p.offset_alma)
+    open_ma = moving_average(p.ma_type, [c.open for c in alt], [c.volume for c in alt],
+                             p.ma_len, p.offset_sigma, p.offset_alma)
+    idx = {ac.open_time // alt_step: k for k, ac in enumerate(alt)}
+
+    cma = [0.0] * n
+    oma = [0.0] * n
+    last = -1
+    for i, c in enumerate(c_base):
+        k = idx.get(c.open_time // alt_step, last)   # forming trailing bucket -> carry
+        if k is not None and k >= 0:
+            cma[i], oma[i], last = close_ma[k], open_ma[k], k
+        else:
+            cma[i], oma[i] = c.close, c.open
+    return cma, oma
+
+
+def _occ_ma_arrays(c_base: List[Candle], p: OCCParams) -> Tuple[List[float], List[float]]:
+    if p.mode == "realtime":
+        return realtime_alt_series(c_base, p)
+    if p.mode == "lookahead":
+        return lookahead_alt_series(c_base, p)
+    _, cma, oma = build_series(c_base, p)            # nonrepaint (default)
+    return cma, oma
 
 
 # --------------------------------------------------------------------------- #
@@ -300,7 +396,7 @@ def backtest_occ(c_base: List[Candle], p: OCCParams, fee_rate: float = 0.0005,
     cl = [c.close for c in c_base]
     bar_ms = (c_base[1].open_time - c_base[0].open_time) if n > 1 else INTERVAL_MS["15m"]
 
-    _, close_ma, open_ma = build_series(c_base, p)
+    _, close_ma, open_ma = (None, *_occ_ma_arrays(c_base, p))
     cost = fee_rate + slip_rate
     if warmup is None:
         warmup = p.ma_len * max(1, p.mult) + 50
@@ -396,6 +492,7 @@ def run_occ_web(c_base: List[Candle], config: dict) -> dict:
         tp_pct=float(config.get("tp_pct", 0.0)),
         offset_sigma=float(config.get("offset_sigma", 6.0)),
         offset_alma=float(config.get("offset_alma", 0.85)),
+        mode=config.get("mode", "nonrepaint"),
     )
     fee = config.get("fee_bps", 5.0) / 10000.0
     slip = config.get("slip_bps", 1.0) / 10000.0
@@ -419,7 +516,7 @@ def run_occ_web(c_base: List[Candle], config: dict) -> dict:
             avg_loss=round(r.avg_loss * 100, 3),
         )
 
-    return dict(ok=True, bars=len(c_base), ma_type=p.ma_type,
+    return dict(ok=True, bars=len(c_base), ma_type=p.ma_type, mode=p.mode,
                 strategy=stats(res), buy_hold=stats(bh),
                 equity=res.equity[::step], bh_equity=bh.equity[::step],
                 times=[c.open_time for c in c_base][::step])
@@ -438,7 +535,7 @@ def _synth(n: int = 8000, seed: int = 7, step_ms: int = INTERVAL_MS["15m"]) -> L
         drift = max(-5e-4, min(5e-4, drift))
         price *= 1.0 + drift + random.gauss(0, 0.003)
         closes.append(price)
-    out, t0, prev = [], 1_700_000_000_000, closes[0]
+    out, t0, prev = [], 1_699_920_000_000, closes[0]   # 1d/4h/15m-aligned epoch
     for i, c in enumerate(closes):
         hi = max(prev, c) * (1 + abs(random.gauss(0, 0.001)))
         lo = min(prev, c) * (1 - abs(random.gauss(0, 0.001)))
@@ -466,6 +563,11 @@ def main(argv=None) -> int:
     ap.add_argument("--market", choices=["futures", "spot"], default="futures")
     ap.add_argument("--fee-bps", type=float, default=5.0)
     ap.add_argument("--slippage-bps", type=float, default=1.0)
+    ap.add_argument("--mode", default="nonrepaint", choices=["nonrepaint", "realtime", "lookahead"],
+                    help="nonrepaint=closed alt bars only; realtime=forming alt bar each base bar "
+                         "(repaint-aware, look-ahead-free); lookahead=TV-style repaint (inflated)")
+    ap.add_argument("--compare-modes", action="store_true",
+                    help="run all three modes on the same MA and compare")
     ap.add_argument("--compare-ma", action="store_true", help="rank every MA type on the same data")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
@@ -503,25 +605,33 @@ def main(argv=None) -> int:
     fee, slip = args.fee_bps / 10000.0, args.slippage_bps / 10000.0
     results = [buy_hold(c)]
 
-    if args.compare_ma:
-        rows = []
-        for mt in MA_TYPES:
-            p = OCCParams(ma_type=mt, ma_len=args.ma_len, mult=args.mult, use_res=not args.no_res,
-                          trade_type=args.trade_type, sl_pct=args.sl_pct, tp_pct=args.tp_pct,
-                          offset_sigma=args.offset_sigma, offset_alma=args.offset_alma)
-            rows.append(backtest_occ(c, p, fee, slip, name=mt))
+    def mkp(ma_type, mode):
+        return OCCParams(ma_type=ma_type, ma_len=args.ma_len, mult=args.mult, use_res=not args.no_res,
+                         trade_type=args.trade_type, sl_pct=args.sl_pct, tp_pct=args.tp_pct,
+                         offset_sigma=args.offset_sigma, offset_alma=args.offset_alma, mode=mode)
+
+    if args.compare_modes:
+        for mode in ("lookahead", "realtime", "nonrepaint"):
+            results.append(backtest_occ(c, mkp(args.ma_type, mode), fee, slip, name=f"{args.ma_type}/{mode}"))
+        tail = ("\nlookahead = TV-style repaint (uses each alt bar's FINAL value early = peeks "
+                "into the future → inflated, NOT achievable live).\nrealtime  = forming alt bar "
+                "re-evaluated every base bar (repaint-aware but look-ahead-free → achievable).\n"
+                "nonrepaint= closed alt bars only (laggy, conservative). Trust realtime as your "
+                "honest live expectation; the lookahead↔realtime gap is the repaint fiction.")
+    elif args.compare_ma:
+        rows = [backtest_occ(c, mkp(mt, args.mode), fee, slip, name=mt) for mt in MA_TYPES]
         rows.sort(key=lambda r: r.sharpe, reverse=True)
         results += rows
+        tail = (f"\nMode={args.mode}. RET=total return, MDD=max drawdown, PF=profit factor. "
+                "(--compare-modes shows the repaint spread for one MA.)")
     else:
-        p = OCCParams(ma_type=args.ma_type, ma_len=args.ma_len, mult=args.mult, use_res=not args.no_res,
-                      trade_type=args.trade_type, sl_pct=args.sl_pct, tp_pct=args.tp_pct,
-                      offset_sigma=args.offset_sigma, offset_alma=args.offset_alma)
-        results.append(backtest_occ(c, p, fee, slip, name=f"{args.ma_type}{args.ma_len}"))
+        results.append(backtest_occ(c, mkp(args.ma_type, args.mode), fee, slip,
+                                    name=f"{args.ma_type}{args.ma_len}/{args.mode}"))
+        tail = (f"\nMode={args.mode}. realtime = repaint-aware but look-ahead-free (re-evaluated "
+                "each base bar). Compare vs Buy&Hold; pick by Sharpe + shallow MDD.")
 
     print(format_table(results))
-    print("\nNon-repainting: higher-TF MA uses CLOSED bars only; entries fill next bar.")
-    print("RET=total return, MDD=max drawdown, PF=profit factor. Compare vs Buy&Hold,")
-    print("pick by Sharpe + shallow MDD. (--compare-ma ranks all MA types.)")
+    print(tail)
     return 0
 
 

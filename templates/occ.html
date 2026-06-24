@@ -99,13 +99,22 @@
         <div class="param-group">
           <label>Base TF (차트 봉)</label>
           <select id="interval">
-            <option>5m</option><option>15m</option><option>30m</option>
+            <option>5m</option><option selected>15m</option><option>30m</option>
             <option>1h</option><option>2h</option><option>4h</option>
           </select>
         </div>
         <div class="param-group">
           <label>Alt 배수 (×Base)</label>
-          <input type="number" id="mult" value="3" min="1" max="12">
+          <input type="number" id="mult" value="3" min="1" max="48" oninput="updateAltHint()">
+          <span id="altHint" style="font-size:10px;color:var(--muted)"></span>
+        </div>
+        <div class="param-group">
+          <label>Repaint 모드</label>
+          <select id="mode">
+            <option value="realtime">realtime (정직·repaint반영)</option>
+            <option value="nonrepaint">nonrepaint (지연·보수적)</option>
+            <option value="lookahead">lookahead (TV식·부풀려짐)</option>
+          </select>
         </div>
         <div class="param-group">
           <label>MA 종류</label>
@@ -163,9 +172,11 @@
       </details>
 
       <div class="note">
-        <b>비-repaint</b>: 상위 TF(=Base×배수) MA를 <b>닫힌 봉만</b>으로 계산해 forward-fill,
-        진입은 다음 봉 시가 체결 → 과거 신호가 사후에 바뀌지 않습니다.
-        원본 Pine의 <code>lookahead_on</code> repaint를 제거했습니다.
+        <b>realtime</b>: 형성 중인 상위 봉을 <b>매 Base 봉마다</b> 다시 계산 → 봉 안에서 신호가
+        뒤집히는 repaint를 그대로 반영(진입했다 조정). 미래 정보는 안 쓰므로 <b>실거래 가능</b>.
+        예: Base=15m, 배수=16 → 4h 상위봉을 15분마다 갱신.<br>
+        <b>nonrepaint</b>: 닫힌 상위 봉만 사용(지연·보수적).
+        <b>lookahead</b>: TV식 — 상위봉 최종값을 미리 사용(미래 정보 → 부풀려짐, 실거래 불가, 비교용).
       </div>
     </div>
   </div>
@@ -197,6 +208,17 @@
 <script>
 "use strict";
 
+const _IV_MIN = { "5m":5, "15m":15, "30m":30, "1h":60, "2h":120, "4h":240 };
+function updateAltHint() {
+  const iv = document.getElementById("interval").value;
+  const mult = parseInt(document.getElementById("mult").value) || 1;
+  const mins = (_IV_MIN[iv] || 15) * mult;
+  const txt = mins % 60 === 0 ? (mins/60) + "h" : mins + "m";
+  document.getElementById("altHint").textContent = mult > 1 ? "→ 상위 " + txt : "→ 단일 TF";
+}
+document.getElementById("interval").addEventListener("change", updateAltHint);
+updateAltHint();
+
 async function runBacktest() {
   const btn = document.getElementById("runBtn");
   btn.disabled = true; btn.textContent = "⏳ 실행 중…";
@@ -212,6 +234,7 @@ async function runBacktest() {
     ma_type:  document.getElementById("ma_type").value,
     ma_len:   parseInt(document.getElementById("ma_len").value) || 8,
     trade_type: document.getElementById("trade_type").value,
+    mode:     document.getElementById("mode").value,
     days:     parseInt(document.getElementById("days").value) || 180,
     sl_pct:   parseFloat(document.getElementById("sl_pct").value) || 0,
     tp_pct:   parseFloat(document.getElementById("tp_pct").value) || 0,
@@ -258,6 +281,7 @@ function showResults(data, cfg) {
     <span class="badge ${vsBh>=0?"good":"bad"}">vs B&H ${vsBh>=0?"+":""}${vsBh.toFixed(1)}%</span>
     <span class="badge plain">${s.n_trades}건</span>
     <span class="badge plain">${data.ma_type} · ${cfg.interval}×${cfg.mult}</span>
+    <span class="badge ${data.mode==="lookahead"?"bad":(data.mode==="realtime"?"good":"plain")}">${data.mode}</span>
     <span class="badge plain">${data.bars.toLocaleString()} bars</span>`;
 
   const pf = s.profit_factor !== null ? s.profit_factor.toFixed(2) : "∞";
