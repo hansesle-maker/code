@@ -381,6 +381,7 @@ const COND_TYPES = {
   fresh_cross:   "신호선 교차 (fresh)",
   gap_change:    "TSI-신호 Gap",
   tsi_slope:     "TSI 기울기",
+  sig_slope:     "신호선 기울기",
 };
 
 const COND_DIRS = {
@@ -389,7 +390,8 @@ const COND_DIRS = {
   tsi_vs_signal: [["above","TSI > 신호 (bullish)"],["below","TSI < 신호 (bearish)"]],
   fresh_cross:   [["up","↑ 신호 상향 교차 (bullish)"],["down","↓ 신호 하향 교차 (bearish)"]],
   gap_change:    [["expanding","Gap 확대 ↗ (bullish)"],["contracting","Gap 축소 ↘"]],
-  tsi_slope:     [["rising","기울기 ↑ (상승)"],["falling","기울기 ↓ (하락)"]],
+  tsi_slope:     [["rising","TSI 기울기 ↑ (상승)"],["falling","TSI 기울기 ↓ (하락)"]],
+  sig_slope:     [["rising","신호선 기울기 ↑ (상승)"],["falling","신호선 기울기 ↓ (하락)"]],
 };
 
 const TFS = ["4h", "1h", "15m"];

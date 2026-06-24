@@ -447,6 +447,7 @@ _FLIP_DIRS: Dict[str, Dict[str, str]] = {
     "fresh_cross":   {"up": "down", "down": "up"},
     "gap_change":    {"expanding": "contracting", "contracting": "expanding"},
     "tsi_slope":     {"rising": "falling", "falling": "rising"},
+    "sig_slope":     {"rising": "falling", "falling": "rising"},
 }
 
 
@@ -493,6 +494,10 @@ def _eval_cond(ind: Indicators, i: int, ctype: str, direction: str, tf: str) -> 
         if i == 0:
             return False
         return tsi[i] > tsi[i - 1] if direction == "rising" else tsi[i] < tsi[i - 1]
+    if ctype == "sig_slope":
+        if i == 0:
+            return False
+        return sig[i] > sig[i - 1] if direction == "rising" else sig[i] < sig[i - 1]
     return False
 
 
