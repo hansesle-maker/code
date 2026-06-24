@@ -442,6 +442,7 @@ def buy_hold(ind: Indicators) -> Result:
 
 _FLIP_DIRS: Dict[str, Dict[str, str]] = {
     "tsi_vs_zero":   {"above": "below", "below": "above"},
+    "sig_vs_zero":   {"above": "below", "below": "above"},
     "zero_cross":    {"up": "down", "down": "up"},
     "tsi_vs_signal": {"above": "below", "below": "above"},
     "fresh_cross":   {"up": "down", "down": "up"},
@@ -470,6 +471,8 @@ def _eval_cond(ind: Indicators, i: int, ctype: str, direction: str, tf: str) -> 
     tsi, sig = _get_tsi_sig(ind, tf)
     if ctype == "tsi_vs_zero":
         return tsi[i] > 0 if direction == "above" else tsi[i] < 0
+    if ctype == "sig_vs_zero":
+        return sig[i] > 0 if direction == "above" else sig[i] < 0
     if ctype == "zero_cross":
         if i == 0:
             return False

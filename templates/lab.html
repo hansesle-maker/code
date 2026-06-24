@@ -376,6 +376,7 @@
 // ─── Condition metadata ─────────────────────────────────────────────────────
 const COND_TYPES = {
   tsi_vs_zero:   "TSI vs 0선",
+  sig_vs_zero:   "신호선 vs 0선",
   zero_cross:    "TSI 0선 교차",
   tsi_vs_signal: "TSI vs 신호선",
   fresh_cross:   "신호선 교차 (fresh)",
@@ -386,6 +387,7 @@ const COND_TYPES = {
 
 const COND_DIRS = {
   tsi_vs_zero:   [["above","TSI > 0 (bullish)"],["below","TSI < 0 (bearish)"]],
+  sig_vs_zero:   [["above","신호선 > 0 (bullish)"],["below","신호선 < 0 (bearish)"]],
   zero_cross:    [["up","↑ 0선 상향 교차 (bullish)"],["down","↓ 0선 하향 교차 (bearish)"]],
   tsi_vs_signal: [["above","TSI > 신호 (bullish)"],["below","TSI < 신호 (bearish)"]],
   fresh_cross:   [["up","↑ 신호 상향 교차 (bullish)"],["down","↓ 신호 하향 교차 (bearish)"]],
