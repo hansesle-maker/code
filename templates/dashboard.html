@@ -222,6 +222,38 @@
       background: var(--bear); color: #fff;
       animation: cpulse 1.4s ease-in-out infinite;
     }
+
+    /* ── 내 포지션 (진입 신호 자동 추적) ─────────────────────── */
+    .pos-wrap { padding: 10px 10px 0; }
+    .pos-title {
+      font-size: 12px; font-weight: 700; color: var(--accent);
+      margin-bottom: 6px; display: flex; align-items: center; gap: 6px;
+    }
+    .pos-title .muted { color: var(--muted); font-weight: 400; }
+    .pos-list { display: flex; flex-direction: column; gap: 6px; }
+    .pos-row {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      align-items: center; gap: 10px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 8px 11px;
+    }
+    .pos-row.long  { border-left: 3px solid var(--bull); }
+    .pos-row.short { border-left: 3px solid var(--bear); }
+    .pos-sym { font-weight: 700; font-size: 13px; }
+    .pos-side {
+      font-size: 9px; font-weight: 800; padding: 1px 5px;
+      border-radius: 3px; margin-left: 6px;
+    }
+    .pos-side.long  { background: var(--bull-dim); color: var(--bull); }
+    .pos-side.short { background: var(--bear-dim); color: var(--bear); }
+    .pos-entry { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .pos-pnl {
+      font-size: 14px; font-weight: 700; text-align: right;
+      font-variant-numeric: tabular-nums; min-width: 60px;
+    }
+    .pos-pnl.up   { color: var(--bull); }
+    .pos-pnl.down { color: var(--bear); }
   </style>
 </head>
 <body>
@@ -302,6 +334,25 @@
 
 {% if error %}
 <div class="error-bar">⚠️ 스캔 오류: {{ error }}</div>
+{% endif %}
+
+<!-- ── 내 포지션 (진입 신호 자동 추적) ──────────────────────────────── -->
+{% if positions %}
+<div class="pos-wrap">
+  <div class="pos-title">📌 추적 중인 포지션 <span class="muted">({{ positions|length }})</span></div>
+  <div class="pos-list">
+    {% for p in positions %}
+    <div class="pos-row {{ p.side }}">
+      <div>
+        <span class="pos-sym">{{ p.symbol[:-4] if p.symbol.endswith('USDT') else p.symbol }}</span>
+        <span class="pos-side {{ p.side }}">{{ 'LONG' if p.side == 'long' else 'SHORT' }}</span>
+      </div>
+      <span class="pos-entry">{{ p.entry_str }} → {{ p.price_str }}</span>
+      <span class="pos-pnl {{ 'up' if p.pnl_pct >= 0 else 'down' }}">{{ '%+.1f'|format(p.pnl_pct) }}%</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
 {% endif %}
 
 <!-- ── Cards ──────────────────────────────────────────────────────── -->

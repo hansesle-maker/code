@@ -45,6 +45,7 @@ class SymbolScan:
     symbol: str
     ts: int                             # epoch ms of latest closed bar
     tf: Dict[str, Optional[TFState]]    # "4h" / "1h" / "15m" -> TFState | None
+    last_price: float = 0.0             # latest closed 15m price (entry/exit ref)
     error: Optional[str] = None
 
     @property
@@ -137,14 +138,19 @@ def scan_symbol(symbol: str, session=None) -> SymbolScan:
     http = session or _req
     tf_states: Dict[str, Optional[TFState]] = {}
     latest_ts = 0
+    last_price = 0.0
     for tf in TIMEFRAMES:
         candles = _fetch_with_retry(symbol, tf, http)
         if candles:
             latest_ts = max(latest_ts, candles[-1].open_time)
-            tf_states[tf] = _state_from_closes([c.close for c in candles])
+            closes = [c.close for c in candles]
+            if tf == "15m":
+                last_price = closes[-1]   # entry/exit reference price
+            tf_states[tf] = _state_from_closes(closes)
         else:
             tf_states[tf] = None
-    return SymbolScan(symbol=symbol, ts=latest_ts, tf=tf_states)
+    return SymbolScan(symbol=symbol, ts=latest_ts, tf=tf_states,
+                      last_price=last_price)
 
 
 def scan_all(
@@ -205,5 +211,6 @@ def symbolscan_to_dict(r: SymbolScan) -> dict:
         "symbol": r.symbol,
         "bull_score": r.bull_score,
         "bear_score": r.bear_score,
+        "last_price": r.last_price,
         "tf": tfs,
     }

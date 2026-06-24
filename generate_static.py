@@ -30,6 +30,14 @@ from tsi_signal.alerts import (
     load_prev_map,
     send_telegram,
 )
+from tsi_signal.positions import (
+    DEFAULT_DISASTER_PCT,
+    evaluate_exits,
+    load_state,
+    open_positions_view,
+    register_entries,
+    save_state,
+)
 from tsi_signal.scanner import (
     KLINE_LIMIT,
     TIMEFRAMES,
@@ -47,10 +55,11 @@ def _fmt_tsi(v: float) -> str:
 
 
 def render_site(results: List[SymbolScan], scanned_at: datetime.datetime,
-                out_dir: str) -> None:
+                out_dir: str, positions: list | None = None) -> None:
     """Write index.html + data.json + .nojekyll into ``out_dir``."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    positions = positions or []
 
     env = Environment(
         loader=FileSystemLoader(str(TEMPLATE_DIR)),
@@ -63,12 +72,14 @@ def render_site(results: List[SymbolScan], scanned_at: datetime.datetime,
         scanning=False,
         error=None,
         static_mode=True,
+        positions=positions,
     )
     (out / "index.html").write_text(html, encoding="utf-8")
 
     payload = {
         "scanned_at": scanned_at.isoformat() + "Z",
         "count": len(results),
+        "positions": positions,
         "symbols": [symbolscan_to_dict(r) for r in results],
     }
     (out / "data.json").write_text(
@@ -78,10 +89,31 @@ def render_site(results: List[SymbolScan], scanned_at: datetime.datetime,
     (out / ".nojekyll").write_text("", encoding="utf-8")
 
 
-def run_alerts(prev_path, results, scanned_at, enabled: bool = True) -> int:
-    """Diff against the previous scan and push Telegram alerts. Returns count."""
+def run_alerts(prev_path, positions_path, results, scanned_at,
+               disaster_pct, enabled: bool = True) -> dict:
+    """Diff vs the previous scan, run the position lifecycle, push Telegram.
+
+    Returns the (mutated) position state so the caller can render open
+    positions into the site.
+    """
+    # Market / entry alerts — need the previous scan to diff state changes.
     prev_map = load_prev_map(prev_path)
     groups = diff_alerts(prev_map, results)
+
+    # Stateful position lifecycle: evaluate exits on existing positions first,
+    # then auto-register fresh entries (so a brand-new entry isn't also exited
+    # in the same pass).
+    state = load_state(positions_path)
+    exit_groups = evaluate_exits(state, results, scanned_at, disaster_pct)
+    opened = register_entries(state, results, scanned_at)
+    if positions_path:
+        save_state(positions_path, state)
+    groups.update(exit_groups)  # merge exit categories (distinct keys)
+
+    if opened:
+        print("Registered new position(s): "
+              + ", ".join(f"{p.symbol} {p.side}" for p in opened))
+
     total = sum(len(v) for v in groups.values())
     messages = build_messages(groups, scanned_at)
 
@@ -90,19 +122,17 @@ def run_alerts(prev_path, results, scanned_at, enabled: bool = True) -> int:
 
     if not messages:
         print("No notable changes to alert.")
-        return 0
-    if not (token and chat):
+    elif not (token and chat):
         print(f"{total} notable changes, but TELEGRAM_BOT_TOKEN/CHAT_ID not "
               "set — skipping push.")
-        return total
-    if not enabled:
+    elif not enabled:
         print(f"{total} notable changes (Telegram disabled via flag).")
-        return total
+    else:
+        for msg in messages:
+            ok = send_telegram(token, chat, msg)
+            print("Telegram:", "sent" if ok else "FAILED")
 
-    for msg in messages:
-        ok = send_telegram(token, chat, msg)
-        print("Telegram:", "sent" if ok else "FAILED")
-    return total
+    return state
 
 
 def main(argv=None) -> int:
@@ -110,6 +140,11 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default="public", help="output directory")
     ap.add_argument("--prev", default=None,
                     help="previous data.json to diff for alerts")
+    ap.add_argument("--positions", default="positions.json",
+                    help="position state file (auto-tracks entries/exits)")
+    ap.add_argument("--disaster-pct", type=float, default=DEFAULT_DISASTER_PCT,
+                    help="loose disaster-stop distance from entry, e.g. 0.06 "
+                         "= 6%% (0 disables it)")
     ap.add_argument("--workers", type=int, default=6,
                     help="concurrent fetch workers (default 6 keeps weight under Binance 2400/min limit)")
     ap.add_argument("--limit", type=int, default=0,
@@ -146,9 +181,13 @@ def main(argv=None) -> int:
               file=sys.stderr)
         print("Try --workers 3 or wait a minute and re-run.", file=sys.stderr)
 
-    run_alerts(args.prev, results, scanned_at, enabled=not args.no_telegram)
+    state = run_alerts(args.prev, args.positions, results, scanned_at,
+                       args.disaster_pct, enabled=not args.no_telegram)
+    positions_view = open_positions_view(state, results)
+    if positions_view:
+        print(f"Tracking {len(positions_view)} open position(s).")
 
-    render_site(results, scanned_at, args.out)
+    render_site(results, scanned_at, args.out, positions_view)
     print(f"Wrote {args.out}/index.html and {args.out}/data.json.")
     return 0
 

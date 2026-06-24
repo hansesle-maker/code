@@ -14,12 +14,22 @@ from __future__ import annotations
 import argparse
 import datetime
 import logging
+import os
 import threading
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from flask import Flask, jsonify, render_template
 
+from tsi_signal.alerts import build_messages, diff_alerts, send_telegram
+from tsi_signal.positions import (
+    DEFAULT_DISASTER_PCT,
+    evaluate_exits,
+    load_state,
+    open_positions_view,
+    register_entries,
+    save_state,
+)
 from tsi_signal.scanner import (
     SymbolScan,
     fetch_all_futures_symbols,
@@ -29,6 +39,10 @@ from tsi_signal.scanner import (
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
+
+# Position tracking config (overridable via env so systemd can tune it).
+POSITIONS_PATH = os.environ.get("TSI_POSITIONS", "positions.json")
+DISASTER_PCT = float(os.environ.get("TSI_DISASTER_PCT", DEFAULT_DISASTER_PCT))
 
 app = Flask(__name__)
 
@@ -41,7 +55,11 @@ _cache: dict = {
     "scanned_at": None,  # datetime UTC
     "scanning": False,
     "error": None,
+    "positions": [],     # open-position view (list of dicts)
 }
+# Previous scan's serialized symbols, kept in memory to diff market/entry
+# alerts between runs (positions persist to disk separately).
+_prev_symbols: Dict[str, dict] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +75,43 @@ def _secs_to_next_15m(buffer: int = 8) -> float:
     return remain if remain > 0 else remain + 900
 
 
+def _process_signals(results: List[SymbolScan],
+                     scanned_at: datetime.datetime) -> list:
+    """Diff market/entry alerts, run the position lifecycle, push Telegram.
+
+    Returns the open-position view for the dashboard. Position state persists
+    to ``POSITIONS_PATH`` so it survives server restarts.
+    """
+    global _prev_symbols
+
+    groups = diff_alerts(_prev_symbols, results)
+
+    state = load_state(POSITIONS_PATH)
+    exit_groups = evaluate_exits(state, results, scanned_at, DISASTER_PCT)
+    opened = register_entries(state, results, scanned_at)
+    save_state(POSITIONS_PATH, state)
+    groups.update(exit_groups)
+
+    if opened:
+        log.info("Registered %d new position(s): %s", len(opened),
+                 ", ".join(f"{p.symbol} {p.side}" for p in opened))
+
+    messages = build_messages(groups, scanned_at)
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat = os.environ.get("TELEGRAM_CHAT_ID")
+    if messages and token and chat:
+        for msg in messages:
+            send_telegram(token, chat, msg)
+        log.info("Sent %d Telegram alert message(s).", len(messages))
+    elif messages:
+        log.info("%d alert block(s) ready but TELEGRAM_BOT_TOKEN/CHAT_ID unset.",
+                 sum(1 for v in groups.values() if v))
+
+    # Snapshot this scan as the baseline for the next diff.
+    _prev_symbols = {r.symbol: symbolscan_to_dict(r) for r in results}
+    return open_positions_view(state, results)
+
+
 def do_scan() -> None:
     """Fetch all symbols and compute TSI states; update the shared cache."""
     with _lock:
@@ -69,10 +124,14 @@ def do_scan() -> None:
         symbols = fetch_all_futures_symbols()
         log.info("Scanning %d symbols × 3 timeframes …", len(symbols))
         results = scan_all(symbols)
+        scanned_at = datetime.datetime.utcnow()
+        positions_view = _process_signals(results, scanned_at)
         with _lock:
             _cache["results"] = results
-            _cache["scanned_at"] = datetime.datetime.utcnow()
-        log.info("Scan complete — %d symbols", len(results))
+            _cache["scanned_at"] = scanned_at
+            _cache["positions"] = positions_view
+        log.info("Scan complete — %d symbols, %d open position(s)",
+                 len(results), len(positions_view))
     except Exception as exc:
         log.error("Scan failed: %s", exc)
         with _lock:
@@ -111,6 +170,7 @@ def dashboard():
         scanned_at: Optional[datetime.datetime] = _cache["scanned_at"]
         scanning: bool = _cache["scanning"]
         error: Optional[str] = _cache["error"]
+        positions: list = list(_cache["positions"])
     return render_template(
         "dashboard.html",
         results=results,
@@ -118,6 +178,7 @@ def dashboard():
         scanning=scanning,
         error=error,
         static_mode=False,
+        positions=positions,
     )
 
 
@@ -126,11 +187,25 @@ def api_data():
     with _lock:
         results = list(_cache["results"])
         scanned_at = _cache["scanned_at"]
+        positions = list(_cache["positions"])
     payload = [symbolscan_to_dict(r) for r in results]
     return jsonify({
         "scanned_at": scanned_at.isoformat() + "Z" if scanned_at else None,
         "count": len(payload),
+        "positions": positions,
         "symbols": payload,
+    })
+
+
+@app.route("/api/positions")
+def api_positions():
+    with _lock:
+        positions = list(_cache["positions"])
+        scanned_at = _cache["scanned_at"]
+    return jsonify({
+        "scanned_at": scanned_at.isoformat() + "Z" if scanned_at else None,
+        "count": len(positions),
+        "positions": positions,
     })
 
 

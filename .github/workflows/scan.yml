@@ -28,6 +28,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Carry tracked positions across runs WITHOUT publishing them to Pages
+      # (positions.json holds your entry prices — keep it out of the public
+      # site). Rolling cache: unique key each run, restore-keys grabs the
+      # newest previous one. The Flask server keeps this file on disk instead.
+      - name: Restore tracked positions
+        uses: actions/cache@v4
+        with:
+          path: positions.json
+          key: tsi-positions-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            tsi-positions-
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

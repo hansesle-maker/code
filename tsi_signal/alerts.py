@@ -23,7 +23,12 @@ from typing import Dict, List, Optional
 from .scanner import SymbolScan
 
 # Alert category -> emoji-prefixed title (ordering controls message layout).
-# High-priority (fresh cross on already-aligned symbols) listed first.
+# EXIT signals for OUR tracked positions come first (most actionable), then
+# entry triggers, then the wider market-state changes.
+EXIT_DISASTER = "🚨 재난 손절 (급락 안전장치)"
+EXIT_STOP = "❌ 손절 (진입 근거 무효)"
+EXIT_CLOSE = "🔴 청산 (1h 추세 꺾임)"
+EXIT_WARN = "⚠️ 익절 경고 (15m 모멘텀 둔화)"
 CROSS_15M_BULL = "🔥 3/3 강세 + 15m signal 상향 교차 (진입 타이밍)"
 CROSS_15M_BEAR = "🔥 3/3 약세 + 15m signal 하향 교차 (진입 타이밍)"
 BULL3 = "🟢 3/3 강세 정렬 (신규)"
@@ -33,7 +38,14 @@ SIG_DN = "🔻 4h TSI가 signal 하향 이탈"
 ZERO_UP = "📈 4h TSI가 0선 상향 돌파"
 ZERO_DN = "📉 4h TSI가 0선 하향 이탈"
 
-_CATEGORIES = (CROSS_15M_BULL, CROSS_15M_BEAR, BULL3, BEAR3, SIG_UP, SIG_DN, ZERO_UP, ZERO_DN)
+# EXIT categories grouped for reuse by the position tracker.
+EXIT_CATEGORIES = (EXIT_DISASTER, EXIT_STOP, EXIT_CLOSE, EXIT_WARN)
+
+_CATEGORIES = (
+    EXIT_DISASTER, EXIT_STOP, EXIT_CLOSE, EXIT_WARN,
+    CROSS_15M_BULL, CROSS_15M_BEAR, BULL3, BEAR3,
+    SIG_UP, SIG_DN, ZERO_UP, ZERO_DN,
+)
 
 
 def load_prev_map(path: Optional[str]) -> Dict[str, dict]:
