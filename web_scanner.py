@@ -341,9 +341,32 @@ def occ_run():
     symbol = str(cfg.get("symbol", "BTCUSDT")).upper()
     days   = max(1, int(cfg.get("days", 180)))
     market = cfg.get("market", "futures")
-    interval = cfg.get("interval", "15m")
+
+    # Preferred inputs: strategy TF (alt) + refresh period -> base=refresh, mult=alt/refresh.
+    alt_tf = cfg.get("alt")
+    refresh = cfg.get("refresh")
+    if alt_tf and refresh:
+        if alt_tf not in occ.INTERVAL_MS or refresh not in occ.INTERVAL_MS:
+            return jsonify({"ok": False, "error": "Unsupported alt/refresh timeframe"}), 400
+        alt_ms, ref_ms = occ.INTERVAL_MS[alt_tf], occ.INTERVAL_MS[refresh]
+        if alt_ms < ref_ms or alt_ms % ref_ms != 0:
+            return jsonify({"ok": False,
+                            "error": f"전략 TF({alt_tf})는 반영 주기({refresh})의 정수배여야 합니다."}), 400
+        interval = refresh
+        cfg["interval"] = interval
+        cfg["mult"] = alt_ms // ref_ms
+        cfg["use_res"] = cfg["mult"] > 1
+    else:
+        interval = cfg.get("interval", "15m")
     if interval not in occ.INTERVAL_MS:
         return jsonify({"ok": False, "error": f"Unsupported interval: {interval}"}), 400
+
+    # Guard against pathologically large fetches (fine refresh × long history).
+    est_bars = days * 86_400_000 / occ.INTERVAL_MS[interval]
+    if est_bars > 70_000:
+        return jsonify({"ok": False,
+                        "error": f"{interval} × {days}일 ≈ {est_bars:,.0f}봉으로 너무 큽니다. "
+                                 "기간을 줄이거나 반영 주기를 늘리세요."}), 400
 
     if market == "futures":
         base, path = FUTURES_BASE_URL, FUTURES_KLINES_PATH

@@ -549,6 +549,10 @@ def main(argv=None) -> int:
     ap.add_argument("--symbol", default="BTCUSDT")
     ap.add_argument("--interval", default="15m", choices=list(INTERVAL_MS), help="base chart timeframe")
     ap.add_argument("--mult", type=int, default=3, help="alternate-resolution multiplier (×base)")
+    ap.add_argument("--alt", choices=list(INTERVAL_MS),
+                    help="strategy/alt resolution; with --refresh, derives --interval/--mult")
+    ap.add_argument("--refresh", choices=list(INTERVAL_MS),
+                    help="realtime sampling period (base TF); pair with --alt")
     ap.add_argument("--no-res", action="store_true", help="disable the alternate resolution")
     ap.add_argument("--ma-type", default="SMMA", choices=MA_TYPES)
     ap.add_argument("--ma-len", type=int, default=8)
@@ -571,6 +575,13 @@ def main(argv=None) -> int:
     ap.add_argument("--compare-ma", action="store_true", help="rank every MA type on the same data")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
+
+    # Strategy-TF + refresh-period mode: derive base interval and multiplier.
+    if args.alt and args.refresh:
+        alt_ms, ref_ms = INTERVAL_MS[args.alt], INTERVAL_MS[args.refresh]
+        if alt_ms < ref_ms or alt_ms % ref_ms != 0:
+            ap.error(f"--alt {args.alt} must be a whole multiple of --refresh {args.refresh}")
+        args.interval, args.mult = args.refresh, alt_ms // ref_ms
 
     if args.selftest:
         print("# SELF-TEST on synthetic data (no network)\n")

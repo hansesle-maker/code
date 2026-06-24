@@ -97,15 +97,17 @@
           <input type="text" id="symbol" value="BTCUSDT">
         </div>
         <div class="param-group">
-          <label>Base TF (차트 봉)</label>
-          <select id="interval">
-            <option>5m</option><option selected>15m</option><option>30m</option>
-            <option>1h</option><option>2h</option><option>4h</option>
+          <label>전략 TF (상위/alt)</label>
+          <select id="alt" onchange="updateAltHint()">
+            <option>15m</option><option>30m</option><option>1h</option>
+            <option>2h</option><option selected>4h</option><option>6h</option><option>12h</option>
           </select>
         </div>
         <div class="param-group">
-          <label>Alt 배수 (×Base)</label>
-          <input type="number" id="mult" value="3" min="1" max="48" oninput="updateAltHint()">
+          <label>반영 주기 (refresh)</label>
+          <select id="refresh" onchange="updateAltHint()">
+            <option>5m</option><option selected>15m</option><option>30m</option><option>1h</option>
+          </select>
           <span id="altHint" style="font-size:10px;color:var(--muted)"></span>
         </div>
         <div class="param-group">
@@ -172,9 +174,9 @@
       </details>
 
       <div class="note">
-        <b>realtime</b>: 형성 중인 상위 봉을 <b>매 Base 봉마다</b> 다시 계산 → 봉 안에서 신호가
-        뒤집히는 repaint를 그대로 반영(진입했다 조정). 미래 정보는 안 쓰므로 <b>실거래 가능</b>.
-        예: Base=15m, 배수=16 → 4h 상위봉을 15분마다 갱신.<br>
+        <b>realtime</b>: 형성 중인 <b>전략 TF</b> 봉을 <b>반영 주기마다</b> 다시 계산 → 봉 안에서
+        신호가 뒤집히는 repaint를 그대로 반영(진입했다 조정). 미래 정보는 안 쓰므로 <b>실거래 가능</b>.
+        예: 전략 4h + 반영 15m → 4h봉을 15분마다 갱신.<br>
         <b>nonrepaint</b>: 닫힌 상위 봉만 사용(지연·보수적).
         <b>lookahead</b>: TV식 — 상위봉 최종값을 미리 사용(미래 정보 → 부풀려짐, 실거래 불가, 비교용).
       </div>
@@ -208,15 +210,19 @@
 <script>
 "use strict";
 
-const _IV_MIN = { "5m":5, "15m":15, "30m":30, "1h":60, "2h":120, "4h":240 };
+const _IV_MIN = { "5m":5, "15m":15, "30m":30, "1h":60, "2h":120, "4h":240, "6h":360, "12h":720 };
 function updateAltHint() {
-  const iv = document.getElementById("interval").value;
-  const mult = parseInt(document.getElementById("mult").value) || 1;
-  const mins = (_IV_MIN[iv] || 15) * mult;
-  const txt = mins % 60 === 0 ? (mins/60) + "h" : mins + "m";
-  document.getElementById("altHint").textContent = mult > 1 ? "→ 상위 " + txt : "→ 단일 TF";
+  const altM = _IV_MIN[document.getElementById("alt").value] || 240;
+  const refM = _IV_MIN[document.getElementById("refresh").value] || 15;
+  const el = document.getElementById("altHint");
+  if (altM < refM || altM % refM !== 0) {
+    el.textContent = "⚠ 전략 TF는 반영 주기의 정수배여야 함";
+    el.style.color = "var(--bear)";
+  } else {
+    el.textContent = `= ${altM/refM}배 · ${document.getElementById("refresh").value}마다 갱신`;
+    el.style.color = "var(--muted)";
+  }
 }
-document.getElementById("interval").addEventListener("change", updateAltHint);
 updateAltHint();
 
 async function runBacktest() {
@@ -228,9 +234,8 @@ async function runBacktest() {
 
   const cfg = {
     symbol:   document.getElementById("symbol").value.trim().toUpperCase() || "BTCUSDT",
-    interval: document.getElementById("interval").value,
-    mult:     parseInt(document.getElementById("mult").value) || 3,
-    use_res:  (parseInt(document.getElementById("mult").value) || 3) > 1,
+    alt:      document.getElementById("alt").value,
+    refresh:  document.getElementById("refresh").value,
     ma_type:  document.getElementById("ma_type").value,
     ma_len:   parseInt(document.getElementById("ma_len").value) || 8,
     trade_type: document.getElementById("trade_type").value,
@@ -280,7 +285,7 @@ function showResults(data, cfg) {
     <span class="badge ${mddClass}">MDD ${s.max_drawdown.toFixed(1)}%</span>
     <span class="badge ${vsBh>=0?"good":"bad"}">vs B&H ${vsBh>=0?"+":""}${vsBh.toFixed(1)}%</span>
     <span class="badge plain">${s.n_trades}건</span>
-    <span class="badge plain">${data.ma_type} · ${cfg.interval}×${cfg.mult}</span>
+    <span class="badge plain">${data.ma_type} · ${cfg.alt}÷${cfg.refresh}</span>
     <span class="badge ${data.mode==="lookahead"?"bad":(data.mode==="realtime"?"good":"plain")}">${data.mode}</span>
     <span class="badge plain">${data.bars.toLocaleString()} bars</span>`;
 
