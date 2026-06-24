@@ -269,6 +269,8 @@ class OCCParams:
     offset_sigma: float = 6.0         # LSMA offset / ALMA sigma
     offset_alma: float = 0.85         # ALMA offset
     mode: str = "nonrepaint"          # nonrepaint | realtime | lookahead
+    entry_filter: bool = False        # skip entries worse than the signal's first-paint price
+    filter_tol_bps: float = 0.0       # allow this much adverse slack (bps) before skipping
 
 
 def build_series(c_base: List[Candle], p: OCCParams) -> Tuple[List[int], List[float], List[float]]:
@@ -404,6 +406,19 @@ def backtest_occ(c_base: List[Candle], p: OCCParams, fee_rate: float = 0.0005,
     long_ok = p.trade_type in ("LONG", "BOTH")
     short_ok = p.trade_type in ("SHORT", "BOTH")
 
+    # Favorable-entry filter (repaint-aware): within each forming alt bucket,
+    # remember the price at which each direction FIRST painted (the "더 유리한
+    # 과거 봉" the repaint anchors to). An entry is only taken if the current
+    # fill is equal-or-favorable vs that price; otherwise the signal can only
+    # CLOSE an opposite position, never open a new one. Look-ahead-free: the
+    # reference is always an earlier bar in the same bucket.
+    alt_step = bar_ms * (p.mult if p.use_res else 1)
+    tol = p.filter_tol_bps / 10000.0
+    sig_bucket = None
+    ref_long: Optional[float] = None
+    ref_short: Optional[float] = None
+    skipped = 0
+
     equity = [1.0]
     eq = 1.0
     trades: List[Trade] = []
@@ -417,6 +432,15 @@ def backtest_occ(c_base: List[Candle], p: OCCParams, fee_rate: float = 0.0005,
         sc = (i - 1 >= 1 and close_ma[i - 2] >= open_ma[i - 2] and close_ma[i - 1] < open_ma[i - 1])
         fill = cl[i - 1]
 
+        if p.entry_filter:                       # track per-bucket first-paint price
+            b = c_base[i - 1].open_time // alt_step
+            if b != sig_bucket:
+                sig_bucket, ref_long, ref_short = b, None, None
+            if lc and ref_long is None:
+                ref_long = fill
+            if sc and ref_short is None:
+                ref_short = fill
+
         if i - 1 >= warmup and p.trade_type != "NONE":
             new_pos = pos
             if p.trade_type == "BOTH":
@@ -428,6 +452,16 @@ def backtest_occ(c_base: List[Candle], p: OCCParams, fee_rate: float = 0.0005,
             elif p.trade_type == "SHORT":
                 if sc:   new_pos = -1
                 elif lc: new_pos = 0
+
+            if p.entry_filter and new_pos != pos and new_pos != 0:
+                if new_pos == 1:
+                    favorable = ref_long is not None and fill <= ref_long * (1 + tol)
+                else:
+                    favorable = ref_short is not None and fill >= ref_short * (1 - tol)
+                if not favorable:
+                    new_pos = 0          # close any opposite position; do NOT open
+                    skipped += 1
+
             if new_pos != pos:
                 if pos != 0:
                     gross = pos * (fill / entry_px - 1.0)
@@ -466,7 +500,9 @@ def backtest_occ(c_base: List[Candle], p: OCCParams, fee_rate: float = 0.0005,
         gross = pos * (cl[-1] / entry_px - 1.0)
         trades.append(Trade(pos, entry_i, n - 1, entry_px, cl[-1], gross - 2 * cost))
 
-    return Result(name=name, trades=trades, equity=equity, bars=n, bar_ms=bar_ms)
+    res = Result(name=name, trades=trades, equity=equity, bars=n, bar_ms=bar_ms)
+    res.skipped = skipped     # entries suppressed by the favorable-entry filter
+    return res
 
 
 def buy_hold(c_base: List[Candle]) -> Result:
@@ -493,6 +529,8 @@ def run_occ_web(c_base: List[Candle], config: dict) -> dict:
         offset_sigma=float(config.get("offset_sigma", 6.0)),
         offset_alma=float(config.get("offset_alma", 0.85)),
         mode=config.get("mode", "nonrepaint"),
+        entry_filter=bool(config.get("entry_filter", False)),
+        filter_tol_bps=float(config.get("filter_tol_bps", 0.0)),
     )
     fee = config.get("fee_bps", 5.0) / 10000.0
     slip = config.get("slip_bps", 1.0) / 10000.0
@@ -517,6 +555,7 @@ def run_occ_web(c_base: List[Candle], config: dict) -> dict:
         )
 
     return dict(ok=True, bars=len(c_base), ma_type=p.ma_type, mode=p.mode,
+                entry_filter=p.entry_filter, skipped=getattr(res, "skipped", 0),
                 strategy=stats(res), buy_hold=stats(bh),
                 equity=res.equity[::step], bh_equity=bh.equity[::step],
                 times=[c.open_time for c in c_base][::step])
@@ -570,6 +609,11 @@ def main(argv=None) -> int:
     ap.add_argument("--mode", default="nonrepaint", choices=["nonrepaint", "realtime", "lookahead"],
                     help="nonrepaint=closed alt bars only; realtime=forming alt bar each base bar "
                          "(repaint-aware, look-ahead-free); lookahead=TV-style repaint (inflated)")
+    ap.add_argument("--entry-filter", action="store_true",
+                    help="skip entries worse than the signal's first-paint price (repaint guard); "
+                         "such signals only CLOSE an opposite position, never open a new one")
+    ap.add_argument("--filter-tol-bps", type=float, default=0.0,
+                    help="adverse slack allowed before an entry is skipped (bps)")
     ap.add_argument("--compare-modes", action="store_true",
                     help="run all three modes on the same MA and compare")
     ap.add_argument("--compare-ma", action="store_true", help="rank every MA type on the same data")
@@ -619,7 +663,8 @@ def main(argv=None) -> int:
     def mkp(ma_type, mode):
         return OCCParams(ma_type=ma_type, ma_len=args.ma_len, mult=args.mult, use_res=not args.no_res,
                          trade_type=args.trade_type, sl_pct=args.sl_pct, tp_pct=args.tp_pct,
-                         offset_sigma=args.offset_sigma, offset_alma=args.offset_alma, mode=mode)
+                         offset_sigma=args.offset_sigma, offset_alma=args.offset_alma, mode=mode,
+                         entry_filter=args.entry_filter, filter_tol_bps=args.filter_tol_bps)
 
     if args.compare_modes:
         for mode in ("lookahead", "realtime", "nonrepaint"):

@@ -118,6 +118,17 @@
             <option value="lookahead">lookahead (TV식·부풀려짐)</option>
           </select>
         </div>
+        <div class="param-group" style="justify-content:flex-end">
+          <label>불리 진입 차단</label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="entry_filter">
+            유리한 진입만
+          </label>
+        </div>
+        <div class="param-group">
+          <label>허용 슬랙 (bps)</label>
+          <input type="number" id="filter_tol_bps" value="0" min="0" max="200" step="1">
+        </div>
         <div class="param-group">
           <label>MA 종류</label>
           <select id="ma_type">
@@ -178,7 +189,10 @@
         신호가 뒤집히는 repaint를 그대로 반영(진입했다 조정). 미래 정보는 안 쓰므로 <b>실거래 가능</b>.
         예: 전략 4h + 반영 15m → 4h봉을 15분마다 갱신.<br>
         <b>nonrepaint</b>: 닫힌 상위 봉만 사용(지연·보수적).
-        <b>lookahead</b>: TV식 — 상위봉 최종값을 미리 사용(미래 정보 → 부풀려짐, 실거래 불가, 비교용).
+        <b>lookahead</b>: TV식 — 상위봉 최종값을 미리 사용(미래 정보 → 부풀려짐, 실거래 불가, 비교용).<br>
+        <b>유리한 진입만</b>: 같은 알트봉 안에서 그 방향 신호가 <b>처음 뜬 가격</b>보다 현재 체결가가
+        불리하면 진입을 건너뜀(반대 포지션은 청산만, 신규 진입 X). repaint가 "더 유리한 과거 봉"으로
+        그려내는 허수 진입을 거릅니다. 슬랙(bps)만큼은 불리해도 허용.
       </div>
     </div>
   </div>
@@ -240,6 +254,8 @@ async function runBacktest() {
     ma_len:   parseInt(document.getElementById("ma_len").value) || 8,
     trade_type: document.getElementById("trade_type").value,
     mode:     document.getElementById("mode").value,
+    entry_filter: document.getElementById("entry_filter").checked,
+    filter_tol_bps: parseFloat(document.getElementById("filter_tol_bps").value) || 0,
     days:     parseInt(document.getElementById("days").value) || 180,
     sl_pct:   parseFloat(document.getElementById("sl_pct").value) || 0,
     tp_pct:   parseFloat(document.getElementById("tp_pct").value) || 0,
@@ -287,6 +303,7 @@ function showResults(data, cfg) {
     <span class="badge plain">${s.n_trades}건</span>
     <span class="badge plain">${data.ma_type} · ${cfg.alt}÷${cfg.refresh}</span>
     <span class="badge ${data.mode==="lookahead"?"bad":(data.mode==="realtime"?"good":"plain")}">${data.mode}</span>
+    ${data.entry_filter ? `<span class="badge good">불리진입 ${data.skipped}건 차단</span>` : ""}
     <span class="badge plain">${data.bars.toLocaleString()} bars</span>`;
 
   const pf = s.profit_factor !== null ? s.profit_factor.toFixed(2) : "∞";
