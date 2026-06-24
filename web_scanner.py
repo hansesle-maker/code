@@ -19,7 +19,7 @@ import threading
 import time
 from typing import Dict, List, Optional
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 
 from tsi_signal.alerts import build_messages, diff_alerts, send_telegram
 from tsi_signal.positions import (
@@ -214,6 +214,62 @@ def manual_refresh():
     t = threading.Thread(target=do_scan, daemon=True)
     t.start()
     return jsonify({"status": "started"})
+
+
+# ---------------------------------------------------------------------------
+# Strategy Lab
+# ---------------------------------------------------------------------------
+
+@app.route("/lab")
+def lab():
+    return render_template("lab.html")
+
+
+@app.route("/api/lab/run", methods=["POST"])
+def lab_run():
+    """Run a dynamic backtest defined by the web strategy lab."""
+    import strategy_lab as sl
+    from tsi_signal.data import (
+        FUTURES_BASE_URL,
+        FUTURES_KLINES_PATH,
+        SPOT_BASE_URL,
+        SPOT_KLINES_PATH,
+        fetch_klines_range,
+    )
+    from datetime import timezone as tz, timedelta
+
+    cfg = request.get_json(force=True) or {}
+    if "entry" not in cfg or "exit" not in cfg:
+        return jsonify({"ok": False, "error": "entry and exit rules are required"}), 400
+
+    symbol = str(cfg.get("symbol", "BTCUSDT")).upper()
+    days   = max(1, int(cfg.get("days", 180)))
+    market = cfg.get("market", "futures")
+
+    if market == "futures":
+        base, path = FUTURES_BASE_URL, FUTURES_KLINES_PATH
+    else:
+        base, path = SPOT_BASE_URL, SPOT_KLINES_PATH
+
+    start_ms = int((datetime.datetime.now(tz.utc) - timedelta(days=days)).timestamp() * 1000)
+    end_ms   = None
+
+    try:
+        c15 = fetch_klines_range(symbol, "15m", start_ms, end_ms, base_url=base, path=path)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"Data fetch failed: {exc}"}), 502
+
+    if len(c15) < 500:
+        return jsonify({"ok": False,
+                        "error": f"Too few bars ({len(c15)}). Try a longer window or check the symbol."}), 400
+
+    try:
+        result = sl.run_lab_backtest(c15, cfg)
+    except Exception as exc:
+        log.exception("Lab backtest failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+    return jsonify(result)
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>TSI Strategy Lab</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:       #0b0b18;
+      --surface:  #13132a;
+      --surface2: #1a1a35;
+      --border:   #242450;
+      --text:     #dde0ff;
+      --muted:    #7070a0;
+      --accent:   #6a6aff;
+      --bull:     #00d47e;
+      --bear:     #ff4a5a;
+      --warn:     #ffb340;
+      --radius:   10px;
+    }
+    html { background: var(--bg); }
+    body {
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+      font-size: 13px;
+      min-height: 100vh;
+      -webkit-text-size-adjust: 100%;
+    }
+
+    /* ── Top bar ──────────────────────────────────────────── */
+    .topbar {
+      position: sticky; top: 0; z-index: 200;
+      background: var(--bg); border-bottom: 1px solid var(--border);
+      padding: 10px 16px;
+      padding-top: max(10px, env(safe-area-inset-top, 0));
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .topbar-left { display: flex; align-items: center; gap: 12px; }
+    .back { font-size: 12px; color: var(--muted); text-decoration: none; padding: 4px 8px;
+            border: 1px solid var(--border); border-radius: 6px; }
+    .back:hover { color: var(--accent); border-color: var(--accent); }
+    .title { font-size: 15px; font-weight: 700; color: var(--accent); }
+    .subtitle { font-size: 11px; color: var(--muted); margin-top: 1px; }
+
+    /* ── Layout ───────────────────────────────────────────── */
+    .container { max-width: 1100px; margin: 0 auto; padding: 16px 12px 60px; }
+
+    /* ── Section card ─────────────────────────────────────── */
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    .section-hd {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 14px; border-bottom: 1px solid var(--border);
+      font-weight: 700; font-size: 13px;
+    }
+    .section-hd .hint { font-size: 11px; color: var(--muted); font-weight: 400; }
+    .section-body { padding: 14px; }
+
+    /* ── Params grid ──────────────────────────────────────── */
+    .params-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 10px;
+    }
+    .param-group { display: flex; flex-direction: column; gap: 4px; }
+    .param-group label { font-size: 11px; color: var(--muted); }
+    input[type="text"], input[type="number"] {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); border-radius: 6px; font-size: 13px;
+      padding: 6px 10px; width: 100%;
+    }
+    input:focus { outline: none; border-color: var(--accent); }
+    .checkbox-row { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+    .checkbox-row input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; }
+
+    /* ── Rule builder ─────────────────────────────────────── */
+    .tf-logic-row {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 14px; font-size: 12px; color: var(--muted);
+    }
+
+    .tfs-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 10px;
+    }
+
+    .tf-box {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 8px; overflow: hidden;
+    }
+    .tf-box-hd {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 10px; border-bottom: 1px solid var(--border);
+      background: rgba(36,36,80,.5);
+    }
+    .tf-badge {
+      font-size: 11px; font-weight: 800; padding: 1px 7px;
+      border-radius: 4px; background: var(--accent);
+      color: #fff; letter-spacing: .5px;
+    }
+    .tf-logic-sel { font-size: 11px; }
+    .add-btn {
+      margin-left: auto; font-size: 11px; padding: 3px 9px;
+      background: var(--surface); border: 1px solid var(--border);
+      color: var(--muted); border-radius: 5px; cursor: pointer;
+    }
+    .add-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+    .cond-list { padding: 6px 8px; min-height: 32px; }
+    .cond-row {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 0; border-bottom: 1px solid rgba(36,36,80,.6);
+    }
+    .cond-row:last-child { border-bottom: none; }
+    .cond-empty { font-size: 11px; color: var(--muted); padding: 6px 2px; }
+
+    select, .cond-type, .cond-dir, .tf-logic-sel {
+      background: var(--surface); border: 1px solid var(--border);
+      color: var(--text); border-radius: 5px; font-size: 11px;
+      padding: 4px 6px; cursor: pointer; max-width: 100%;
+    }
+    select:focus { outline: none; border-color: var(--accent); }
+
+    .cond-type { flex: 1 1 120px; }
+    .cond-dir  { flex: 1 1 120px; }
+    .rm-btn {
+      background: none; border: none; color: var(--muted); cursor: pointer;
+      font-size: 16px; padding: 0 4px; line-height: 1;
+      flex-shrink: 0;
+    }
+    .rm-btn:hover { color: var(--bear); }
+
+    /* ── Presets ──────────────────────────────────────────── */
+    .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+    .preset-btn {
+      font-size: 11px; padding: 4px 10px; border-radius: 5px;
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--muted); cursor: pointer;
+    }
+    .preset-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+    /* ── Run button ───────────────────────────────────────── */
+    .run-wrap { text-align: center; margin: 16px 0; }
+    #runBtn {
+      font-size: 15px; font-weight: 700; padding: 12px 48px;
+      background: var(--accent); color: #fff; border: none;
+      border-radius: 10px; cursor: pointer; letter-spacing: .3px;
+    }
+    #runBtn:disabled { opacity: .5; cursor: default; }
+    #runBtn:active   { opacity: .8; }
+    .run-hint { font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+    /* ── Results ──────────────────────────────────────────── */
+    #results { display: none; }
+    .stats-table {
+      width: 100%; border-collapse: collapse; font-size: 13px;
+      margin-bottom: 16px;
+    }
+    .stats-table th {
+      padding: 8px 12px; text-align: left;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted); font-weight: 600; font-size: 11px;
+    }
+    .stats-table td {
+      padding: 7px 12px;
+      border-bottom: 1px solid rgba(36,36,80,.5);
+      font-variant-numeric: tabular-nums;
+    }
+    .stats-table tr:last-child td { border-bottom: none; }
+    .stats-table .label { color: var(--muted); }
+    .pos  { color: var(--bull); font-weight: 700; }
+    .neg  { color: var(--bear); font-weight: 700; }
+    .neutral { color: var(--text); }
+
+    .chart-wrap {
+      position: relative; padding: 4px 4px 0;
+      height: 260px;
+    }
+    @media (min-width: 600px) { .chart-wrap { height: 320px; } }
+
+    /* ── Error ────────────────────────────────────────────── */
+    .error-bar {
+      margin: 8px 0; padding: 10px 14px;
+      background: rgba(255,74,90,.12); border: 1px solid var(--bear);
+      border-radius: 8px; color: var(--bear); font-size: 12px;
+    }
+    #errorBox { display: none; }
+
+    /* ── Loading overlay ──────────────────────────────────── */
+    .spinner {
+      width: 24px; height: 24px; margin: 0 auto;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loadWrap { display: none; text-align: center; padding: 24px; }
+    #loadWrap p { color: var(--muted); font-size: 12px; margin-top: 10px; }
+
+    /* ── Summary badge ────────────────────────────────────── */
+    .result-summary {
+      display: flex; gap: 10px; flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+    .badge {
+      padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 700;
+      border: 1px solid transparent;
+    }
+    .badge.good  { background: rgba(0,212,126,.15); border-color: var(--bull); color: var(--bull); }
+    .badge.bad   { background: rgba(255,74,90,.15);  border-color: var(--bear); color: var(--bear); }
+    .badge.plain { background: var(--surface2); border-color: var(--border); color: var(--muted); }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <a href="/" class="back">← Scanner</a>
+    <div>
+      <div class="title">TSI Strategy Lab</div>
+      <div class="subtitle">조건 조합 백테스트 (15m 기준)</div>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- ── Parameters ──────────────────────────────────────── -->
+  <div class="section">
+    <div class="section-hd">⚙️ Parameters</div>
+    <div class="section-body">
+      <div class="params-grid">
+        <div class="param-group">
+          <label>Symbol</label>
+          <input type="text" id="symbol" value="BTCUSDT" placeholder="예: ETHUSDT">
+        </div>
+        <div class="param-group">
+          <label>Days (기간)</label>
+          <input type="number" id="days" value="180" min="30" max="730">
+        </div>
+        <div class="param-group">
+          <label>Fee bps (수수료)</label>
+          <input type="number" id="feeBps" value="5" min="0" max="100" step="0.5">
+        </div>
+        <div class="param-group">
+          <label>Slippage bps</label>
+          <input type="number" id="slipBps" value="1" min="0" max="50" step="0.5">
+        </div>
+        <div class="param-group" style="justify-content:flex-end">
+          <label>&nbsp;</label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="allowShort" checked>
+            Allow shorts
+          </label>
+        </div>
+      </div>
+      <!-- Advanced TSI params (collapsed by default) -->
+      <details style="margin-top:12px">
+        <summary style="font-size:11px;color:var(--muted);cursor:pointer">TSI 파라미터 (고급)</summary>
+        <div class="params-grid" style="margin-top:10px">
+          <div class="param-group">
+            <label>TSI Long</label>
+            <input type="number" id="tsiLong" value="25" min="5" max="100">
+          </div>
+          <div class="param-group">
+            <label>TSI Short</label>
+            <input type="number" id="tsiShort" value="13" min="3" max="50">
+          </div>
+          <div class="param-group">
+            <label>TSI Signal</label>
+            <input type="number" id="tsiSignal" value="13" min="3" max="50">
+          </div>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ── Presets ─────────────────────────────────────────── -->
+  <div class="section">
+    <div class="section-hd">📋 전략 프리셋 <span class="hint">— 클릭하면 자동 입력</span></div>
+    <div class="section-body">
+      <div class="presets">
+        <button class="preset-btn" onclick="loadPreset('s1')">S1 · 15m 신호선 교차</button>
+        <button class="preset-btn" onclick="loadPreset('s2')">S2 · 1h 신호선 교차</button>
+        <button class="preset-btn" onclick="loadPreset('s3')">S3 · 4h방향 + 1h교차 ★</button>
+        <button class="preset-btn" onclick="loadPreset('s4')">S4 · 1h 0선 교차</button>
+        <button class="preset-btn" onclick="loadPreset('s5')">S5 · 4h+1h 동시 교차</button>
+        <button class="preset-btn" onclick="loadPreset('s6')">S6 · 4h 완전 강세 + 1h교차</button>
+        <button class="preset-btn" onclick="clearAll()">✕ 초기화</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Entry conditions ────────────────────────────────── -->
+  <div class="section">
+    <div class="section-hd">
+      🟢 Entry Conditions
+      <span class="hint">— Long 진입 조건 (bullish 방향). Short은 자동 mirror.</span>
+    </div>
+    <div class="section-body">
+      <div class="tf-logic-row">
+        Timeframe 간 로직:
+        <select id="entry_tf_logic">
+          <option value="AND">AND (모두 충족)</option>
+          <option value="OR">OR (하나 이상)</option>
+        </select>
+      </div>
+      <div class="tfs-grid" id="entryTfs">
+        <!-- filled by JS -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Exit conditions ─────────────────────────────────── -->
+  <div class="section">
+    <div class="section-hd">
+      🔴 Exit Conditions
+      <span class="hint">— Long 청산 trigger (bearish 방향). Short 청산은 자동 mirror.</span>
+    </div>
+    <div class="section-body">
+      <div class="tf-logic-row">
+        Timeframe 간 로직:
+        <select id="exit_tf_logic">
+          <option value="OR">OR (하나 이상)</option>
+          <option value="AND">AND (모두 충족)</option>
+        </select>
+      </div>
+      <div class="tfs-grid" id="exitTfs">
+        <!-- filled by JS -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Run ─────────────────────────────────────────────── -->
+  <div class="run-wrap">
+    <button id="runBtn" onclick="runBacktest()">▶ 백테스트 실행</button>
+    <div class="run-hint">Oracle VM에서 Binance 데이터를 가져오므로 10~30초 소요될 수 있습니다.</div>
+  </div>
+
+  <div id="errorBox" class="error-bar"></div>
+  <div id="loadWrap"><div class="spinner"></div><p>데이터 수집 및 백테스트 중…</p></div>
+
+  <!-- ── Results ─────────────────────────────────────────── -->
+  <div id="results">
+    <div class="section">
+      <div class="section-hd">📊 결과</div>
+      <div class="section-body">
+        <div class="result-summary" id="summaryBadges"></div>
+        <table class="stats-table" id="statsTable"></table>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-hd">📈 수익률 곡선</div>
+      <div class="section-body">
+        <div class="chart-wrap"><canvas id="equityChart"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<script>
+"use strict";
+
+// ─── Condition metadata ─────────────────────────────────────────────────────
+const COND_TYPES = {
+  tsi_vs_zero:   "TSI vs 0선",
+  zero_cross:    "TSI 0선 교차",
+  tsi_vs_signal: "TSI vs 신호선",
+  fresh_cross:   "신호선 교차 (fresh)",
+  gap_change:    "TSI-신호 Gap",
+  tsi_slope:     "TSI 기울기",
+};
+
+const COND_DIRS = {
+  tsi_vs_zero:   [["above","TSI > 0 (bullish)"],["below","TSI < 0 (bearish)"]],
+  zero_cross:    [["up","↑ 0선 상향 교차 (bullish)"],["down","↓ 0선 하향 교차 (bearish)"]],
+  tsi_vs_signal: [["above","TSI > 신호 (bullish)"],["below","TSI < 신호 (bearish)"]],
+  fresh_cross:   [["up","↑ 신호 상향 교차 (bullish)"],["down","↓ 신호 하향 교차 (bearish)"]],
+  gap_change:    [["expanding","Gap 확대 ↗ (bullish)"],["contracting","Gap 축소 ↘"]],
+  tsi_slope:     [["rising","기울기 ↑ (상승)"],["falling","기울기 ↓ (하락)"]],
+};
+
+const TFS = ["4h", "1h", "15m"];
+
+// ─── Build TF boxes ─────────────────────────────────────────────────────────
+function buildTfBoxes(role) {
+  const wrap = document.getElementById(role + "Tfs");
+  wrap.innerHTML = "";
+  TFS.forEach(tf => {
+    const box = document.createElement("div");
+    box.className = "tf-box";
+    box.innerHTML = `
+      <div class="tf-box-hd">
+        <span class="tf-badge">${tf}</span>
+        <select class="tf-logic-sel" id="${role}_${tf}_logic">
+          <option value="AND">AND</option>
+          <option value="OR">OR</option>
+        </select>
+        <button class="add-btn" onclick="addCond('${role}','${tf}')">+ 조건 추가</button>
+      </div>
+      <div class="cond-list" id="${role}_${tf}_list">
+        <div class="cond-empty" id="${role}_${tf}_empty">조건 없음 (이 TF는 무시됨)</div>
+      </div>
+    `;
+    wrap.appendChild(box);
+  });
+}
+
+buildTfBoxes("entry");
+buildTfBoxes("exit");
+
+// ─── Condition rows ──────────────────────────────────────────────────────────
+function makeDirOptions(type) {
+  return (COND_DIRS[type] || []).map(([v, l]) =>
+    `<option value="${v}">${l}</option>`).join("");
+}
+
+function addCond(role, tf, type = "fresh_cross", dir = null) {
+  const list  = document.getElementById(`${role}_${tf}_list`);
+  const empty = document.getElementById(`${role}_${tf}_empty`);
+  if (empty) empty.remove();
+
+  const row = document.createElement("div");
+  row.className = "cond-row";
+
+  const typeOpts = Object.entries(COND_TYPES)
+    .map(([v, l]) => `<option value="${v}"${v === type ? " selected" : ""}>${l}</option>`)
+    .join("");
+  const dirOpts = makeDirOptions(type);
+
+  row.innerHTML = `
+    <select class="cond-type" onchange="onTypeChange(this)">${typeOpts}</select>
+    <select class="cond-dir">${dirOpts}</select>
+    <button class="rm-btn" onclick="removeCond(this)" title="삭제">×</button>
+  `;
+  list.appendChild(row);
+
+  // Set initial direction if specified
+  if (dir) {
+    const dirSel = row.querySelector(".cond-dir");
+    dirSel.value = dir;
+  }
+}
+
+function onTypeChange(typeSel) {
+  const dirSel = typeSel.nextElementSibling;
+  dirSel.innerHTML = makeDirOptions(typeSel.value);
+}
+
+function removeCond(btn) {
+  const row  = btn.closest(".cond-row");
+  const list = row.parentElement;
+  row.remove();
+  if (!list.querySelector(".cond-row")) {
+    const role = list.id.split("_")[0];
+    const tf   = list.id.split("_")[1];
+    const e = document.createElement("div");
+    e.className = "cond-empty";
+    e.id = `${role}_${tf}_empty`;
+    e.textContent = "조건 없음 (이 TF는 무시됨)";
+    list.appendChild(e);
+  }
+}
+
+// ─── Collect rule ────────────────────────────────────────────────────────────
+function collectRule(role) {
+  const rule = { tf_logic: document.getElementById(`${role}_tf_logic`).value };
+  TFS.forEach(tf => {
+    const logicSel = document.getElementById(`${role}_${tf}_logic`);
+    const rows = document.querySelectorAll(`#${role}_${tf}_list .cond-row`);
+    const conditions = Array.from(rows).map(row => ({
+      type: row.querySelector(".cond-type").value,
+      dir:  row.querySelector(".cond-dir").value,
+    }));
+    rule[tf] = { logic: logicSel.value, conditions };
+  });
+  return rule;
+}
+
+// ─── Clear all ───────────────────────────────────────────────────────────────
+function clearAll() {
+  buildTfBoxes("entry");
+  buildTfBoxes("exit");
+  document.getElementById("entry_tf_logic").value = "AND";
+  document.getElementById("exit_tf_logic").value  = "OR";
+}
+
+// ─── Presets ─────────────────────────────────────────────────────────────────
+const PRESETS = {
+  s1: {
+    name: "S1 · 15m 신호선 교차",
+    entry: { tf_logic: "AND", entry_cross_tf: "15m", entry_cross_dir: "up" },
+    exit:  { tf_logic: "OR",  exit_cross_tf:  "15m", exit_cross_dir:  "down" },
+    _fn: (p) => {
+      clearAll();
+      addCond("entry", p.entry.entry_cross_tf, "fresh_cross", p.entry.entry_cross_dir);
+      addCond("exit",  p.exit.exit_cross_tf,   "fresh_cross", p.exit.exit_cross_dir);
+    },
+  },
+  s2: {
+    _fn: () => {
+      clearAll();
+      addCond("entry", "1h", "fresh_cross", "up");
+      addCond("exit",  "1h", "fresh_cross", "down");
+    },
+  },
+  s3: {
+    _fn: () => {
+      clearAll();
+      document.getElementById("entry_tf_logic").value = "AND";
+      addCond("entry", "4h", "tsi_vs_zero",   "above");
+      addCond("entry", "1h", "fresh_cross",    "up");
+      addCond("exit",  "1h", "fresh_cross",    "down");
+    },
+  },
+  s4: {
+    _fn: () => {
+      clearAll();
+      addCond("entry", "1h", "zero_cross", "up");
+      addCond("exit",  "1h", "zero_cross", "down");
+    },
+  },
+  s5: {
+    _fn: () => {
+      clearAll();
+      document.getElementById("entry_tf_logic").value = "AND";
+      addCond("entry", "4h", "fresh_cross",  "up");
+      addCond("entry", "1h", "fresh_cross",  "up");
+      document.getElementById("exit_tf_logic").value  = "OR";
+      addCond("exit",  "4h", "fresh_cross",  "down");
+      addCond("exit",  "1h", "fresh_cross",  "down");
+    },
+  },
+  s6: {
+    _fn: () => {
+      clearAll();
+      document.getElementById("entry_tf_logic").value = "AND";
+      addCond("entry", "4h", "tsi_vs_zero",   "above");
+      addCond("entry", "4h", "tsi_vs_signal",  "above");
+      addCond("entry", "1h", "fresh_cross",    "up");
+      document.getElementById("exit_tf_logic").value  = "OR";
+      addCond("exit",  "4h", "tsi_vs_signal",  "below");
+      addCond("exit",  "1h", "fresh_cross",    "down");
+    },
+  },
+};
+
+function loadPreset(key) {
+  const p = PRESETS[key];
+  if (p && p._fn) p._fn(p);
+}
+
+// ─── Run backtest ─────────────────────────────────────────────────────────────
+async function runBacktest() {
+  const btn = document.getElementById("runBtn");
+  btn.disabled = true;
+  btn.textContent = "⏳ 실행 중…";
+  document.getElementById("errorBox").style.display = "none";
+  document.getElementById("results").style.display  = "none";
+  document.getElementById("loadWrap").style.display = "block";
+
+  const cfg = {
+    symbol:     document.getElementById("symbol").value.trim().toUpperCase() || "BTCUSDT",
+    days:       parseInt(document.getElementById("days").value)    || 180,
+    fee_bps:    parseFloat(document.getElementById("feeBps").value) || 5,
+    slip_bps:   parseFloat(document.getElementById("slipBps").value) || 1,
+    allow_short: document.getElementById("allowShort").checked,
+    tsi_long:   parseInt(document.getElementById("tsiLong").value)   || 25,
+    tsi_short:  parseInt(document.getElementById("tsiShort").value)  || 13,
+    tsi_signal: parseInt(document.getElementById("tsiSignal").value) || 13,
+    entry: collectRule("entry"),
+    exit:  collectRule("exit"),
+  };
+
+  try {
+    const resp = await fetch("/api/lab/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cfg),
+    });
+    const data = await resp.json();
+    document.getElementById("loadWrap").style.display = "none";
+
+    if (!data.ok) {
+      showError(data.error || "Unknown error");
+    } else {
+      showResults(data, cfg);
+    }
+  } catch (err) {
+    document.getElementById("loadWrap").style.display = "none";
+    showError("네트워크 오류: " + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "▶ 백테스트 실행";
+  }
+}
+
+function showError(msg) {
+  const el = document.getElementById("errorBox");
+  el.textContent = "⚠ " + msg;
+  el.style.display = "block";
+}
+
+// ─── Display results ──────────────────────────────────────────────────────────
+let chart = null;
+
+function showResults(data, cfg) {
+  document.getElementById("results").style.display = "";
+  const s = data.strategy;
+  const b = data.buy_hold;
+
+  // Summary badges
+  const badges = document.getElementById("summaryBadges");
+  const sharpeClass = s.sharpe > 1.5 ? "good" : (s.sharpe < 0.5 ? "bad" : "plain");
+  const mddClass    = s.max_drawdown > -20 ? "good" : (s.max_drawdown < -40 ? "bad" : "plain");
+  const retVsBh     = s.total_return - b.total_return;
+  const retClass    = retVsBh > 0 ? "good" : "bad";
+  badges.innerHTML = `
+    <span class="badge ${sharpeClass}">Sharpe ${s.sharpe.toFixed(2)}</span>
+    <span class="badge ${mddClass}">MDD ${s.max_drawdown.toFixed(1)}%</span>
+    <span class="badge ${retClass}">vs B&H ${retVsBh >= 0 ? "+" : ""}${retVsBh.toFixed(1)}%</span>
+    <span class="badge plain">${s.n_trades}건 거래</span>
+    <span class="badge plain">${data.bars.toLocaleString()} bars (${cfg.days}일)</span>
+  `;
+
+  // Stats table
+  const pf = s.profit_factor !== null ? s.profit_factor.toFixed(2) : "∞";
+  const row = (label, strat, bh, stratClass = "neutral") => `
+    <tr>
+      <td class="label">${label}</td>
+      <td class="${stratClass}">${strat}</td>
+      <td class="neutral">${bh}</td>
+    </tr>`;
+  document.getElementById("statsTable").innerHTML = `
+    <thead><tr><th>지표</th><th>전략</th><th>Buy &amp; Hold</th></tr></thead>
+    <tbody>
+      ${row("총 수익률",  pct(s.total_return), pct(b.total_return), cls(s.total_return))}
+      ${row("CAGR",       pct(s.cagr),          pct(b.cagr),          cls(s.cagr))}
+      ${row("최대 낙폭",  pct(s.max_drawdown),  pct(b.max_drawdown),  s.max_drawdown < b.max_drawdown ? "pos" : "neg")}
+      ${row("Sharpe",     s.sharpe.toFixed(2),  b.sharpe.toFixed(2),  sharpeClass === "good" ? "pos" : (sharpeClass === "bad" ? "neg" : "neutral"))}
+      ${row("Profit Factor", pf,               "—")}
+      ${row("승률",       pct(s.win_rate),      "—")}
+      ${row("거래 수",    s.n_trades,           "—")}
+      ${row("평균 승 / 패", `${pct(s.avg_win)} / ${pct(s.avg_loss)}`, "—")}
+    </tbody>
+  `;
+
+  // Equity chart
+  drawChart(data);
+
+  // Scroll to results
+  document.getElementById("results").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function pct(v) { return (v >= 0 ? "+" : "") + v.toFixed(2) + "%"; }
+function cls(v) { return v >= 0 ? "pos" : "neg"; }
+
+function drawChart(data) {
+  const ctx = document.getElementById("equityChart").getContext("2d");
+  if (chart) chart.destroy();
+
+  const labels = data.times.map(t => {
+    const d = new Date(t);
+    return d.getUTCFullYear() + "-" +
+           String(d.getUTCMonth() + 1).padStart(2, "0") + "-" +
+           String(d.getUTCDate()).padStart(2, "0");
+  });
+
+  const toPct = arr => arr.map(v => +((v - 1) * 100).toFixed(3));
+
+  chart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "전략",
+          data: toPct(data.equity),
+          borderColor: "#6a6aff",
+          backgroundColor: "rgba(106,106,255,0.08)",
+          fill: true,
+          tension: 0.15,
+          pointRadius: 0,
+          borderWidth: 2,
+        },
+        {
+          label: "Buy & Hold",
+          data: toPct(data.bh_equity),
+          borderColor: "#7070a0",
+          borderDash: [5, 4],
+          tension: 0.15,
+          pointRadius: 0,
+          fill: false,
+          borderWidth: 1.5,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: {
+          labels: { color: "#dde0ff", font: { size: 12 }, boxWidth: 16 },
+        },
+        tooltip: {
+          backgroundColor: "#13132a",
+          borderColor: "#242450",
+          borderWidth: 1,
+          titleColor: "#dde0ff",
+          bodyColor: "#7070a0",
+          callbacks: {
+            label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}%`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: "#7070a0", maxTicksLimit: 8, maxRotation: 0 },
+          grid:  { color: "rgba(36,36,80,.5)" },
+        },
+        y: {
+          ticks: {
+            color: "#7070a0",
+            callback: v => (v >= 0 ? "+" : "") + v.toFixed(0) + "%",
+          },
+          grid: { color: "rgba(36,36,80,.5)" },
+        },
+      },
+    },
+  });
+}
+</script>
+</body>
+</html>

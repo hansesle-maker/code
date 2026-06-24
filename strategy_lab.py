@@ -437,6 +437,184 @@ def buy_hold(ind: Indicators) -> Result:
 
 
 # --------------------------------------------------------------------------- #
+# Dynamic strategy builder  (used by the web Strategy Lab)
+# --------------------------------------------------------------------------- #
+
+_FLIP_DIRS: Dict[str, Dict[str, str]] = {
+    "tsi_vs_zero":   {"above": "below", "below": "above"},
+    "zero_cross":    {"up": "down", "down": "up"},
+    "tsi_vs_signal": {"above": "below", "below": "above"},
+    "fresh_cross":   {"up": "down", "down": "up"},
+    "gap_change":    {"expanding": "contracting", "contracting": "expanding"},
+    "tsi_slope":     {"rising": "falling", "falling": "rising"},
+}
+
+
+def _flip_dir(ctype: str, direction: str) -> str:
+    return _FLIP_DIRS.get(ctype, {}).get(direction, direction)
+
+
+def _get_tsi_sig(ind: Indicators, tf: str) -> Tuple[List[float], List[float]]:
+    if tf == "15m":
+        return ind.tsi15, ind.sig15
+    if tf == "1h":
+        return ind.tsi1h, ind.sig1h
+    if tf == "4h":
+        return ind.tsi4h, ind.sig4h
+    raise ValueError(f"Unknown timeframe: {tf!r}")
+
+
+def _eval_cond(ind: Indicators, i: int, ctype: str, direction: str, tf: str) -> bool:
+    """Evaluate one condition at bar i (caller handles direction flipping)."""
+    tsi, sig = _get_tsi_sig(ind, tf)
+    if ctype == "tsi_vs_zero":
+        return tsi[i] > 0 if direction == "above" else tsi[i] < 0
+    if ctype == "zero_cross":
+        if i == 0:
+            return False
+        if direction == "up":
+            return tsi[i - 1] <= 0 < tsi[i]
+        return tsi[i - 1] >= 0 > tsi[i]
+    if ctype == "tsi_vs_signal":
+        return tsi[i] > sig[i] if direction == "above" else tsi[i] < sig[i]
+    if ctype == "fresh_cross":
+        if i == 0:
+            return False
+        if direction == "up":
+            return tsi[i - 1] <= sig[i - 1] and tsi[i] > sig[i]
+        return tsi[i - 1] >= sig[i - 1] and tsi[i] < sig[i]
+    if ctype == "gap_change":
+        if i == 0:
+            return False
+        gap_now  = tsi[i]     - sig[i]
+        gap_prev = tsi[i - 1] - sig[i - 1]
+        return gap_now > gap_prev if direction == "expanding" else gap_now < gap_prev
+    if ctype == "tsi_slope":
+        if i == 0:
+            return False
+        return tsi[i] > tsi[i - 1] if direction == "rising" else tsi[i] < tsi[i - 1]
+    return False
+
+
+def _eval_rule(ind: Indicators, i: int, rule: dict, flip: bool) -> bool:
+    """Evaluate an entry/exit rule at bar i.
+
+    rule structure::
+        {"tf_logic": "AND"|"OR",
+         "4h": {"logic": "AND", "conditions": [{"type": .., "dir": ..}, ...]},
+         "1h": {...}, "15m": {...}}
+
+    flip=True mirrors all directions (used for the short side).
+    Returns False when the rule has no conditions (no constraint).
+    """
+    tf_results = []
+    for tf in ("4h", "1h", "15m"):
+        grp = rule.get(tf, {})
+        conds = grp.get("conditions", [])
+        if not conds:
+            continue
+        logic = grp.get("logic", "AND")
+        res = []
+        for c in conds:
+            d = _flip_dir(c["type"], c["dir"]) if flip else c["dir"]
+            res.append(_eval_cond(ind, i, c["type"], d, tf))
+        tf_results.append(all(res) if logic == "AND" else any(res))
+
+    if not tf_results:
+        return False
+    tf_logic = rule.get("tf_logic", "AND")
+    return all(tf_results) if tf_logic == "AND" else any(tf_results)
+
+
+def build_dynamic_strategy(
+    entry_rule: dict,
+    exit_rule: dict,
+    allow_short: bool = True,
+) -> StrategyFn:
+    """Build a StrategyFn from entry/exit rule configuration dicts.
+
+    Entry conditions are expressed in the **bullish** direction (LONG triggers).
+    Exit conditions are expressed in the **bearish** direction (LONG-exit triggers).
+    SHORT entries and exits are the automatic mirror of both.
+
+    If no exit conditions are given, a position is only closed when the
+    opposite entry fires (direct flip) or the entry drops away (stays open).
+    """
+    def strategy(ind: Indicators, i: int, pos: int, st: dict) -> int:
+        long_entry  = _eval_rule(ind, i, entry_rule, flip=False)
+        short_entry = allow_short and _eval_rule(ind, i, entry_rule, flip=True)
+        long_exit   = _eval_rule(ind, i, exit_rule,  flip=False)
+        short_exit  = _eval_rule(ind, i, exit_rule,  flip=True)
+
+        if pos == 1:                          # holding long
+            if long_exit or short_entry:
+                return -1 if short_entry else 0
+            return 1
+        if pos == -1:                         # holding short
+            if short_exit or long_entry:
+                return 1 if long_entry else 0
+            return -1
+        # flat → enter on first signal
+        if long_entry:
+            return 1
+        if short_entry:
+            return -1
+        return 0
+
+    return strategy
+
+
+def run_lab_backtest(c15: List[Candle], config: dict) -> dict:
+    """Run a dynamic-strategy backtest and return a JSON-serialisable result dict.
+
+    Required config keys: ``entry`` (rule dict), ``exit`` (rule dict).
+    Optional: ``fee_bps`` (default 5), ``slip_bps`` (default 1),
+    ``allow_short`` (default True), ``tsi_long/short/signal`` (default 25/13/13).
+    """
+    fee_rate    = config.get("fee_bps",  5.0) / 10000.0
+    slip_rate   = config.get("slip_bps", 1.0) / 10000.0
+    allow_short = bool(config.get("allow_short", True))
+    tsi_params  = (
+        int(config.get("tsi_long",   25)),
+        int(config.get("tsi_short",  13)),
+        int(config.get("tsi_signal", 13)),
+    )
+
+    ind = build_indicators(c15, tsi_params)
+    fn  = build_dynamic_strategy(config["entry"], config["exit"], allow_short)
+    res = run_backtest(ind, fn, "custom", fee_rate, slip_rate, allow_short=allow_short)
+    bh  = buy_hold(ind)
+
+    # Down-sample to ≤ 2000 points for the browser chart
+    n    = len(res.equity)
+    step = max(1, n // 2000)
+
+    def _stats(r: Result) -> dict:
+        pf = r.profit_factor
+        return {
+            "total_return":  round(r.total_return  * 100, 2),
+            "cagr":          round(r.cagr           * 100, 2),
+            "max_drawdown":  round(r.max_drawdown   * 100, 2),
+            "sharpe":        round(r.sharpe,              3),
+            "profit_factor": None if pf == math.inf else round(pf, 3),
+            "win_rate":      round(r.win_rate        * 100, 2),
+            "n_trades":      r.n_trades,
+            "avg_win":       round(r.avg_win         * 100, 3),
+            "avg_loss":      round(r.avg_loss        * 100, 3),
+        }
+
+    return {
+        "ok":       True,
+        "bars":     len(c15),
+        "strategy": _stats(res),
+        "buy_hold": _stats(bh),
+        "equity":   res.equity[::step],
+        "bh_equity": bh.equity[::step],
+        "times":    ind.times[::step],
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Reporting
 # --------------------------------------------------------------------------- #
 def format_table(results: List[Result]) -> str:
