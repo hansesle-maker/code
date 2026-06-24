@@ -388,21 +388,23 @@ def _occ_ma_arrays(c_base: List[Candle], p: OCCParams) -> Tuple[List[float], Lis
 # --------------------------------------------------------------------------- #
 # Backtest (next-bar fill, intrabar SL/TP, fees per side)
 # --------------------------------------------------------------------------- #
-def backtest_occ(c_base: List[Candle], p: OCCParams, fee_rate: float = 0.0005,
-                 slip_rate: float = 0.0001, warmup: Optional[int] = None,
-                 name: str = "OCC") -> Result:
+def run_events(c_base: List[Candle], long_evt: List[bool], short_evt: List[bool],
+               p, fee_rate: float = 0.0005, slip_rate: float = 0.0001,
+               warmup: int = 100, name: str = "strat") -> Result:
+    """Shared backtest core: act on per-bar long/short signal events with
+    next-bar fill, fees per side, intrabar SL/TP and the favorable-entry filter.
+
+    ``long_evt[j]`` / ``short_evt[j]`` mean a long/short signal was decided at
+    the close of bar j; it fills at bar j+1's open (≈ cl[j]). Used by both the
+    Open-Close Cross and Daily-Close-Comparison strategies so the position,
+    cost, SL/TP and repaint-filter accounting are identical across them.
+    """
     n = len(c_base)
-    op = [c.open for c in c_base]
     hi = [c.high for c in c_base]
     lo = [c.low for c in c_base]
     cl = [c.close for c in c_base]
     bar_ms = (c_base[1].open_time - c_base[0].open_time) if n > 1 else INTERVAL_MS["15m"]
-
-    _, close_ma, open_ma = (None, *_occ_ma_arrays(c_base, p))
     cost = fee_rate + slip_rate
-    if warmup is None:
-        warmup = p.ma_len * max(1, p.mult) + 50
-
     long_ok = p.trade_type in ("LONG", "BOTH")
     short_ok = p.trade_type in ("SHORT", "BOTH")
 
@@ -410,8 +412,7 @@ def backtest_occ(c_base: List[Candle], p: OCCParams, fee_rate: float = 0.0005,
     # remember the price at which each direction FIRST painted (the "더 유리한
     # 과거 봉" the repaint anchors to). An entry is only taken if the current
     # fill is equal-or-favorable vs that price; otherwise the signal can only
-    # CLOSE an opposite position, never open a new one. Look-ahead-free: the
-    # reference is always an earlier bar in the same bucket.
+    # CLOSE an opposite position, never open a new one. Look-ahead-free.
     alt_step = bar_ms * (p.mult if p.use_res else 1)
     tol = p.filter_tol_bps / 10000.0
     sig_bucket = None
@@ -427,9 +428,8 @@ def backtest_occ(c_base: List[Candle], p: OCCParams, fee_rate: float = 0.0005,
     entry_i = 0
 
     for i in range(1, n):
-        # Signal from CLOSED data on bar i-1; order fills at this bar's open ≈ cl[i-1].
-        lc = (i - 1 >= 1 and close_ma[i - 2] <= open_ma[i - 2] and close_ma[i - 1] > open_ma[i - 1])
-        sc = (i - 1 >= 1 and close_ma[i - 2] >= open_ma[i - 2] and close_ma[i - 1] < open_ma[i - 1])
+        lc = long_evt[i - 1]
+        sc = short_evt[i - 1]
         fill = cl[i - 1]
 
         if p.entry_filter:                       # track per-bucket first-paint price
@@ -503,6 +503,27 @@ def backtest_occ(c_base: List[Candle], p: OCCParams, fee_rate: float = 0.0005,
     res = Result(name=name, trades=trades, equity=equity, bars=n, bar_ms=bar_ms)
     res.skipped = skipped     # entries suppressed by the favorable-entry filter
     return res
+
+
+# --------------------------------------------------------------------------- #
+# Backtest (next-bar fill, intrabar SL/TP, fees per side)
+# --------------------------------------------------------------------------- #
+def backtest_occ(c_base: List[Candle], p: OCCParams, fee_rate: float = 0.0005,
+                 slip_rate: float = 0.0001, warmup: Optional[int] = None,
+                 name: str = "OCC") -> Result:
+    n = len(c_base)
+    _, close_ma, open_ma = (None, *_occ_ma_arrays(c_base, p))
+    if warmup is None:
+        warmup = p.ma_len * max(1, p.mult) + 50
+
+    # Open-Close crossover events on the (mode-dependent) alt MAs.
+    long_evt = [False] * n
+    short_evt = [False] * n
+    for j in range(1, n):
+        long_evt[j] = close_ma[j - 1] <= open_ma[j - 1] and close_ma[j] > open_ma[j]
+        short_evt[j] = close_ma[j - 1] >= open_ma[j - 1] and close_ma[j] < open_ma[j]
+
+    return run_events(c_base, long_evt, short_evt, p, fee_rate, slip_rate, warmup, name)
 
 
 def buy_hold(c_base: List[Candle]) -> Result:

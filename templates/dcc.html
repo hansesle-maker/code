@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Open-Close Cross — Backtest</title>
+  <title>Daily Close Comparison — Backtest</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -19,8 +19,7 @@
            font-size: 13px; min-height: 100vh; -webkit-text-size-adjust: 100%; }
     .topbar { position: sticky; top: 0; z-index: 200; background: var(--bg);
       border-bottom: 1px solid var(--border); padding: 10px 16px;
-      padding-top: max(10px, env(safe-area-inset-top,0));
-      display: flex; align-items: center; gap: 12px; }
+      padding-top: max(10px, env(safe-area-inset-top,0)); display: flex; align-items: center; gap: 12px; }
     .back { font-size: 12px; color: var(--muted); text-decoration: none; padding: 4px 8px;
             border: 1px solid var(--border); border-radius: 6px; white-space: nowrap; }
     .back:hover { color: var(--accent); border-color: var(--accent); }
@@ -80,17 +79,17 @@
 <div class="topbar">
   <a href="/" class="back">← Scanner</a>
   <a href="/lab" class="back">TSI Lab</a>
-  <a href="/dcc" class="back">DCC</a>
+  <a href="/occ" class="back">OCC Cross</a>
   <div>
-    <div class="title">Open-Close Cross</div>
-    <div class="subtitle">non-repainting 백테스트</div>
+    <div class="title">Daily Close Comparison</div>
+    <div class="subtitle">repaint-aware 백테스트 (ChartArt)</div>
   </div>
 </div>
 
 <div class="container">
 
   <div class="section">
-    <div class="section-hd">⚙️ 전략 설정 <span class="hint">— JustUncleL OCC R5.1 (repaint 제거)</span></div>
+    <div class="section-hd">⚙️ 전략 설정 <span class="hint">— 오늘 종가 &gt; 어제 종가 → 롱, 반대면 숏</span></div>
     <div class="section-body">
       <div class="params-grid">
         <div class="param-group">
@@ -98,10 +97,10 @@
           <input type="text" id="symbol" value="BTCUSDT">
         </div>
         <div class="param-group">
-          <label>전략 TF (상위/alt)</label>
+          <label>비교 TF (alt)</label>
           <select id="alt" onchange="updateAltHint()">
-            <option>15m</option><option>30m</option><option>1h</option>
-            <option>2h</option><option selected>4h</option><option>6h</option><option>12h</option>
+            <option>1h</option><option>2h</option><option>4h</option>
+            <option>6h</option><option>12h</option><option selected>1d</option>
           </select>
         </div>
         <div class="param-group">
@@ -115,39 +114,25 @@
           <label>Repaint 모드</label>
           <select id="mode">
             <option value="realtime">realtime (정직·repaint반영)</option>
-            <option value="nonrepaint">nonrepaint (지연·보수적)</option>
+            <option value="nonrepaint">nonrepaint (종가확정시만)</option>
             <option value="lookahead">lookahead (TV식·부풀려짐)</option>
           </select>
         </div>
+        <div class="param-group">
+          <label>임계값 threshold (%)</label>
+          <input type="number" id="threshold_pct" value="0" min="0" max="20" step="0.05">
+        </div>
+        <div class="param-group">
+          <label>Trade 방향</label>
+          <select id="trade_type"><option>BOTH</option><option>LONG</option><option>SHORT</option></select>
+        </div>
         <div class="param-group" style="justify-content:flex-end">
           <label>불리 진입 차단</label>
-          <label class="checkbox-row">
-            <input type="checkbox" id="entry_filter">
-            유리한 진입만
-          </label>
+          <label class="checkbox-row"><input type="checkbox" id="entry_filter"> 유리한 진입만</label>
         </div>
         <div class="param-group">
           <label>허용 슬랙 (bps)</label>
           <input type="number" id="filter_tol_bps" value="0" min="0" max="200" step="1">
-        </div>
-        <div class="param-group">
-          <label>MA 종류</label>
-          <select id="ma_type">
-            <option>SMA</option><option>EMA</option><option>DEMA</option><option>TEMA</option>
-            <option>WMA</option><option>VWMA</option><option selected>SMMA</option>
-            <option>HullMA</option><option>LSMA</option><option>ALMA</option>
-            <option>SSMA</option><option>TMA</option>
-          </select>
-        </div>
-        <div class="param-group">
-          <label>MA 기간</label>
-          <input type="number" id="ma_len" value="8" min="1" max="200">
-        </div>
-        <div class="param-group">
-          <label>Trade 방향</label>
-          <select id="trade_type">
-            <option>BOTH</option><option>LONG</option><option>SHORT</option>
-          </select>
         </div>
         <div class="param-group">
           <label>Days (기간)</label>
@@ -171,29 +156,12 @@
         </div>
       </div>
 
-      <details style="margin-top:12px">
-        <summary style="font-size:11px;color:var(--muted);cursor:pointer">고급 (ALMA / LSMA 파라미터)</summary>
-        <div class="params-grid" style="margin-top:10px">
-          <div class="param-group">
-            <label>LSMA offset / ALMA sigma</label>
-            <input type="number" id="offset_sigma" value="6" min="0" step="1">
-          </div>
-          <div class="param-group">
-            <label>ALMA offset</label>
-            <input type="number" id="offset_alma" value="0.85" min="0" max="1" step="0.05">
-          </div>
-        </div>
-      </details>
-
       <div class="note">
-        <b>realtime</b>: 형성 중인 <b>전략 TF</b> 봉을 <b>반영 주기마다</b> 다시 계산 → 봉 안에서
-        신호가 뒤집히는 repaint를 그대로 반영(진입했다 조정). 미래 정보는 안 쓰므로 <b>실거래 가능</b>.
-        예: 전략 4h + 반영 15m → 4h봉을 15분마다 갱신.<br>
-        <b>nonrepaint</b>: 닫힌 상위 봉만 사용(지연·보수적).
-        <b>lookahead</b>: TV식 — 상위봉 최종값을 미리 사용(미래 정보 → 부풀려짐, 실거래 불가, 비교용).<br>
-        <b>유리한 진입만</b>: 같은 알트봉 안에서 그 방향 신호가 <b>처음 뜬 가격</b>보다 현재 체결가가
-        불리하면 진입을 건너뜀(반대 포지션은 청산만, 신규 진입 X). repaint가 "더 유리한 과거 봉"으로
-        그려내는 허수 진입을 거릅니다. 슬랙(bps)만큼은 불리해도 허용.
+        <b>realtime</b>: 형성 중인 "오늘 종가"(=현재가)를 <b>반영 주기마다</b> 어제 종가와 비교 →
+        하루 안에서 롱/숏이 뒤집히는 repaint를 그대로 반영. 미래 정보 안 씀 → <b>실거래 가능</b>.<br>
+        <b>nonrepaint</b>: 확정된 종가끼리만 비교(종가 마감 때만 갱신).
+        <b>lookahead</b>: TV식 — 오늘 종가의 <b>최종값</b>을 장중에 미리 사용(미래 정보 → 부풀려짐).<br>
+        <b>유리한 진입만</b>: 현재 체결가가 그 신호의 첫 paint 가격보다 불리하면 진입 건너뜀(반대 포지션은 청산만).
       </div>
     </div>
   </div>
@@ -225,14 +193,13 @@
 <script>
 "use strict";
 
-const _IV_MIN = { "5m":5, "15m":15, "30m":30, "1h":60, "2h":120, "4h":240, "6h":360, "12h":720 };
+const _IV_MIN = { "5m":5, "15m":15, "30m":30, "1h":60, "2h":120, "4h":240, "6h":360, "12h":720, "1d":1440 };
 function updateAltHint() {
-  const altM = _IV_MIN[document.getElementById("alt").value] || 240;
+  const altM = _IV_MIN[document.getElementById("alt").value] || 1440;
   const refM = _IV_MIN[document.getElementById("refresh").value] || 15;
   const el = document.getElementById("altHint");
   if (altM < refM || altM % refM !== 0) {
-    el.textContent = "⚠ 전략 TF는 반영 주기의 정수배여야 함";
-    el.style.color = "var(--bear)";
+    el.textContent = "⚠ 비교 TF는 반영 주기의 정수배여야 함"; el.style.color = "var(--bear)";
   } else {
     el.textContent = `= ${altM/refM}배 · ${document.getElementById("refresh").value}마다 갱신`;
     el.style.color = "var(--muted)";
@@ -251,10 +218,9 @@ async function runBacktest() {
     symbol:   document.getElementById("symbol").value.trim().toUpperCase() || "BTCUSDT",
     alt:      document.getElementById("alt").value,
     refresh:  document.getElementById("refresh").value,
-    ma_type:  document.getElementById("ma_type").value,
-    ma_len:   parseInt(document.getElementById("ma_len").value) || 8,
-    trade_type: document.getElementById("trade_type").value,
     mode:     document.getElementById("mode").value,
+    threshold_pct: parseFloat(document.getElementById("threshold_pct").value) || 0,
+    trade_type: document.getElementById("trade_type").value,
     entry_filter: document.getElementById("entry_filter").checked,
     filter_tol_bps: parseFloat(document.getElementById("filter_tol_bps").value) || 0,
     days:     parseInt(document.getElementById("days").value) || 180,
@@ -262,14 +228,11 @@ async function runBacktest() {
     tp_pct:   parseFloat(document.getElementById("tp_pct").value) || 0,
     fee_bps:  parseFloat(document.getElementById("fee_bps").value) || 5,
     slip_bps: parseFloat(document.getElementById("slip_bps").value) || 1,
-    offset_sigma: parseFloat(document.getElementById("offset_sigma").value) || 6,
-    offset_alma:  parseFloat(document.getElementById("offset_alma").value) || 0.85,
   };
 
   try {
-    const resp = await fetch("/api/occ/run", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(cfg),
+    const resp = await fetch("/api/dcc/run", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cfg),
     });
     const data = await resp.json();
     document.getElementById("loadWrap").style.display = "none";
@@ -293,7 +256,6 @@ let chart = null;
 function showResults(data, cfg) {
   document.getElementById("results").style.display = "block";
   const s = data.strategy, b = data.buy_hold;
-
   const sharpeClass = s.sharpe > 1.5 ? "good" : (s.sharpe < 0.5 ? "bad" : "plain");
   const mddClass = s.max_drawdown > -20 ? "good" : (s.max_drawdown < -40 ? "bad" : "plain");
   const vsBh = s.total_return - b.total_return;
@@ -302,7 +264,7 @@ function showResults(data, cfg) {
     <span class="badge ${mddClass}">MDD ${s.max_drawdown.toFixed(1)}%</span>
     <span class="badge ${vsBh>=0?"good":"bad"}">vs B&H ${vsBh>=0?"+":""}${vsBh.toFixed(1)}%</span>
     <span class="badge plain">${s.n_trades}건</span>
-    <span class="badge plain">${data.ma_type} · ${cfg.alt}÷${cfg.refresh}</span>
+    <span class="badge plain">${cfg.alt}÷${cfg.refresh} · thr ${data.threshold_pct}%</span>
     <span class="badge ${data.mode==="lookahead"?"bad":(data.mode==="realtime"?"good":"plain")}">${data.mode}</span>
     ${data.entry_filter ? `<span class="badge good">불리진입 ${data.skipped}건 차단</span>` : ""}
     <span class="badge plain">${data.bars.toLocaleString()} bars</span>`;
@@ -339,7 +301,7 @@ function drawChart(data) {
   chart = new Chart(ctx, {
     type: "line",
     data: { labels, datasets: [
-      { label:"OCC 전략", data:toPct(data.equity), borderColor:"#6a6aff",
+      { label:"DCC 전략", data:toPct(data.equity), borderColor:"#6a6aff",
         backgroundColor:"rgba(106,106,255,0.08)", fill:true, tension:0.15, pointRadius:0, borderWidth:2 },
       { label:"Buy & Hold", data:toPct(data.bh_equity), borderColor:"#7070a0",
         borderDash:[5,4], tension:0.15, pointRadius:0, fill:false, borderWidth:1.5 },
