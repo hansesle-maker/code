@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Open-Close Cross — Backtest</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:#0b0b18; --surface:#13132a; --surface2:#1a1a35; --border:#242450;
+      --text:#dde0ff; --muted:#7070a0; --accent:#6a6aff;
+      --bull:#00d47e; --bear:#ff4a5a; --warn:#ffb340; --radius:10px;
+    }
+    html { background: var(--bg); }
+    body { color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+           font-size: 13px; min-height: 100vh; -webkit-text-size-adjust: 100%; }
+    .topbar { position: sticky; top: 0; z-index: 200; background: var(--bg);
+      border-bottom: 1px solid var(--border); padding: 10px 16px;
+      padding-top: max(10px, env(safe-area-inset-top,0));
+      display: flex; align-items: center; gap: 12px; }
+    .back { font-size: 12px; color: var(--muted); text-decoration: none; padding: 4px 8px;
+            border: 1px solid var(--border); border-radius: 6px; white-space: nowrap; }
+    .back:hover { color: var(--accent); border-color: var(--accent); }
+    .title { font-size: 15px; font-weight: 700; color: var(--accent); }
+    .subtitle { font-size: 11px; color: var(--muted); margin-top: 1px; }
+    .container { max-width: 1000px; margin: 0 auto; padding: 16px 12px 60px; }
+    .section { background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); margin-bottom: 12px; overflow: hidden; }
+    .section-hd { display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+      border-bottom: 1px solid var(--border); font-weight: 700; font-size: 13px; }
+    .section-hd .hint { font-size: 11px; color: var(--muted); font-weight: 400; }
+    .section-body { padding: 14px; }
+    .params-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap: 10px; }
+    .param-group { display: flex; flex-direction: column; gap: 4px; }
+    .param-group label { font-size: 11px; color: var(--muted); }
+    input[type="text"], input[type="number"], select {
+      background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+      border-radius: 6px; font-size: 13px; padding: 6px 10px; width: 100%; }
+    input:focus, select:focus { outline: none; border-color: var(--accent); }
+    .checkbox-row { display: flex; align-items: center; gap: 7px; cursor: pointer; font-size: 13px; }
+    .checkbox-row input { accent-color: var(--accent); width: 14px; height: 14px; }
+    .run-wrap { text-align: center; margin: 16px 0; }
+    #runBtn { font-size: 15px; font-weight: 700; padding: 12px 48px; background: var(--accent);
+      color: #fff; border: none; border-radius: 10px; cursor: pointer; }
+    #runBtn:disabled { opacity: .5; } #runBtn:active { opacity: .8; }
+    .run-hint { font-size: 11px; color: var(--muted); margin-top: 6px; }
+    #results { display: none; }
+    .stats-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 16px; }
+    .stats-table th { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border);
+      color: var(--muted); font-weight: 600; font-size: 11px; }
+    .stats-table td { padding: 7px 12px; border-bottom: 1px solid rgba(36,36,80,.5); font-variant-numeric: tabular-nums; }
+    .stats-table tr:last-child td { border-bottom: none; }
+    .stats-table .label { color: var(--muted); }
+    .pos { color: var(--bull); font-weight: 700; } .neg { color: var(--bear); font-weight: 700; }
+    .neutral { color: var(--text); }
+    .chart-wrap { position: relative; padding: 4px 4px 0; height: 260px; }
+    @media (min-width: 600px) { .chart-wrap { height: 320px; } }
+    .error-bar { margin: 8px 0; padding: 10px 14px; background: rgba(255,74,90,.12);
+      border: 1px solid var(--bear); border-radius: 8px; color: var(--bear); font-size: 12px; }
+    #errorBox { display: none; }
+    .spinner { width: 24px; height: 24px; margin: 0 auto; border: 3px solid var(--border);
+      border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loadWrap { display: none; text-align: center; padding: 24px; }
+    #loadWrap p { color: var(--muted); font-size: 12px; margin-top: 10px; }
+    .result-summary { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+    .badge { padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 700; border: 1px solid transparent; }
+    .badge.good { background: rgba(0,212,126,.15); border-color: var(--bull); color: var(--bull); }
+    .badge.bad  { background: rgba(255,74,90,.15); border-color: var(--bear); color: var(--bear); }
+    .badge.plain{ background: var(--surface2); border-color: var(--border); color: var(--muted); }
+    .note { font-size: 11px; color: var(--muted); line-height: 1.6; margin-top: 4px; }
+    .note b { color: var(--bull); }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <a href="/" class="back">← Scanner</a>
+  <a href="/lab" class="back">TSI Lab</a>
+  <div>
+    <div class="title">Open-Close Cross</div>
+    <div class="subtitle">non-repainting 백테스트</div>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="section">
+    <div class="section-hd">⚙️ 전략 설정 <span class="hint">— JustUncleL OCC R5.1 (repaint 제거)</span></div>
+    <div class="section-body">
+      <div class="params-grid">
+        <div class="param-group">
+          <label>Symbol</label>
+          <input type="text" id="symbol" value="BTCUSDT">
+        </div>
+        <div class="param-group">
+          <label>Base TF (차트 봉)</label>
+          <select id="interval">
+            <option>5m</option><option>15m</option><option>30m</option>
+            <option>1h</option><option>2h</option><option>4h</option>
+          </select>
+        </div>
+        <div class="param-group">
+          <label>Alt 배수 (×Base)</label>
+          <input type="number" id="mult" value="3" min="1" max="12">
+        </div>
+        <div class="param-group">
+          <label>MA 종류</label>
+          <select id="ma_type">
+            <option>SMA</option><option>EMA</option><option>DEMA</option><option>TEMA</option>
+            <option>WMA</option><option>VWMA</option><option selected>SMMA</option>
+            <option>HullMA</option><option>LSMA</option><option>ALMA</option>
+            <option>SSMA</option><option>TMA</option>
+          </select>
+        </div>
+        <div class="param-group">
+          <label>MA 기간</label>
+          <input type="number" id="ma_len" value="8" min="1" max="200">
+        </div>
+        <div class="param-group">
+          <label>Trade 방향</label>
+          <select id="trade_type">
+            <option>BOTH</option><option>LONG</option><option>SHORT</option>
+          </select>
+        </div>
+        <div class="param-group">
+          <label>Days (기간)</label>
+          <input type="number" id="days" value="180" min="14" max="730">
+        </div>
+        <div class="param-group">
+          <label>손절 % (0=off)</label>
+          <input type="number" id="sl_pct" value="0" min="0" max="50" step="0.5">
+        </div>
+        <div class="param-group">
+          <label>익절 % (0=off)</label>
+          <input type="number" id="tp_pct" value="0" min="0" max="100" step="0.5">
+        </div>
+        <div class="param-group">
+          <label>Fee bps</label>
+          <input type="number" id="fee_bps" value="5" min="0" max="100" step="0.5">
+        </div>
+        <div class="param-group">
+          <label>Slippage bps</label>
+          <input type="number" id="slip_bps" value="1" min="0" max="50" step="0.5">
+        </div>
+      </div>
+
+      <details style="margin-top:12px">
+        <summary style="font-size:11px;color:var(--muted);cursor:pointer">고급 (ALMA / LSMA 파라미터)</summary>
+        <div class="params-grid" style="margin-top:10px">
+          <div class="param-group">
+            <label>LSMA offset / ALMA sigma</label>
+            <input type="number" id="offset_sigma" value="6" min="0" step="1">
+          </div>
+          <div class="param-group">
+            <label>ALMA offset</label>
+            <input type="number" id="offset_alma" value="0.85" min="0" max="1" step="0.05">
+          </div>
+        </div>
+      </details>
+
+      <div class="note">
+        <b>비-repaint</b>: 상위 TF(=Base×배수) MA를 <b>닫힌 봉만</b>으로 계산해 forward-fill,
+        진입은 다음 봉 시가 체결 → 과거 신호가 사후에 바뀌지 않습니다.
+        원본 Pine의 <code>lookahead_on</code> repaint를 제거했습니다.
+      </div>
+    </div>
+  </div>
+
+  <div class="run-wrap">
+    <button id="runBtn" onclick="runBacktest()">▶ 백테스트 실행</button>
+    <div class="run-hint">Oracle VM에서 Binance 데이터를 가져오므로 10~30초 소요될 수 있습니다.</div>
+  </div>
+
+  <div id="errorBox" class="error-bar"></div>
+  <div id="loadWrap"><div class="spinner"></div><p>데이터 수집 및 백테스트 중…</p></div>
+
+  <div id="results">
+    <div class="section">
+      <div class="section-hd">📊 결과</div>
+      <div class="section-body">
+        <div class="result-summary" id="summaryBadges"></div>
+        <table class="stats-table" id="statsTable"></table>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-hd">📈 수익률 곡선</div>
+      <div class="section-body"><div class="chart-wrap"><canvas id="equityChart"></canvas></div></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+"use strict";
+
+async function runBacktest() {
+  const btn = document.getElementById("runBtn");
+  btn.disabled = true; btn.textContent = "⏳ 실행 중…";
+  document.getElementById("errorBox").style.display = "none";
+  document.getElementById("results").style.display  = "none";
+  document.getElementById("loadWrap").style.display = "block";
+
+  const cfg = {
+    symbol:   document.getElementById("symbol").value.trim().toUpperCase() || "BTCUSDT",
+    interval: document.getElementById("interval").value,
+    mult:     parseInt(document.getElementById("mult").value) || 3,
+    use_res:  (parseInt(document.getElementById("mult").value) || 3) > 1,
+    ma_type:  document.getElementById("ma_type").value,
+    ma_len:   parseInt(document.getElementById("ma_len").value) || 8,
+    trade_type: document.getElementById("trade_type").value,
+    days:     parseInt(document.getElementById("days").value) || 180,
+    sl_pct:   parseFloat(document.getElementById("sl_pct").value) || 0,
+    tp_pct:   parseFloat(document.getElementById("tp_pct").value) || 0,
+    fee_bps:  parseFloat(document.getElementById("fee_bps").value) || 5,
+    slip_bps: parseFloat(document.getElementById("slip_bps").value) || 1,
+    offset_sigma: parseFloat(document.getElementById("offset_sigma").value) || 6,
+    offset_alma:  parseFloat(document.getElementById("offset_alma").value) || 0.85,
+  };
+
+  try {
+    const resp = await fetch("/api/occ/run", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cfg),
+    });
+    const data = await resp.json();
+    document.getElementById("loadWrap").style.display = "none";
+    if (!data.ok) showError(data.error || "Unknown error");
+    else          showResults(data, cfg);
+  } catch (err) {
+    document.getElementById("loadWrap").style.display = "none";
+    showError("네트워크 오류: " + err.message);
+  } finally {
+    btn.disabled = false; btn.textContent = "▶ 백테스트 실행";
+  }
+}
+
+function showError(msg) {
+  const el = document.getElementById("errorBox");
+  el.textContent = "⚠ " + msg; el.style.display = "block";
+}
+
+let chart = null;
+
+function showResults(data, cfg) {
+  document.getElementById("results").style.display = "block";
+  const s = data.strategy, b = data.buy_hold;
+
+  const sharpeClass = s.sharpe > 1.5 ? "good" : (s.sharpe < 0.5 ? "bad" : "plain");
+  const mddClass = s.max_drawdown > -20 ? "good" : (s.max_drawdown < -40 ? "bad" : "plain");
+  const vsBh = s.total_return - b.total_return;
+  document.getElementById("summaryBadges").innerHTML = `
+    <span class="badge ${sharpeClass}">Sharpe ${s.sharpe.toFixed(2)}</span>
+    <span class="badge ${mddClass}">MDD ${s.max_drawdown.toFixed(1)}%</span>
+    <span class="badge ${vsBh>=0?"good":"bad"}">vs B&H ${vsBh>=0?"+":""}${vsBh.toFixed(1)}%</span>
+    <span class="badge plain">${s.n_trades}건</span>
+    <span class="badge plain">${data.ma_type} · ${cfg.interval}×${cfg.mult}</span>
+    <span class="badge plain">${data.bars.toLocaleString()} bars</span>`;
+
+  const pf = s.profit_factor !== null ? s.profit_factor.toFixed(2) : "∞";
+  const pct = v => (v>=0?"+":"") + v.toFixed(2) + "%";
+  const cls = v => v>=0 ? "pos" : "neg";
+  const row = (l, sv, bv, c="neutral") => `<tr><td class="label">${l}</td><td class="${c}">${sv}</td><td class="neutral">${bv}</td></tr>`;
+  document.getElementById("statsTable").innerHTML = `
+    <thead><tr><th>지표</th><th>전략</th><th>Buy &amp; Hold</th></tr></thead>
+    <tbody>
+      ${row("총 수익률", pct(s.total_return), pct(b.total_return), cls(s.total_return))}
+      ${row("CAGR", pct(s.cagr), pct(b.cagr), cls(s.cagr))}
+      ${row("최대 낙폭", pct(s.max_drawdown), pct(b.max_drawdown), s.max_drawdown<b.max_drawdown?"pos":"neg")}
+      ${row("Sharpe", s.sharpe.toFixed(2), b.sharpe.toFixed(2))}
+      ${row("Profit Factor", pf, "—")}
+      ${row("승률", pct(s.win_rate), "—")}
+      ${row("거래 수", s.n_trades, "—")}
+      ${row("평균 승 / 패", `${pct(s.avg_win)} / ${pct(s.avg_loss)}`, "—")}
+    </tbody>`;
+
+  drawChart(data);
+  document.getElementById("results").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function drawChart(data) {
+  const ctx = document.getElementById("equityChart").getContext("2d");
+  if (chart) chart.destroy();
+  const labels = data.times.map(t => {
+    const d = new Date(t);
+    return d.getUTCFullYear() + "-" + String(d.getUTCMonth()+1).padStart(2,"0") + "-" + String(d.getUTCDate()).padStart(2,"0");
+  });
+  const toPct = arr => arr.map(v => +((v-1)*100).toFixed(3));
+  chart = new Chart(ctx, {
+    type: "line",
+    data: { labels, datasets: [
+      { label:"OCC 전략", data:toPct(data.equity), borderColor:"#6a6aff",
+        backgroundColor:"rgba(106,106,255,0.08)", fill:true, tension:0.15, pointRadius:0, borderWidth:2 },
+      { label:"Buy & Hold", data:toPct(data.bh_equity), borderColor:"#7070a0",
+        borderDash:[5,4], tension:0.15, pointRadius:0, fill:false, borderWidth:1.5 },
+    ]},
+    options: { responsive:true, maintainAspectRatio:false, animation:false,
+      interaction:{mode:"index",intersect:false},
+      plugins:{ legend:{labels:{color:"#dde0ff",font:{size:12},boxWidth:16}},
+        tooltip:{backgroundColor:"#13132a",borderColor:"#242450",borderWidth:1,titleColor:"#dde0ff",bodyColor:"#7070a0",
+          callbacks:{label:c=>` ${c.dataset.label}: ${c.parsed.y.toFixed(2)}%`}}},
+      scales:{ x:{ticks:{color:"#7070a0",maxTicksLimit:8,maxRotation:0},grid:{color:"rgba(36,36,80,.5)"}},
+        y:{ticks:{color:"#7070a0",callback:v=>(v>=0?"+":"")+v.toFixed(0)+"%"},grid:{color:"rgba(36,36,80,.5)"}}}},
+  });
+}
+</script>
+</body>
+</html>
