@@ -620,12 +620,9 @@ def _stat_box(ax, s: dict, tf: str):
         y -= 0.085
 
 
-def plot_results(symbol: str, results: dict, out_path: str) -> None:
+def build_figure(symbol: str, results: dict) -> plt.Figure:
+    """Build and return the matplotlib Figure for all TFs. Caller must close it."""
     n_tf = len(results)
-    if n_tf == 0:
-        print("No results to plot.")
-        return
-
     fig = plt.figure(figsize=(22, 8 * n_tf), facecolor=_C["bg"])
     outer = gridspec.GridSpec(n_tf, 1, figure=fig, hspace=0.5)
 
@@ -650,6 +647,14 @@ def plot_results(symbol: str, results: dict, out_path: str) -> None:
         f"Cardwell RSI Trade Navigator — {symbol}",
         color="white", fontsize=15, y=1.005, fontweight="bold"
     )
+    return fig
+
+
+def plot_results(symbol: str, results: dict, out_path: str) -> None:
+    if not results:
+        print("No results to plot.")
+        return
+    fig = build_figure(symbol, results)
     plt.savefig(out_path, dpi=140, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close(fig)
     print(f"  Chart saved → {out_path}")

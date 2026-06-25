@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Cardwell RSI Backtester</title>
+<style>
+/* ── Design tokens ─────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:      #0b0b18;
+  --surface: #13132a;
+  --surface2:#1a1a35;
+  --border:  #242450;
+  --text:    #dde0ff;
+  --muted:   #7070a0;
+  --accent:  #6a6aff;
+  --bull:    #00d47e;
+  --bear:    #ff4a5a;
+  --warn:    #ffb340;
+  --tp1:     #0e8060;
+  --tp2:     #0e9870;
+  --tp3:     #12c090;
+  --radius:  10px;
+}
+html { background: var(--bg); scroll-behavior: smooth; }
+body {
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  font-size: 13px;
+  min-height: 100vh;
+}
+
+/* ── Layout ──────────────────────────────────────────────────────── */
+.app { display: flex; flex-direction: column; min-height: 100vh; }
+.topbar {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 10px 16px;
+  display: flex; align-items: center; gap: 12px;
+}
+.topbar-title { font-size: 15px; font-weight: 700; color: var(--accent); white-space: nowrap; }
+.topbar-sub   { font-size: 11px; color: var(--muted); margin-left: auto; }
+
+.main {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  flex: 1;
+  min-height: 0;
+}
+@media (max-width: 800px) {
+  .main { grid-template-columns: 1fr; }
+}
+
+/* ── Form panel ──────────────────────────────────────────────────── */
+.form-panel {
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 14px 12px;
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: 14px;
+}
+@media (min-width: 801px) {
+  .form-panel { position: sticky; top: 41px; height: calc(100vh - 41px); }
+}
+
+.field-label {
+  font-size: 10px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .6px; margin-bottom: 5px;
+}
+
+.sym-row { display: flex; gap: 6px; }
+.sym-input {
+  flex: 1; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--text); font-size: 13px;
+  padding: 7px 10px; font-family: monospace; text-transform: uppercase;
+}
+.sym-input:focus { outline: none; border-color: var(--accent); }
+.sym-input::placeholder { color: var(--muted); text-transform: none; }
+
+.chip-row { display: flex; gap: 5px; flex-wrap: wrap; }
+.chip {
+  padding: 5px 12px; border-radius: 20px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--muted); font-size: 12px; cursor: pointer;
+  transition: all .12s; -webkit-tap-highlight-color: transparent;
+}
+.chip:hover  { border-color: var(--accent); color: var(--text); }
+.chip.active { background: rgba(106,106,255,.2); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.chip.tf-chip.active-bull { background: rgba(0,212,126,.15); border-color: var(--bull); color: var(--bull); }
+
+.period-row { display: grid; grid-template-columns: repeat(3,1fr); gap: 5px; }
+.period-btn {
+  padding: 5px 4px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--muted); font-size: 11px; cursor: pointer;
+  text-align: center; transition: all .12s;
+}
+.period-btn:hover { border-color: var(--accent); color: var(--text); }
+.period-btn.active { background: rgba(106,106,255,.2); border-color: var(--accent); color: var(--accent); }
+
+.date-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.date-input {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); font-size: 12px; padding: 6px 8px;
+  color-scheme: dark;
+}
+.date-input:focus { outline: none; border-color: var(--accent); }
+
+.divider { border: none; border-top: 1px solid var(--border); margin: 2px 0; }
+
+/* Collapsible params */
+.params-toggle {
+  display: flex; align-items: center; justify-content: space-between;
+  background: none; border: none; color: var(--muted); font-size: 11px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: .6px;
+  cursor: pointer; width: 100%; padding: 0;
+}
+.params-toggle .caret { transition: transform .2s; }
+.params-toggle.open .caret { transform: rotate(180deg); }
+.params-body { display: none; margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.params-body.hidden { display: none; }
+
+.param-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.param-group { display: flex; flex-direction: column; gap: 3px; }
+.param-label { font-size: 10px; color: var(--muted); }
+.param-input {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text); font-size: 12px; padding: 5px 8px;
+}
+.param-input:focus { outline: none; border-color: var(--accent); }
+select.param-input option { background: #1a1a35; }
+
+.toggle-row { display: flex; align-items: center; justify-content: space-between; }
+.toggle-label { font-size: 12px; color: var(--text); }
+.toggle {
+  position: relative; width: 36px; height: 20px; cursor: pointer;
+}
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+  position: absolute; inset: 0; border-radius: 20px;
+  background: var(--border); transition: .2s;
+}
+.toggle-slider::before {
+  content: ""; position: absolute; left: 3px; top: 3px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--muted); transition: .2s;
+}
+.toggle input:checked + .toggle-slider { background: var(--accent); }
+.toggle input:checked + .toggle-slider::before { transform: translateX(16px); background: white; }
+
+.run-btn {
+  width: 100%; padding: 11px; border-radius: 10px;
+  background: var(--accent); border: none; color: white;
+  font-size: 14px; font-weight: 700; cursor: pointer; transition: opacity .15s;
+}
+.run-btn:hover   { opacity: .88; }
+.run-btn:active  { opacity: .7; }
+.run-btn:disabled{ opacity: .4; cursor: not-allowed; }
+
+/* ── Results panel ───────────────────────────────────────────────── */
+.results-panel { padding: 14px 14px 40px; overflow-y: auto; }
+
+/* Empty / loading / error */
+.placeholder {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 300px; color: var(--muted); text-align: center; gap: 10px;
+}
+.spinner {
+  width: 32px; height: 32px; border: 3px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.error-box {
+  background: rgba(255,74,90,.1); border: 1px solid var(--bear);
+  border-radius: 10px; padding: 12px 14px; color: var(--bear); font-size: 12px;
+}
+
+/* TF tabs */
+.tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+.tab-btn {
+  padding: 8px 16px; border: none; border-bottom: 2px solid transparent;
+  background: none; color: var(--muted); font-size: 13px; cursor: pointer;
+  font-weight: 600; transition: all .12s;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+
+/* Stats grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px; margin-bottom: 16px;
+}
+.stat-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 10px 12px;
+}
+.stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+.stat-val   { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat-val.bull { color: var(--bull); }
+.stat-val.bear { color: var(--bear); }
+.stat-val.neutral { color: var(--text); }
+.stat-sub   { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+/* TP hit bar */
+.tp-bar-row { display: flex; gap: 6px; margin-bottom: 14px; }
+.tp-seg {
+  flex: 1; padding: 6px 8px; border-radius: 8px;
+  font-size: 11px; font-weight: 700; text-align: center;
+}
+.tp1-seg { background: rgba(14,128,96,.2);  color: var(--tp1); border: 1px solid var(--tp1); }
+.tp2-seg { background: rgba(14,152,112,.2); color: var(--tp2); border: 1px solid var(--tp2); }
+.tp3-seg { background: rgba(18,192,144,.2); color: var(--tp3); border: 1px solid var(--tp3); }
+.sl-seg  { background: rgba(255,74,90,.1);  color: var(--bear); border: 1px solid var(--bear); }
+
+/* Trade table */
+.table-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.table-header h4 { font-size: 13px; color: var(--text); }
+.table-actions { display: flex; gap: 6px; }
+.small-btn {
+  font-size: 11px; padding: 4px 10px; border-radius: 6px;
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--muted); cursor: pointer; transition: .12s;
+}
+.small-btn:hover { color: var(--text); border-color: var(--accent); }
+
+.table-wrap { overflow-x: auto; border-radius: 10px; border: 1px solid var(--border); }
+table { width: 100%; border-collapse: collapse; font-size: 11px; }
+th {
+  padding: 8px 10px; text-align: left; background: var(--surface2);
+  color: var(--muted); font-weight: 600; font-size: 10px; text-transform: uppercase;
+  letter-spacing: .4px; white-space: nowrap; cursor: pointer; user-select: none;
+}
+th:hover { color: var(--text); }
+th.sorted-asc::after  { content: " ▲"; }
+th.sorted-desc::after { content: " ▼"; }
+td {
+  padding: 7px 10px; border-top: 1px solid var(--border);
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+tr:hover td { background: rgba(106,106,255,.05); }
+.dir-long  { color: var(--bull); font-weight: 700; }
+.dir-short { color: var(--bear); font-weight: 700; }
+.pnl-pos   { color: var(--bull); font-weight: 700; }
+.pnl-neg   { color: var(--bear); font-weight: 700; }
+.reason-tp3 { color: var(--tp3); }
+.reason-sl  { color: var(--bear); }
+.reason-ov  { color: var(--muted); font-style: italic; }
+.check { color: var(--bull); }
+.cross { color: var(--border); }
+
+/* Chart section */
+.chart-section { margin-top: 20px; }
+.chart-section h4 { font-size: 13px; color: var(--text); margin-bottom: 8px; }
+.chart-wrap {
+  border-radius: 10px; overflow: hidden; border: 1px solid var(--border);
+  background: #0d0d1a;
+}
+.chart-wrap img { width: 100%; display: block; cursor: zoom-in; }
+
+/* Overall summary */
+.overall-banner {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 12px 16px;
+  display: flex; gap: 20px; flex-wrap: wrap; align-items: center;
+  margin-bottom: 16px; font-size: 13px;
+}
+.overall-item { display: flex; flex-direction: column; gap: 2px; }
+.overall-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+.overall-val   { font-size: 16px; font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- Top bar -->
+<header class="topbar">
+  <div class="topbar-title">Cardwell RSI Backtester</div>
+  <div class="topbar-sub" id="sym-status">심볼 목록 로딩 중…</div>
+</header>
+
+<div class="main">
+
+<!-- ── Form panel ──────────────────────────────────────────────── -->
+<aside class="form-panel">
+
+  <!-- Symbol -->
+  <div>
+    <div class="field-label">심볼 (Binance 선물)</div>
+    <div class="sym-row">
+      <input id="sym-input" class="sym-input" list="sym-list"
+             placeholder="예: BTCUSDT, ETHUSDT…" value="BTCUSDT" autocomplete="off">
+      <datalist id="sym-list"></datalist>
+    </div>
+  </div>
+
+  <!-- Timeframes -->
+  <div>
+    <div class="field-label">타임프레임</div>
+    <div class="chip-row">
+      <label class="chip tf-chip active" data-tf="15m">
+        <input type="checkbox" name="tf" value="15m" checked hidden> 15m
+      </label>
+      <label class="chip tf-chip active" data-tf="1h">
+        <input type="checkbox" name="tf" value="1h"  checked hidden> 1h
+      </label>
+      <label class="chip tf-chip active" data-tf="4h">
+        <input type="checkbox" name="tf" value="4h"  checked hidden> 4h
+      </label>
+    </div>
+  </div>
+
+  <!-- Period presets -->
+  <div>
+    <div class="field-label">기간</div>
+    <div class="period-row" id="period-btns">
+      <button class="period-btn" data-p="1M">1개월</button>
+      <button class="period-btn" data-p="3M">3개월</button>
+      <button class="period-btn" data-p="6M">6개월</button>
+      <button class="period-btn active" data-p="1Y">1년</button>
+      <button class="period-btn" data-p="2Y">2년</button>
+      <button class="period-btn" data-p="3Y">3년</button>
+    </div>
+  </div>
+
+  <!-- Custom date range -->
+  <div>
+    <div class="field-label">직접 설정 (선택 시 기간 무시)</div>
+    <div class="date-row">
+      <input id="start-date" type="date" class="date-input" placeholder="시작일">
+      <input id="end-date"   type="date" class="date-input" placeholder="종료일">
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- Strategy params (collapsible) -->
+  <div>
+    <button class="params-toggle" id="params-toggle" onclick="toggleParams()">
+      <span>전략 파라미터</span>
+      <span class="caret">▼</span>
+    </button>
+    <div class="params-body hidden" id="params-body">
+
+      <div class="param-row">
+        <div class="param-group">
+          <div class="param-label">MA 타입</div>
+          <select id="p-maType" class="param-input">
+            <option value="RMA" selected>RMA</option>
+            <option value="LLAMA">LLAMA</option>
+            <option value="Kalman">Kalman</option>
+          </select>
+        </div>
+        <div class="param-group">
+          <div class="param-label">RSI 기간</div>
+          <input id="p-rsiLen" type="number" class="param-input" value="14" min="2">
+        </div>
+      </div>
+
+      <div class="param-row">
+        <div class="param-group">
+          <div class="param-label">Fast 기간</div>
+          <input id="p-fastLen" type="number" class="param-input" value="9" min="2">
+        </div>
+        <div class="param-group">
+          <div class="param-label">Slow 기간</div>
+          <input id="p-slowLen" type="number" class="param-input" value="45" min="2">
+        </div>
+      </div>
+
+      <div class="param-row">
+        <div class="param-group">
+          <div class="param-label">ATR 기간</div>
+          <input id="p-atrLen" type="number" class="param-input" value="14" min="1">
+        </div>
+        <div class="param-group">
+          <div class="param-label">ATR SL 배수</div>
+          <input id="p-atrMultSl" type="number" class="param-input" value="1.5" step="0.1" min="0.1">
+        </div>
+      </div>
+
+      <div class="param-row">
+        <div class="param-group">
+          <div class="param-label">TP1 R:R</div>
+          <input id="p-rr1" type="number" class="param-input" value="1.0" step="0.1" min="0.1">
+        </div>
+        <div class="param-group">
+          <div class="param-label">TP2 R:R</div>
+          <input id="p-rr2" type="number" class="param-input" value="2.0" step="0.1" min="0.1">
+        </div>
+      </div>
+
+      <div class="param-row">
+        <div class="param-group">
+          <div class="param-label">TP3 R:R</div>
+          <input id="p-rr3" type="number" class="param-input" value="3.0" step="0.1" min="0.1">
+        </div>
+        <div class="param-group">
+          <div class="param-label">ADX 최소값</div>
+          <input id="p-adxMin" type="number" class="param-input" value="20" step="1">
+        </div>
+      </div>
+
+      <div class="toggle-row">
+        <span class="toggle-label">HTF 필터 (4h 기준)</span>
+        <label class="toggle"><input type="checkbox" id="p-useHtf"><span class="toggle-slider"></span></label>
+      </div>
+      <div class="toggle-row">
+        <span class="toggle-label">ADX 필터</span>
+        <label class="toggle"><input type="checkbox" id="p-useChop"><span class="toggle-slider"></span></label>
+      </div>
+      <div class="toggle-row">
+        <span class="toggle-label">TP1 도달 시 BE 이동</span>
+        <label class="toggle"><input type="checkbox" id="p-trailStop"><span class="toggle-slider"></span></label>
+      </div>
+
+    </div><!-- /params-body -->
+  </div>
+
+  <!-- Run button -->
+  <button class="run-btn" id="run-btn" onclick="runBacktest()">▶ 백테스트 실행</button>
+
+</aside><!-- /form-panel -->
+
+<!-- ── Results panel ────────────────────────────────────────────── -->
+<main class="results-panel" id="results-panel">
+  <div class="placeholder" id="placeholder">
+    <div style="font-size:40px">📊</div>
+    <p style="font-size:15px; color:var(--text)">백테스트를 실행하세요</p>
+    <p>심볼, 타임프레임, 기간을 선택한 뒤<br>실행 버튼을 누르세요.</p>
+  </div>
+  <div id="result-content" style="display:none"></div>
+</main>
+
+</div><!-- /main -->
+</div><!-- /app -->
+
+<script>
+"use strict";
+
+// ── Symbol autocomplete ─────────────────────────────────────────
+async function loadSymbols() {
+  try {
+    const syms = await fetch("/api/symbols").then(r => r.json());
+    const dl = document.getElementById("sym-list");
+    dl.innerHTML = syms.map(s => `<option value="${s}">`).join("");
+    document.getElementById("sym-status").textContent = `${syms.length}개 선물 심볼`;
+  } catch(e) {
+    document.getElementById("sym-status").textContent = "심볼 로드 실패";
+  }
+}
+loadSymbols();
+
+// ── TF chips ────────────────────────────────────────────────────
+document.querySelectorAll(".tf-chip").forEach(chip => {
+  chip.addEventListener("click", e => {
+    e.preventDefault();
+    const cb = chip.querySelector("input");
+    cb.checked = !cb.checked;
+    chip.classList.toggle("active", cb.checked);
+  });
+});
+
+// ── Period preset ───────────────────────────────────────────────
+let activePeriod = "1Y";
+document.querySelectorAll(".period-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".period-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    activePeriod = btn.dataset.p;
+    // Clear custom dates when preset is chosen
+    document.getElementById("start-date").value = "";
+    document.getElementById("end-date").value = "";
+  });
+});
+
+// Clear preset when custom dates are typed
+["start-date","end-date"].forEach(id => {
+  document.getElementById(id).addEventListener("change", () => {
+    document.querySelectorAll(".period-btn").forEach(b => b.classList.remove("active"));
+    activePeriod = "";
+  });
+});
+
+// ── Params toggle ───────────────────────────────────────────────
+function toggleParams() {
+  const body = document.getElementById("params-body");
+  const btn  = document.getElementById("params-toggle");
+  const open = body.classList.toggle("hidden");
+  btn.classList.toggle("open", !open);
+}
+
+// ── Run backtest ────────────────────────────────────────────────
+async function runBacktest() {
+  const symbol = document.getElementById("sym-input").value.trim().toUpperCase();
+  if (!symbol) { alert("심볼을 입력하세요."); return; }
+
+  const tfs = Array.from(document.querySelectorAll('input[name="tf"]:checked'))
+                   .map(cb => cb.value);
+  if (!tfs.length) { alert("타임프레임을 하나 이상 선택하세요."); return; }
+
+  const startDate = document.getElementById("start-date").value;
+  const endDate   = document.getElementById("end-date").value;
+
+  const params = {
+    maType:    document.getElementById("p-maType").value,
+    rsiLen:    +document.getElementById("p-rsiLen").value,
+    fastLen:   +document.getElementById("p-fastLen").value,
+    slowLen:   +document.getElementById("p-slowLen").value,
+    atrLen:    +document.getElementById("p-atrLen").value,
+    atrMultSl: +document.getElementById("p-atrMultSl").value,
+    rr1:       +document.getElementById("p-rr1").value,
+    rr2:       +document.getElementById("p-rr2").value,
+    rr3:       +document.getElementById("p-rr3").value,
+    adxMin:    +document.getElementById("p-adxMin").value,
+    useHtf:    document.getElementById("p-useHtf").checked,
+    useChop:   document.getElementById("p-useChop").checked,
+    trailStop: document.getElementById("p-trailStop").checked,
+  };
+
+  // Show loading
+  const runBtn = document.getElementById("run-btn");
+  runBtn.disabled = true;
+  runBtn.textContent = "실행 중…";
+  document.getElementById("placeholder").style.display = "none";
+  document.getElementById("result-content").style.display = "none";
+  showLoading();
+
+  try {
+    const res = await fetch("/api/run", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        symbol, timeframes: tfs,
+        period: activePeriod || "1Y",
+        start_date: startDate, end_date: endDate,
+        params,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "알 수 없는 오류");
+    renderResults(data);
+  } catch(e) {
+    showError(e.message);
+  } finally {
+    runBtn.disabled = false;
+    runBtn.textContent = "▶ 백테스트 실행";
+  }
+}
+
+function showLoading() {
+  const cont = document.getElementById("result-content");
+  cont.style.display = "block";
+  cont.innerHTML = `
+    <div class="placeholder">
+      <div class="spinner"></div>
+      <p>Binance 데이터 수집 및 백테스트 중…<br>
+         <small style="color:var(--muted)">기간에 따라 10~30초 소요될 수 있습니다.</small></p>
+    </div>`;
+}
+
+function showError(msg) {
+  const cont = document.getElementById("result-content");
+  cont.style.display = "block";
+  cont.innerHTML = `<div class="error-box">⚠️ ${escHtml(msg)}</div>`;
+}
+
+// ── Render results ──────────────────────────────────────────────
+let _allTrades = {};  // tf -> trades array (for sort/CSV)
+let _sortState  = {}; // tf -> {col, asc}
+
+function renderResults(data) {
+  _allTrades = {};
+  const cont = document.getElementById("result-content");
+
+  const tfs = Object.keys(data.timeframes).filter(tf => !data.timeframes[tf].error);
+  const errTfs = Object.keys(data.timeframes).filter(tf =>  data.timeframes[tf].error);
+
+  let html = "";
+
+  // Error banners
+  errTfs.forEach(tf => {
+    html += `<div class="error-box" style="margin-bottom:10px">
+      ⚠️ [${tf}] ${escHtml(data.timeframes[tf].error)}</div>`;
+  });
+
+  // Overall combined stats
+  if (tfs.length > 1) {
+    html += renderOverall(data.timeframes, tfs);
+  }
+
+  // TF tabs
+  if (tfs.length > 0) {
+    html += `<div class="tabs">`;
+    tfs.forEach((tf, i) => {
+      html += `<button class="tab-btn ${i===0?'active':''}" data-tf="${tf}"
+               onclick="switchTab('${tf}')">${tf.toUpperCase()}</button>`;
+    });
+    html += `</div>`;
+
+    tfs.forEach((tf, i) => {
+      const d = data.timeframes[tf];
+      _allTrades[tf] = d.trades || [];
+      html += `<div class="tab-pane ${i===0?'active':''}" id="tab-${tf}">`;
+      html += renderTfStats(tf, d);
+      html += renderTradeTable(tf, _allTrades[tf]);
+      html += `</div>`;
+    });
+  }
+
+  // Chart
+  if (data.chart_b64) {
+    html += `<div class="chart-section">
+      <h4>백테스트 차트</h4>
+      <div class="chart-wrap">
+        <img src="data:image/png;base64,${data.chart_b64}"
+             alt="Backtest Chart"
+             onclick="this.requestFullscreen?.()">
+      </div>
+    </div>`;
+  }
+
+  cont.innerHTML = html;
+  cont.style.display = "block";
+
+  // Sort state per TF
+  tfs.forEach(tf => { _sortState[tf] = {col: "entry_t", asc: true}; });
+}
+
+function renderOverall(tfs_data, tfs) {
+  let total = 0, wins = 0, totalR = 0;
+  tfs.forEach(tf => {
+    const s = tfs_data[tf].stats;
+    if (!s) return;
+    total += s.n || 0;
+    wins  += s.wins || 0;
+    totalR += s.total_r || 0;
+  });
+  const wr = total > 0 ? (wins/total*100).toFixed(1) : "—";
+  const rColor = totalR >= 0 ? "bull" : "bear";
+  const rSign  = totalR >= 0 ? "+" : "";
+  return `<div class="overall-banner">
+    <div class="overall-item">
+      <div class="overall-label">전체 트레이드</div>
+      <div class="overall-val">${total}</div>
+    </div>
+    <div class="overall-item">
+      <div class="overall-label">승률</div>
+      <div class="overall-val">${wr}%</div>
+    </div>
+    <div class="overall-item">
+      <div class="overall-label">합산 Total R</div>
+      <div class="overall-val ${rColor}">${rSign}${totalR.toFixed(2)}R</div>
+    </div>
+    <div class="overall-item" style="margin-left:auto;font-size:11px;color:var(--muted)">
+      타임프레임: ${tfs.join(" / ")}
+    </div>
+  </div>`;
+}
+
+function renderTfStats(tf, d) {
+  const s = d.stats;
+  if (!s) return `<p style="color:var(--muted);padding:10px 0">트레이드 없음</p>`;
+
+  const pf   = s.pf === Infinity ? "∞" : s.pf?.toFixed(2) ?? "—";
+  const rCol = s.total_r >= 0 ? "bull" : "bear";
+  const wrCol= s.win_rate >= 50 ? "bull" : "bear";
+  const ddCol= "bear";
+
+  return `
+  <div style="font-size:11px;color:var(--muted);margin-bottom:10px">
+    ${d.date_range} &nbsp;·&nbsp; ${d.bars.toLocaleString()} 봉
+  </div>
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">총 트레이드</div>
+      <div class="stat-val neutral">${s.n}</div>
+      <div class="stat-sub">${s.long_n}L / ${s.short_n}S</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">승률</div>
+      <div class="stat-val ${wrCol}">${s.win_rate?.toFixed(1)}%</div>
+      <div class="stat-sub">${s.wins}승 / ${s.losses}패</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Total R</div>
+      <div class="stat-val ${rCol}">${s.total_r >= 0 ? "+" : ""}${s.total_r?.toFixed(2)}R</div>
+      <div class="stat-sub">평균 ${s.avg_r >= 0 ? "+" : ""}${s.avg_r?.toFixed(2)}R</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Profit Factor</div>
+      <div class="stat-val ${(s.pf || 0) >= 1 ? "bull" : "bear"}">${pf}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Max Drawdown</div>
+      <div class="stat-val ${ddCol}">${s.max_dd_r?.toFixed(2)}R</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Best / Worst</div>
+      <div class="stat-val neutral" style="font-size:13px">
+        <span style="color:var(--bull)">+${s.best_r?.toFixed(2)}</span>
+        / <span style="color:var(--bear)">${s.worst_r?.toFixed(2)}</span>R
+      </div>
+    </div>
+  </div>
+  <div class="tp-bar-row">
+    <div class="tp-seg tp1-seg">TP1 ${s.tp1_pct?.toFixed(0)}%</div>
+    <div class="tp-seg tp2-seg">TP2 ${s.tp2_pct?.toFixed(0)}%</div>
+    <div class="tp-seg tp3-seg">TP3 ${s.tp3_pct?.toFixed(0)}%</div>
+    <div class="tp-seg sl-seg">SL ${s.sl_pct?.toFixed(0)}%</div>
+  </div>`;
+}
+
+function renderTradeTable(tf, trades) {
+  const id = `tbl-${tf}`;
+  if (!trades || !trades.length) {
+    return `<p style="color:var(--muted);font-size:12px">트레이드 기록 없음</p>`;
+  }
+  return `
+  <div class="table-header">
+    <h4>트레이드 기록 <span style="color:var(--muted);font-weight:400">(${trades.length}건)</span></h4>
+    <div class="table-actions">
+      <button class="small-btn" onclick="downloadCsv('${tf}')">CSV 다운로드</button>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table id="${id}">
+      <thead>
+        <tr>
+          <th onclick="sortTable('${tf}','#')">#</th>
+          <th onclick="sortTable('${tf}','dir')">방향</th>
+          <th onclick="sortTable('${tf}','entry_t')">진입 시간</th>
+          <th onclick="sortTable('${tf}','exit_t')">청산 시간</th>
+          <th onclick="sortTable('${tf}','entry_px')">진입가</th>
+          <th onclick="sortTable('${tf}','exit_px')">청산가</th>
+          <th onclick="sortTable('${tf}','pnl_r')">P&amp;L (R)</th>
+          <th onclick="sortTable('${tf}','reason')">사유</th>
+          <th>TP1</th><th>TP2</th><th>TP3</th>
+        </tr>
+      </thead>
+      <tbody>${buildRows(tf, trades)}</tbody>
+    </table>
+  </div>`;
+}
+
+function buildRows(tf, trades) {
+  return trades.map((t, i) => {
+    const dirCls  = t.dir === "Long" ? "dir-long" : "dir-short";
+    const pnlCls  = t.pnl_r >= 0 ? "pnl-pos" : "pnl-neg";
+    const pnlSign = t.pnl_r >= 0 ? "+" : "";
+    const reasonCls = t.reason === "TP3" ? "reason-tp3"
+                    : t.reason.startsWith("SL") ? "reason-sl"
+                    : "reason-ov";
+    const chk = v => v ? '<span class="check">✓</span>' : '<span class="cross">—</span>';
+    return `<tr>
+      <td style="color:var(--muted)">${i+1}</td>
+      <td class="${dirCls}">${t.dir === "Long" ? "▲Long" : "▼Short"}</td>
+      <td>${escHtml(t.entry_t)}</td>
+      <td>${escHtml(t.exit_t)}</td>
+      <td>${t.entry_px.toLocaleString()}</td>
+      <td>${t.exit_px.toLocaleString()}</td>
+      <td class="${pnlCls}">${pnlSign}${t.pnl_r.toFixed(3)}R</td>
+      <td class="${reasonCls}">${escHtml(t.reason)}</td>
+      <td>${chk(t.tp1)}</td><td>${chk(t.tp2)}</td><td>${chk(t.tp3)}</td>
+    </tr>`;
+  }).join("");
+}
+
+// ── Tab switching ───────────────────────────────────────────────
+function switchTab(tf) {
+  document.querySelectorAll(".tab-btn" ).forEach(b => b.classList.toggle("active", b.dataset.tf === tf));
+  document.querySelectorAll(".tab-pane").forEach(p => p.classList.toggle("active", p.id === `tab-${tf}`));
+}
+
+// ── Table sort ──────────────────────────────────────────────────
+function sortTable(tf, col) {
+  const state = _sortState[tf] ||= { col: "entry_t", asc: true };
+  state.asc = state.col === col ? !state.asc : true;
+  state.col = col;
+
+  const trades = [..._allTrades[tf]];
+  trades.sort((a, b) => {
+    let av = col === "#" ? _allTrades[tf].indexOf(a) : a[col];
+    let bv = col === "#" ? _allTrades[tf].indexOf(b) : b[col];
+    if (typeof av === "string") av = av.toLowerCase();
+    if (typeof bv === "string") bv = bv.toLowerCase();
+    const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+    return state.asc ? cmp : -cmp;
+  });
+
+  const tbody = document.querySelector(`#tbl-${tf} tbody`);
+  if (tbody) tbody.innerHTML = buildRows(tf, trades);
+
+  // Update header indicators
+  document.querySelectorAll(`#tbl-${tf} th`).forEach(th => {
+    th.classList.remove("sorted-asc","sorted-desc");
+  });
+}
+
+// ── CSV export ──────────────────────────────────────────────────
+function downloadCsv(tf) {
+  const trades = _allTrades[tf];
+  if (!trades?.length) return;
+  const cols = ["#","dir","entry_t","exit_t","entry_px","exit_px","sl_px",
+                "tp1_px","tp2_px","tp3_px","pnl_r","reason","tp1","tp2","tp3"];
+  const lines = [cols.join(",")];
+  trades.forEach((t, i) => {
+    lines.push([
+      i+1, t.dir, t.entry_t, t.exit_t,
+      t.entry_px, t.exit_px, t.sl_px, t.tp1_px, t.tp2_px, t.tp3_px,
+      t.pnl_r, t.reason, t.tp1?1:0, t.tp2?1:0, t.tp3?1:0,
+    ].join(","));
+  });
+  const blob = new Blob([lines.join("\n")], {type:"text/csv"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `cardwell_${document.getElementById("sym-input").value}_${tf}.csv`;
+  a.click();
+}
+
+// ── Util ────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// Enter key submits
+document.getElementById("sym-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") runBacktest();
+});
+</script>
+</body>
+</html>
