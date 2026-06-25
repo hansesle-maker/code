@@ -20,6 +20,7 @@ from typing import List, Optional
 
 from flask import Flask, jsonify, render_template
 
+from cardwell_web import bp as cardwell_bp, _refresh_symbols as _refresh_cardwell_symbols
 from tsi_signal.scanner import (
     SymbolScan,
     fetch_all_futures_symbols,
@@ -31,6 +32,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 app = Flask(__name__)
+app.register_blueprint(cardwell_bp)
 
 # ---------------------------------------------------------------------------
 # Shared state (protected by _lock)
@@ -156,6 +158,7 @@ def main() -> None:
         threading.Thread(target=do_scan, daemon=True).start()
 
     threading.Thread(target=_background_loop, daemon=True).start()
+    threading.Thread(target=_refresh_cardwell_symbols, daemon=True).start()
 
     log.info("Dashboard available at http://0.0.0.0:%d", args.port)
     app.run(host="0.0.0.0", port=args.port, debug=False, use_reloader=False)

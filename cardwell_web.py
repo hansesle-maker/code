@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Cardwell RSI Trade Navigator — Web Backtester
-Binance 선물 심볼을 선택해 15m / 1h / 4h 백테스트를 웹에서 실행합니다.
+Cardwell RSI Trade Navigator — 백테스트 라우트 모듈
 
-Usage:
-    python cardwell_web.py              # port 5001
-    python cardwell_web.py --port 8080
+web_scanner.py (포트 5000)에 Blueprint로 통합되어 /backtest 경로를 제공합니다.
+단독 실행도 가능합니다:
+    python cardwell_web.py [--port 5000]
 """
 from __future__ import annotations
 
@@ -15,14 +14,13 @@ import datetime
 import io
 import logging
 import threading
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
-from flask import Flask, jsonify, render_template, request
+from flask import Blueprint, Flask, jsonify, render_template, request
 
 from cardwell_backtest import (
     Params, TIMEFRAMES,
@@ -30,15 +28,15 @@ from cardwell_backtest import (
 )
 from tsi_signal.data import (
     FUTURES_BASE_URL, FUTURES_KLINES_PATH,
-    Candle, fetch_klines, fetch_klines_range,
+    Candle, fetch_klines_range,
 )
 
 log = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-app = Flask(__name__)
+# ── Flask Blueprint ────────────────────────────────────────────────────────────
+bp = Blueprint("cardwell", __name__)
 
-# ─── Symbol cache ─────────────────────────────────────────────────────────────
+# ── Symbol cache ───────────────────────────────────────────────────────────────
 _sym_lock = threading.Lock()
 _symbols: List[str] = []
 _sym_fetched_at: Optional[datetime.datetime] = None
@@ -77,7 +75,7 @@ def _get_symbols() -> List[str]:
         return list(_symbols)
 
 
-# ─── Binance data ─────────────────────────────────────────────────────────────
+# ── Binance data ───────────────────────────────────────────────────────────────
 
 def _candles_to_df(candles: List[Candle]) -> pd.DataFrame:
     if not candles:
@@ -93,7 +91,6 @@ def _candles_to_df(candles: List[Candle]) -> pd.DataFrame:
 
 
 def _fetch_df(symbol: str, tf: str, start_ms: int, end_ms: int) -> pd.DataFrame:
-    """Fetch Binance Futures OHLCV and resample to requested TF."""
     binance_tf = "1h" if tf == "4h" else tf
     candles = fetch_klines_range(
         symbol, binance_tf, start_ms, end_ms,
@@ -124,7 +121,7 @@ def _parse_date(s: str, end_of_day: bool = False) -> int:
     return int(dt.timestamp() * 1000)
 
 
-# ─── Chart ────────────────────────────────────────────────────────────────────
+# ── Chart ──────────────────────────────────────────────────────────────────────
 
 def _chart_b64(symbol: str, tf_results: dict) -> str:
     if not tf_results:
@@ -138,25 +135,24 @@ def _chart_b64(symbol: str, tf_results: dict) -> str:
     return base64.b64encode(buf.read()).decode()
 
 
-# ─── Routes ───────────────────────────────────────────────────────────────────
+# ── Routes (Blueprint) ─────────────────────────────────────────────────────────
 
-@app.route("/")
-def index():
-    symbols = _get_symbols()
-    return render_template("cardwell.html", symbols=symbols)
+@bp.route("/backtest")
+def backtest_page():
+    return render_template("cardwell.html", symbols=_get_symbols())
 
 
-@app.route("/api/symbols")
+@bp.route("/api/symbols")
 def api_symbols():
     return jsonify(_get_symbols())
 
 
-@app.route("/api/run", methods=["POST"])
+@bp.route("/api/run", methods=["POST"])
 def api_run():
     body = request.get_json(silent=True) or {}
 
     symbol = (body.get("symbol") or "BTCUSDT").strip().upper()
-    tfs = [t for t in body.get("timeframes", ["1h"]) if t in TIMEFRAMES]
+    tfs    = [t for t in body.get("timeframes", ["1h"]) if t in TIMEFRAMES]
     period = body.get("period", "1Y")
     start_date = (body.get("start_date") or "").strip()
     end_date   = (body.get("end_date")   or "").strip()
@@ -164,28 +160,20 @@ def api_run():
     if not tfs:
         return jsonify({"ok": False, "error": "타임프레임을 선택하세요"}), 400
 
-    # Date range
     try:
-        if start_date:
-            start_ms = _parse_date(start_date)
-        else:
-            start_ms, _ = _period_to_range(period)
-
-        if end_date:
-            end_ms = _parse_date(end_date, end_of_day=True)
-        else:
-            end_ms = int(datetime.datetime.utcnow().timestamp() * 1000)
+        start_ms = _parse_date(start_date) if start_date else _period_to_range(period)[0]
+        end_ms   = _parse_date(end_date, end_of_day=True) if end_date \
+                   else int(datetime.datetime.utcnow().timestamp() * 1000)
     except ValueError as e:
         return jsonify({"ok": False, "error": f"날짜 형식 오류: {e}"}), 400
 
     if start_ms >= end_ms:
         return jsonify({"ok": False, "error": "시작일이 종료일보다 늦습니다"}), 400
 
-    # Build Params
     pp = body.get("params", {})
     p = Params(
         rsi_len     = int(pp.get("rsiLen",     14)),
-        fast_len    = int(pp.get("fastLen",     9)),
+        fast_len    = int(pp.get("fastLen",      9)),
         slow_len    = int(pp.get("slowLen",     45)),
         ma_type     =     pp.get("maType",   "RMA"),
         atr_len     = int(pp.get("atrLen",     14)),
@@ -200,17 +188,16 @@ def api_run():
         trail_stop  = bool(pp.get("trailStop", False)),
     )
 
-    # Run backtest per TF
     tf_results: dict = {}
     json_tfs:   dict = {}
 
     for tf in tfs:
         try:
-            log.info("백테스트 시작: %s %s", symbol, tf)
+            log.info("백테스트: %s %s", symbol, tf)
             df = _fetch_df(symbol, tf, start_ms, end_ms)
             df = add_signals(df, p)
-            trades  = simulate_trades(df, p)
-            s       = compute_stats(trades)
+            trades = simulate_trades(df, p)
+            s      = compute_stats(trades)
             tf_results[tf] = (df, trades, s)
             json_tfs[tf]   = {
                 "bars":       len(df),
@@ -218,18 +205,15 @@ def api_run():
                 "stats":      s,
                 "trades":     _trades_json(trades),
             }
-            log.info("%s %s 완료: %d 트레이드", symbol, tf, len(trades))
         except Exception as exc:
             log.error("%s %s 오류: %s", symbol, tf, exc)
             json_tfs[tf] = {"error": str(exc)}
-
-    chart_b64 = _chart_b64(symbol, tf_results)
 
     return jsonify({
         "ok":         True,
         "symbol":     symbol,
         "timeframes": json_tfs,
-        "chart_b64":  chart_b64,
+        "chart_b64":  _chart_b64(symbol, tf_results),
     })
 
 
@@ -258,17 +242,20 @@ def _trades_json(trades: pd.DataFrame) -> list:
     ]
 
 
-# ─── Entry ────────────────────────────────────────────────────────────────────
+# ── Standalone entry point ─────────────────────────────────────────────────────
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Cardwell RSI 백테스터 웹 서버")
-    ap.add_argument("--port", type=int, default=5001)
+    ap = argparse.ArgumentParser(description="Cardwell RSI 백테스터 (단독 실행)")
+    ap.add_argument("--port", type=int, default=5000)
     args = ap.parse_args()
-
     threading.Thread(target=_refresh_symbols, daemon=True).start()
-    log.info("웹 백테스터: http://0.0.0.0:%d", args.port)
-    app.run(host="0.0.0.0", port=args.port, debug=False, use_reloader=False)
+    standalone = Flask(__name__)
+    standalone.register_blueprint(bp)
+    log.info("단독 실행: http://0.0.0.0:%d/backtest", args.port)
+    standalone.run(host="0.0.0.0", port=args.port, debug=False, use_reloader=False)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s")
     main()
