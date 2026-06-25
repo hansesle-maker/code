@@ -8,5 +8,7 @@ requests>=2.25
 flask>=3.0
 jinja2>=3.0
 
-# Optional, for the Phase 2+ backtesting/analysis work (not imported yet):
-# pandas>=2.0
+# Cardwell RSI backtester (cardwell_backtest.py / cardwell_web.py)
+pandas>=2.0
+numpy>=1.24
+matplotlib>=3.7

@@ -275,6 +275,7 @@
     </div>
     <div class="ctrl-group">
       {% if scanning %}<span class="badge-scanning">Scanning…</span>{% endif %}
+      <a href="/backtest" style="text-decoration:none"><button title="Cardwell RSI 백테스트">📊 백테스트</button></a>
       <button onclick="manualRefresh(this)" title="지금 스캔">↻</button>
       <select id="sortSel" onchange="applySort()">
         <option value="cross">🔥 교차 우선</option>

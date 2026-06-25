@@ -21,6 +21,8 @@ from typing import Dict, List, Optional
 
 from flask import Flask, jsonify, render_template, request
 
+from cardwell_web import bp as cardwell_bp
+from cardwell_web import _refresh_symbols as _refresh_cardwell_symbols
 from tsi_signal.alerts import build_messages, diff_alerts, send_telegram
 from tsi_signal.positions import (
     DEFAULT_DISASTER_PCT,
@@ -45,6 +47,7 @@ POSITIONS_PATH = os.environ.get("TSI_POSITIONS", "positions.json")
 DISASTER_PCT = float(os.environ.get("TSI_DISASTER_PCT", DEFAULT_DISASTER_PCT))
 
 app = Flask(__name__)
+app.register_blueprint(cardwell_bp)
 
 # ---------------------------------------------------------------------------
 # Shared state (protected by _lock)
@@ -479,6 +482,7 @@ def main() -> None:
         threading.Thread(target=do_scan, daemon=True).start()
 
     threading.Thread(target=_background_loop, daemon=True).start()
+    threading.Thread(target=_refresh_cardwell_symbols, daemon=True).start()
 
     log.info("Dashboard available at http://0.0.0.0:%d", args.port)
     app.run(host="0.0.0.0", port=args.port, debug=False, use_reloader=False)
