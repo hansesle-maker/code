@@ -305,6 +305,7 @@ def simulate_trades(df: pd.DataFrame, p: Params) -> pd.DataFrame:
     in_trade = False
     is_long  = True
     entry = sl = tp1 = tp2 = tp3 = 0.0
+    orig_rd  = 1e-10   # original ATR risk distance at entry — preserved even after BE move
     tp1_hit = tp2_hit = False
     entry_ts = None
 
@@ -318,7 +319,7 @@ def simulate_trades(df: pd.DataFrame, p: Params) -> pd.DataFrame:
     idx = df.index
 
     def _pnl(exit_px, t1h, t2h, t3h, force_exit=None):
-        risk = abs(entry - sl) or 1e-10
+        risk = orig_rd or 1e-10   # always use original entry-to-SL distance
         sgn  = 1.0 if is_long else -1.0
         pnl, rem = 0.0, 1.0
         for hit, lvl in ((t1h, tp1), (t2h, tp2), (t3h, tp3)):
@@ -415,6 +416,7 @@ def simulate_trades(df: pd.DataFrame, p: Params) -> pd.DataFrame:
             is_long = new_bull
             entry   = c
             rd      = atr_arr[i] * p.atr_mult_sl
+            orig_rd = rd                               # freeze original risk for _pnl
             sl  = entry - rd if is_long else entry + rd
             tp1 = entry + rd * p.rr1 if is_long else entry - rd * p.rr1
             tp2 = entry + rd * p.rr2 if is_long else entry - rd * p.rr2
