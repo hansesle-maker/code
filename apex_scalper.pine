@@ -3,7 +3,7 @@ strategy("⚡ APEX Multi-Confluence Scalper", shorttitle="⚡ APEX",
          overlay=true, initial_capital=10000,
          default_qty_type=strategy.fixed, default_qty_value=1,
          commission_type=strategy.commission.percent, commission_value=0.05,
-         slippage=2, calc_on_every_tick=false)
+         slippage=2, calc_on_every_tick=false, process_orders_on_close=true)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // INPUTS
@@ -109,8 +109,11 @@ shortScore = array.sum(shortFactors)
 var int barsSince = 999
 barsSince += 1
 
-longCond  = longScore  >= minScore and barsSince >= minBars and strategy.position_size == 0
-shortCond = shortScore >= minScore and barsSince >= minBars and strategy.position_size == 0
+// 동점 시 롱/숏 동시 발생 방지 — 점수가 더 높은 방향만 진입
+_flat      = strategy.position_size == 0
+_cooldown  = barsSince >= minBars
+longCond   = longScore  >= minScore and longScore  >= shortScore and _flat and _cooldown
+shortCond  = shortScore >= minScore and shortScore >  longScore  and _flat and _cooldown
 
 if longCond or shortCond
     barsSince := 0
