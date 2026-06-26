@@ -1,0 +1,309 @@
+//@version=5
+strategy("⚡ APEX Multi-Confluence Scalper", shorttitle="⚡ APEX",
+         overlay=true, initial_capital=10000,
+         default_qty_type=strategy.fixed, default_qty_value=1,
+         commission_type=strategy.commission.percent, commission_value=0.05,
+         slippage=2, calc_on_every_tick=false)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════════
+g1 = "📐 Trend Engine"
+emaFast  = input.int(9,   "Fast EMA",              minval=1, group=g1)
+emaSlow  = input.int(21,  "Slow EMA",              minval=1, group=g1)
+stLen    = input.int(10,  "Supertrend ATR Length", minval=1, group=g1)
+stMult   = input.float(3.0,"Supertrend Multiplier",minval=0.1, step=0.1, group=g1)
+
+g2 = "🎯 Momentum Engine"
+stRsiLen = input.int(14, "Stoch RSI Length",    minval=3,  group=g2)
+stRsiK   = input.int(3,  "Stoch RSI %K Smooth", minval=1,  group=g2)
+stRsiD   = input.int(3,  "Stoch RSI %D Smooth", minval=1,  group=g2)
+stRsiOB  = input.int(80, "Overbought Level",    minval=50, maxval=100, group=g2)
+stRsiOS  = input.int(20, "Oversold Level",      minval=0,  maxval=50,  group=g2)
+
+g3 = "📊 Volume & VWAP"
+volLen   = input.int(20,   "Volume MA Length",         minval=5, group=g3)
+volMult  = input.float(1.2,"Volume Threshold (×avg)",  minval=1.0, step=0.1, group=g3)
+useVWAP  = input.bool(true,"VWAP Side Filter",         group=g3)
+
+g4 = "💰 Risk Management"
+atrLen   = input.int(14,   "ATR Length",         minval=1, group=g4)
+slMult   = input.float(1.5,"SL ATR Multiple",    minval=0.1, step=0.1, group=g4)
+tp1Mult  = input.float(1.5,"TP1 ATR Multiple",   minval=0.1, step=0.1, group=g4)
+tp2Mult  = input.float(3.0,"TP2 ATR Multiple",   minval=0.1, step=0.1, group=g4)
+tp1Pct   = input.float(50, "TP1 Close %",        minval=1, maxval=100, step=1, group=g4)
+riskPct  = input.float(1.0,"Risk Per Trade %",   minval=0.1, maxval=10, step=0.1, group=g4)
+useBE    = input.bool(true, "Move SL to BE after TP1", group=g4)
+
+g5 = "🔧 Signal Filter"
+minScore = input.int(5,  "Min Confluence Score (of 6)", minval=1, maxval=6, group=g5)
+minBars  = input.int(5,  "Min Bars Between Signals",    minval=0, group=g5)
+
+g6 = "🎨 Visuals"
+showEMA    = input.bool(true, "Show EMAs",         group=g6)
+showST     = input.bool(true, "Show Supertrend",   group=g6)
+showLevels = input.bool(true, "Show SL/TP Labels", group=g6)
+showDash   = input.bool(true, "Show Dashboard",    group=g6)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CORE CALCULATIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+atr    = ta.atr(atrLen)
+ema9   = ta.ema(close, emaFast)
+ema21  = ta.ema(close, emaSlow)
+
+// Supertrend
+[stLine, stDir] = ta.supertrend(stMult, stLen)
+stBull = stDir < 0
+stBear = stDir > 0
+
+// Stochastic RSI
+rsi        = ta.rsi(close, stRsiLen)
+rsiLow     = ta.lowest(rsi,  stRsiLen)
+rsiHigh    = ta.highest(rsi, stRsiLen)
+stRaw      = rsiHigh != rsiLow ? (rsi - rsiLow) / (rsiHigh - rsiLow) * 100 : 50
+kVal       = ta.sma(stRaw,   stRsiK)
+dVal       = ta.sma(kVal,    stRsiD)
+kCrossUp   = ta.crossover(kVal,  dVal) and kVal < stRsiOB
+kCrossDown = ta.crossunder(kVal, dVal) and kVal > stRsiOS
+
+// Volume
+volMA  = ta.sma(volume, volLen)
+volOK  = volume > volMA * volMult
+
+// VWAP
+vwap      = ta.vwap(hlc3)
+aboveVWAP = close > vwap
+belowVWAP = close < vwap
+
+// RSI Velocity
+rsiVel    = rsi - rsi[3]
+risingMom = rsiVel >  0
+fallingMom= rsiVel <  0
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONFLUENCE SCORING
+// ═══════════════════════════════════════════════════════════════════════════════
+longFactors  = array.from(
+     ema9 > ema21    ? 1 : 0,
+     stBull          ? 1 : 0,
+     kCrossUp        ? 1 : 0,
+     volOK           ? 1 : 0,
+     aboveVWAP       ? 1 : 0,
+     risingMom       ? 1 : 0)
+
+shortFactors = array.from(
+     ema9 < ema21    ? 1 : 0,
+     stBear          ? 1 : 0,
+     kCrossDown      ? 1 : 0,
+     volOK           ? 1 : 0,
+     belowVWAP       ? 1 : 0,
+     fallingMom      ? 1 : 0)
+
+longScore  = array.sum(longFactors)
+shortScore = array.sum(shortFactors)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENTRY CONDITIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+var int barsSince = 999
+barsSince += 1
+
+longCond  = longScore  >= minScore and barsSince >= minBars and strategy.position_size == 0
+shortCond = shortScore >= minScore and barsSince >= minBars and strategy.position_size == 0
+
+if longCond or shortCond
+    barsSince := 0
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// POSITION MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════════
+calcQty(slDist) =>
+    slDist > 0 ? (strategy.equity * riskPct / 100) / slDist : 1.0
+
+var float slPx    = na
+var float tp1Px   = na
+var float tp2Px   = na
+var bool  tp1Done = false
+var float prevPos = 0.0
+
+// ── Long ──────────────────────────────────────────────────────────────────────
+if longCond
+    slPx   := close - atr * slMult
+    tp1Px  := close + atr * tp1Mult
+    tp2Px  := close + atr * tp2Mult
+    tp1Done := false
+    qty = calcQty(atr * slMult)
+    strategy.entry("Long", strategy.long, qty=qty, comment="▲ " + str.tostring(longScore) + "/6")
+    strategy.exit("L_TP1", "Long", qty_percent=tp1Pct, limit=tp1Px, stop=slPx)
+    strategy.exit("L_TP2", "Long", qty_percent=100,    limit=tp2Px, stop=slPx)
+
+// ── Short ─────────────────────────────────────────────────────────────────────
+if shortCond
+    slPx   := close + atr * slMult
+    tp1Px  := close - atr * tp1Mult
+    tp2Px  := close - atr * tp2Mult
+    tp1Done := false
+    qty = calcQty(atr * slMult)
+    strategy.entry("Short", strategy.short, qty=qty, comment="▼ " + str.tostring(shortScore) + "/6")
+    strategy.exit("S_TP1", "Short", qty_percent=tp1Pct, limit=tp1Px, stop=slPx)
+    strategy.exit("S_TP2", "Short", qty_percent=100,    limit=tp2Px, stop=slPx)
+
+// ── TP1 hit → BE Stop ─────────────────────────────────────────────────────────
+longTP1Hit  = strategy.position_size > 0 and prevPos > 0 and strategy.position_size < prevPos * 0.85 and not tp1Done
+shortTP1Hit = strategy.position_size < 0 and prevPos < 0 and strategy.position_size > prevPos * 0.85 and not tp1Done
+
+if longTP1Hit and useBE
+    tp1Done := true
+    strategy.exit("L_TP2_BE", "Long",  qty_percent=100, limit=tp2Px, stop=strategy.position_avg_price)
+if shortTP1Hit and useBE
+    tp1Done := true
+    strategy.exit("S_TP2_BE", "Short", qty_percent=100, limit=tp2Px, stop=strategy.position_avg_price)
+
+prevPos := strategy.position_size
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VISUALS
+// ═══════════════════════════════════════════════════════════════════════════════
+// EMAs
+plot(showEMA ? ema9  : na, "EMA Fast", color.new(#00BFFF, 0), linewidth=1)
+plot(showEMA ? ema21 : na, "EMA Slow", color.new(#FF6B6B, 0), linewidth=1)
+emaFill1 = plot(showEMA ? ema9  : na, display=display.none)
+emaFill2 = plot(showEMA ? ema21 : na, display=display.none)
+fill(emaFill1, emaFill2, color=showEMA ? (ema9 > ema21 ? color.new(color.lime, 88) : color.new(color.red, 88)) : na)
+
+// Supertrend
+plot(showST ? stLine : na, "Supertrend",
+     stBull ? color.new(color.lime, 20) : color.new(color.red, 20), linewidth=2)
+
+// VWAP
+plot(useVWAP ? vwap : na, "VWAP", color.new(color.orange, 0), linewidth=1, style=plot.style_circles)
+
+// Signal shapes
+plotshape(longCond,  "▲ Long",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), size=size.normal)
+plotshape(shortCond, "▼ Short", shape.triangledown,  location.abovebar, color.new(color.red, 0),  size=size.normal)
+
+// Score labels on signal
+if longCond and showLevels
+    label.new(bar_index, low - atr * 0.3,
+              str.tostring(longScore) + "/6 ▲\nTP1 " + str.tostring(tp1Px, format.mintick) +
+              "\nTP2 " + str.tostring(tp2Px, format.mintick) +
+              "\nSL  " + str.tostring(slPx,  format.mintick),
+              color=color.new(#0d3b1e, 10), textcolor=color.lime,
+              style=label.style_label_up, size=size.tiny)
+if shortCond and showLevels
+    label.new(bar_index, high + atr * 0.3,
+              str.tostring(shortScore) + "/6 ▼\nTP1 " + str.tostring(tp1Px, format.mintick) +
+              "\nTP2 " + str.tostring(tp2Px, format.mintick) +
+              "\nSL  " + str.tostring(slPx,  format.mintick),
+              color=color.new(#3b0d0d, 10), textcolor=color.red,
+              style=label.style_label_down, size=size.tiny)
+
+// Position background
+bgcolor(strategy.position_size > 0 ? color.new(color.lime, 96) :
+        strategy.position_size < 0 ? color.new(color.red,  96) : na)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════════════
+scoreBar(score, maxS) =>
+    s = ""
+    for i = 1 to score
+        s := s + "█"
+    for i = score + 1 to maxS
+        s := s + "░"
+    s
+
+var table dash = na
+if showDash and barstate.islast
+    if not na(dash)
+        table.delete(dash)
+    dash := table.new(position.top_right, 2, 17,
+                      bgcolor=color.new(#0d1117, 5),
+                      border_color=color.new(color.gray, 55), border_width=1)
+    cg  = #B2B5BE
+    cw  = color.white
+    cgr = #26A69A
+    cre = #EF5350
+    cyl = #FFD700
+    hdr = color.new(#0d1117, 0)
+    lbl = size.tiny
+    val = size.small
+
+    table.merge_cells(dash, 0, 0, 1, 0)
+    table.cell(dash, 0, 0, "⚡ APEX Scalper", text_color=cw, bgcolor=hdr, text_size=val, text_halign=text.align_center)
+
+    // Stats
+    wr = strategy.wintrades + strategy.losstrades > 0 ? strategy.wintrades / (strategy.wintrades + strategy.losstrades) * 100 : 0.0
+    table.cell(dash, 0, 1, "Net P&L",  text_color=cg,  text_size=lbl)
+    table.cell(dash, 1, 1, "$" + str.tostring(strategy.netprofit, "#.0"), text_color=strategy.netprofit >= 0 ? cgr : cre, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 2, "Win Rate", text_color=cg,  text_size=lbl)
+    table.cell(dash, 1, 2, str.tostring(wr, "#.1") + "%", text_color=wr >= 55 ? cgr : wr >= 40 ? cyl : cre, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 3, "Trades",   text_color=cg,  text_size=lbl)
+    table.cell(dash, 1, 3, str.tostring(strategy.closedtrades), text_color=cg, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 4, "Max DD",   text_color=cg,  text_size=lbl)
+    table.cell(dash, 1, 4, str.tostring(strategy.max_drawdown, "#.0"), text_color=cre, text_size=lbl, text_halign=text.align_right)
+
+    // Confluence bars
+    table.merge_cells(dash, 0, 5, 1, 5)
+    table.cell(dash, 0, 5, "── Confluence ──", text_color=cyl, text_size=lbl, text_halign=text.align_center)
+    table.cell(dash, 0, 6, "Long  " + scoreBar(longScore, 6),  text_color=longScore  >= 5 ? cgr : longScore  >= 3 ? cyl : cg, text_size=lbl)
+    table.cell(dash, 1, 6, str.tostring(longScore)  + "/6", text_color=longScore  >= minScore ? cgr : cg, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 7, "Short " + scoreBar(shortScore, 6), text_color=shortScore >= 5 ? cre : shortScore >= 3 ? cyl : cg, text_size=lbl)
+    table.cell(dash, 1, 7, str.tostring(shortScore) + "/6", text_color=shortScore >= minScore ? cre : cg, text_size=lbl, text_halign=text.align_right)
+
+    // Factor breakdown — three separate homogeneous arrays to avoid CE10122
+    table.merge_cells(dash, 0, 8, 1, 8)
+    table.cell(dash, 0, 8, "── 6 Factors ──", text_color=cyl, text_size=lbl, text_halign=text.align_center)
+
+    fNames = array.from(
+         "EMA Align",
+         "Supertrend",
+         "Stoch RSI",
+         "Volume",
+         "VWAP Side",
+         "Momentum")
+
+    fVals = array.from(
+         ema9 > ema21  ? "▲ Bull"  : "▼ Bear",
+         stBull        ? "▲ Bull"  : "▼ Bear",
+         str.tostring(kVal, "#.0"),
+         volOK         ? "✓ High"  : "✗ Low",
+         aboveVWAP     ? "▲ Above" : "▼ Below",
+         risingMom     ? "▲ Up"    : "▼ Down")
+
+    fOK = array.from(
+         ema9 > ema21  ? 1 : 0,
+         stBull        ? 1 : 0,
+         kVal < stRsiOS or kVal > stRsiOB ? 1 : 0,
+         volOK         ? 1 : 0,
+         aboveVWAP     ? 1 : 0,
+         risingMom     ? 1 : 0)
+
+    for fi = 0 to 5
+        table.cell(dash, 0, 9 + fi, array.get(fNames, fi), text_color=cg, text_size=lbl)
+        table.cell(dash, 1, 9 + fi, array.get(fVals,  fi),
+                   text_color=array.get(fOK, fi) == 1 ? cgr : cre,
+                   text_size=lbl, text_halign=text.align_right)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════════════════════════════
+px = str.tostring(close, format.mintick)
+tf = timeframe.period
+if longCond
+    alert("⚡ APEX LONG [" + str.tostring(longScore) + "/6]\n" +
+          syminfo.ticker + " · " + tf + "\n" +
+          "진입: " + px + "\n" +
+          "SL:  " + str.tostring(close - atr * slMult, format.mintick) + "\n" +
+          "TP1: " + str.tostring(close + atr * tp1Mult, format.mintick) + "\n" +
+          "TP2: " + str.tostring(close + atr * tp2Mult, format.mintick),
+          alert.freq_once_per_bar_close)
+if shortCond
+    alert("⚡ APEX SHORT [" + str.tostring(shortScore) + "/6]\n" +
+          syminfo.ticker + " · " + tf + "\n" +
+          "진입: " + px + "\n" +
+          "SL:  " + str.tostring(close + atr * slMult, format.mintick) + "\n" +
+          "TP1: " + str.tostring(close - atr * tp1Mult, format.mintick) + "\n" +
+          "TP2: " + str.tostring(close - atr * tp2Mult, format.mintick),
+          alert.freq_once_per_bar_close)
