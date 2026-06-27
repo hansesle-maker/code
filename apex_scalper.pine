@@ -159,10 +159,8 @@ hourUTC   = hour(time, "UTC")
 inAsian   = hourUTC >= 0  and hourUTC < 9
 inLondon  = hourUTC >= 7  and hourUTC < 17
 inNY      = hourUTC >= 13 and hourUTC < 22
-inSession = not useSession or
-            (sessAsian  and inAsian)  or
-            (sessLondon and inLondon) or
-            (sessNY     and inNY)
+anySession = (sessAsian and inAsian) or (sessLondon and inLondon) or (sessNY and inNY)
+inSession  = not useSession or anySession
 
 // ── NEW: Candle Pattern Filter ────────────────────────────────────────────────
 candleBody  = math.abs(close - open)
