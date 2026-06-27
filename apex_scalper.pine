@@ -30,24 +30,30 @@ g4 = "💰 Risk Management"
 atrLen   = input.int(14,   "ATR Length",         minval=1, group=g4)
 slMult   = input.float(1.5,"SL ATR Multiple",    minval=0.1, step=0.1, group=g4)
 tp1Mult  = input.float(1.5,"TP1 ATR Multiple",   minval=0.1, step=0.1, group=g4)
-tp2Mult  = input.float(3.0,"TP2 ATR Multiple",   minval=0.1, step=0.1, group=g4)
+tp2Mult  = input.float(3.0,"TP2 ATR Multiple (useTrail=OFF일 때만)",   minval=0.1, step=0.1, group=g4)
 tp1Pct   = input.float(50, "TP1 Close %",        minval=1, maxval=100, step=1, group=g4)
 riskPct  = input.float(1.0,"Risk Per Trade %",   minval=0.1, maxval=10, step=0.1, group=g4)
 useBE    = input.bool(true, "Move SL to BE after TP1", group=g4)
+useTrail = input.bool(true,  "Trailing Stop after TP1 (TP2 대체)",    group=g4,
+                     tooltip="TP1 이후 고점(저점)에서 ATR만큼 뒤따르는 트레일링 스탑. ON이면 TP2 무시.")
+trailMult= input.float(1.5, "Trailing Stop ATR Multiple", minval=0.1, step=0.1, group=g4)
 
 g5 = "🔧 Signal Filter"
 minScore = input.int(5,  "Min Confluence Score (of 6)", minval=1, maxval=6, group=g5)
 minBars  = input.int(5,  "Min Bars Between Signals",    minval=0, group=g5)
 
 g7 = "🔭 Regime & MTF Filter"
-useADX  = input.bool(true,  "ADX Trend Filter",           group=g7,
-                     tooltip="ADX 미만 구간(횡보장) 진입 차단")
-adxLen  = input.int(14,     "ADX Length",                 minval=5, group=g7)
-adxMin  = input.float(20.0, "Min ADX Threshold",          minval=5, maxval=60, step=1.0, group=g7)
-useMTF  = input.bool(true,  "Higher TF Confirmation",     group=g7,
-                     tooltip="상위 TF Supertrend가 반대 방향이면 진입 차단")
-mtfTF   = input.timeframe("240", "Higher Timeframe",      group=g7,
-                     tooltip="1h 차트 → 240(4h) 권장 / 4h 차트 → D(1일) 권장")
+useADX      = input.bool(true,  "ADX Trend Filter",           group=g7,
+                         tooltip="ADX 미만 구간(횡보장) 진입 차단")
+adxLen      = input.int(14,     "ADX Length",                 minval=5, group=g7)
+adxMin      = input.float(20.0, "Min ADX Threshold",          minval=5, maxval=60, step=1.0, group=g7)
+useDailyBias= input.bool(true,  "Daily EMA200 Bias Filter",   group=g7,
+                         tooltip="일봉 EMA200 위면 롱만, 아래면 숏만 허용. 강세/약세 편향 필터.")
+dailyEmaLen = input.int(200,    "Daily EMA Length",           minval=20, group=g7)
+useMTF      = input.bool(true,  "Higher TF Confirmation",     group=g7,
+                         tooltip="상위 TF Supertrend가 반대 방향이면 진입 차단")
+mtfTF       = input.timeframe("240", "Higher Timeframe",      group=g7,
+                         tooltip="1h 차트 → 240(4h) 권장 / 4h 차트 → D(1일) 권장")
 
 g6 = "🎨 Visuals"
 showEMA    = input.bool(true, "Show EMAs",         group=g6)
@@ -95,6 +101,11 @@ fallingMom= rsiVel <  0
 [_, _, adxVal] = ta.dmi(adxLen, adxLen)
 adxOK = not useADX or adxVal >= adxMin
 
+// Daily EMA200 — macro bias filter (long only above, short only below)
+dailyEma200  = request.security(syminfo.tickerid, "D", ta.ema(close, dailyEmaLen), lookahead=barmerge.lookahead_off)
+bullBias     = not useDailyBias or close > dailyEma200
+bearBias     = not useDailyBias or close < dailyEma200
+
 // MTF Supertrend — higher timeframe direction confirmation
 [_, mtfStDir]  = request.security(syminfo.tickerid, mtfTF, ta.supertrend(stMult, stLen), lookahead=barmerge.lookahead_off)
 mtfBull        = mtfStDir < 0
@@ -133,8 +144,8 @@ barsSince += 1
 // 동점 시 롱/숏 동시 발생 방지 — 점수가 더 높은 방향만 진입
 _flat      = strategy.position_size == 0
 _cooldown  = barsSince >= minBars
-longCond   = longScore  >= minScore and longScore  >= shortScore and _flat and _cooldown and adxOK and mtfLongOK
-shortCond  = shortScore >= minScore and shortScore >  longScore  and _flat and _cooldown and adxOK and mtfShortOK
+longCond   = longScore  >= minScore and longScore  >= shortScore and _flat and _cooldown and adxOK and bullBias and mtfLongOK
+shortCond  = shortScore >= minScore and shortScore >  longScore  and _flat and _cooldown and adxOK and bearBias and mtfShortOK
 
 if longCond or shortCond
     barsSince := 0
@@ -145,44 +156,75 @@ if longCond or shortCond
 calcQty(slDist) =>
     slDist > 0 ? (strategy.equity * riskPct / 100) / slDist : 1.0
 
-var float slPx    = na
-var float tp1Px   = na
-var float tp2Px   = na
-var bool  tp1Done = false
-var float prevPos = 0.0
+var float slPx      = na
+var float tp1Px     = na
+var float tp2Px     = na
+var bool  tp1Done   = false
+var float prevPos   = 0.0
+var float peakPrice = na   // trailing stop peak tracker
 
 // ── Long ──────────────────────────────────────────────────────────────────────
 if longCond
-    slPx   := close - atr * slMult
-    tp1Px  := close + atr * tp1Mult
-    tp2Px  := close + atr * tp2Mult
-    tp1Done := false
+    slPx      := close - atr * slMult
+    tp1Px     := close + atr * tp1Mult
+    tp2Px     := close + atr * tp2Mult
+    tp1Done   := false
+    peakPrice := na
     qty = calcQty(atr * slMult)
     strategy.entry("Long", strategy.long, qty=qty, comment="▲ " + str.tostring(longScore) + "/6")
     strategy.exit("L_TP1", "Long", qty_percent=tp1Pct, limit=tp1Px, stop=slPx)
-    strategy.exit("L_TP2", "Long", qty_percent=100,    limit=tp2Px, stop=slPx)
+    if not useTrail
+        strategy.exit("L_TP2", "Long", qty_percent=100, limit=tp2Px, stop=slPx)
 
 // ── Short ─────────────────────────────────────────────────────────────────────
 if shortCond
-    slPx   := close + atr * slMult
-    tp1Px  := close - atr * tp1Mult
-    tp2Px  := close - atr * tp2Mult
-    tp1Done := false
+    slPx      := close + atr * slMult
+    tp1Px     := close - atr * tp1Mult
+    tp2Px     := close - atr * tp2Mult
+    tp1Done   := false
+    peakPrice := na
     qty = calcQty(atr * slMult)
     strategy.entry("Short", strategy.short, qty=qty, comment="▼ " + str.tostring(shortScore) + "/6")
     strategy.exit("S_TP1", "Short", qty_percent=tp1Pct, limit=tp1Px, stop=slPx)
-    strategy.exit("S_TP2", "Short", qty_percent=100,    limit=tp2Px, stop=slPx)
+    if not useTrail
+        strategy.exit("S_TP2", "Short", qty_percent=100, limit=tp2Px, stop=slPx)
 
-// ── TP1 hit → BE Stop ─────────────────────────────────────────────────────────
+// ── TP1 hit → BE Stop (+ trail 시작) ──────────────────────────────────────────
 longTP1Hit  = strategy.position_size > 0 and prevPos > 0 and strategy.position_size < prevPos * 0.85 and not tp1Done
 shortTP1Hit = strategy.position_size < 0 and prevPos < 0 and strategy.position_size > prevPos * 0.85 and not tp1Done
 
-if longTP1Hit and useBE
-    tp1Done := true
-    strategy.exit("L_TP2_BE", "Long",  qty_percent=100, limit=tp2Px, stop=strategy.position_avg_price)
-if shortTP1Hit and useBE
-    tp1Done := true
-    strategy.exit("S_TP2_BE", "Short", qty_percent=100, limit=tp2Px, stop=strategy.position_avg_price)
+if longTP1Hit
+    tp1Done   := true
+    peakPrice := close
+    if useTrail
+        // Trail 모드: TP2 없이 BE 스탑만 걸고 trail에 맡김
+        strategy.exit("L_BE", "Long", qty_percent=100, stop=strategy.position_avg_price)
+    else if useBE
+        strategy.exit("L_TP2_BE", "Long", qty_percent=100, limit=tp2Px, stop=strategy.position_avg_price)
+
+if shortTP1Hit
+    tp1Done   := true
+    peakPrice := close
+    if useTrail
+        strategy.exit("S_BE", "Short", qty_percent=100, stop=strategy.position_avg_price)
+    else if useBE
+        strategy.exit("S_TP2_BE", "Short", qty_percent=100, limit=tp2Px, stop=strategy.position_avg_price)
+
+// ── 트레일링 스탑: TP1 이후 고점(저점)에서 ATR × trailMult 뒤따라옴 ────────────
+if strategy.position_size > 0 and tp1Done and useTrail
+    peakPrice := na(peakPrice) ? close : math.max(peakPrice, close)
+    if close < peakPrice - atr * trailMult
+        strategy.close("Long", comment="▲ Trail")
+        peakPrice := na
+
+if strategy.position_size < 0 and tp1Done and useTrail
+    peakPrice := na(peakPrice) ? close : math.min(peakPrice, close)
+    if close > peakPrice + atr * trailMult
+        strategy.close("Short", comment="▼ Trail")
+        peakPrice := na
+
+if strategy.position_size == 0
+    peakPrice := na
 
 prevPos := strategy.position_size
 
@@ -245,7 +287,7 @@ var table dash = na
 if showDash and barstate.islast
     if not na(dash)
         table.delete(dash)
-    dash := table.new(position.top_right, 2, 21,
+    dash := table.new(position.top_right, 2, 23,
                       bgcolor=color.new(#0d1117, 5),
                       border_color=color.new(color.gray, 55), border_width=1)
     cg  = #B2B5BE
@@ -322,10 +364,15 @@ if showDash and barstate.islast
     table.cell(dash, 0, 16, "ADX(" + str.tostring(adxLen) + ") ≥ " + str.tostring(adxMin, "#"), text_color=cg, text_size=lbl)
     table.cell(dash, 1, 16, adxStatus, text_color=adxColor, text_size=lbl, text_halign=text.align_right)
 
+    biasColor  = not useDailyBias ? cg : close > dailyEma200 ? cgr : cre
+    biasStatus = not useDailyBias ? "OFF" : close > dailyEma200 ? "▲ Bull (L only)" : "▼ Bear (S only)"
+    table.cell(dash, 0, 17, "Daily EMA" + str.tostring(dailyEmaLen), text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 17, biasStatus, text_color=biasColor, text_size=lbl, text_halign=text.align_right)
+
     mtfColor  = not useMTF ? cg : mtfBull ? cgr : cre
     mtfStatus = not useMTF ? "OFF" : mtfBull ? "▲ Bull" : "▼ Bear"
-    table.cell(dash, 0, 17, "MTF(" + mtfTF + ") ST", text_color=cg, text_size=lbl)
-    table.cell(dash, 1, 17, mtfStatus, text_color=mtfColor, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 18, "MTF(" + mtfTF + ") ST", text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 18, mtfStatus, text_color=mtfColor, text_size=lbl, text_halign=text.align_right)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ALERTS
