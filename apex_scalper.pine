@@ -324,20 +324,22 @@ plotshape(shortCond, "▼ Short", shape.triangledown, location.abovebar, color.n
 plotshape(showLevels and cbBlocked and _flat, "⛔ CB Blocked", shape.xcross, location.abovebar, color.new(color.orange, 20), size=size.tiny)
 
 if longCond and showLevels
-    tpStr = (useTP1 ? "\nTP1 " + str.tostring(tp1Px, format.mintick) : "") +
-            (useTP2 ? "\nTP2 " + str.tostring(tp2Px, format.mintick) : "") +
-            (useTP3 ? "\nTP3 " + str.tostring(tp3Px, format.mintick) : "") +
-            (useTP4 ? "\nTP4 " + str.tostring(tp4Px, format.mintick) : "")
+    ltp1s = useTP1 ? "\nTP1 " + str.tostring(tp1Px, format.mintick) : ""
+    ltp2s = useTP2 ? "\nTP2 " + str.tostring(tp2Px, format.mintick) : ""
+    ltp3s = useTP3 ? "\nTP3 " + str.tostring(tp3Px, format.mintick) : ""
+    ltp4s = useTP4 ? "\nTP4 " + str.tostring(tp4Px, format.mintick) : ""
+    ltpStr = ltp1s + ltp2s + ltp3s + ltp4s
     label.new(bar_index, low - atr * 0.3,
-              str.tostring(longScore) + "/6 ▲" + tpStr + "\nSL  " + str.tostring(slPx, format.mintick),
+              str.tostring(longScore) + "/6 ▲" + ltpStr + "\nSL  " + str.tostring(slPx, format.mintick),
               color=color.new(#0d3b1e, 10), textcolor=color.lime, style=label.style_label_up, size=size.tiny)
 if shortCond and showLevels
-    tpStr = (useTP1 ? "\nTP1 " + str.tostring(tp1Px, format.mintick) : "") +
-            (useTP2 ? "\nTP2 " + str.tostring(tp2Px, format.mintick) : "") +
-            (useTP3 ? "\nTP3 " + str.tostring(tp3Px, format.mintick) : "") +
-            (useTP4 ? "\nTP4 " + str.tostring(tp4Px, format.mintick) : "")
+    stp1s = useTP1 ? "\nTP1 " + str.tostring(tp1Px, format.mintick) : ""
+    stp2s = useTP2 ? "\nTP2 " + str.tostring(tp2Px, format.mintick) : ""
+    stp3s = useTP3 ? "\nTP3 " + str.tostring(tp3Px, format.mintick) : ""
+    stp4s = useTP4 ? "\nTP4 " + str.tostring(tp4Px, format.mintick) : ""
+    stpStr = stp1s + stp2s + stp3s + stp4s
     label.new(bar_index, high + atr * 0.3,
-              str.tostring(shortScore) + "/6 ▼" + tpStr + "\nSL  " + str.tostring(slPx, format.mintick),
+              str.tostring(shortScore) + "/6 ▼" + stpStr + "\nSL  " + str.tostring(slPx, format.mintick),
               color=color.new(#3b0d0d, 10), textcolor=color.red, style=label.style_label_down, size=size.tiny)
 
 posColor = strategy.position_size > 0 ? color.new(color.lime, 96) : strategy.position_size < 0 ? color.new(color.red, 96) : na
@@ -469,20 +471,16 @@ if showDash and barstate.islast
 px = str.tostring(close, format.mintick)
 tf = timeframe.period
 if longCond
-    alert("⚡ APEX LONG [" + str.tostring(longScore) + "/6]\n" +
-          syminfo.ticker + " · " + tf + "\n진입: " + px + "\n" +
-          "SL:  " + str.tostring(close - atr * slMult, format.mintick) + "\n" +
-          (useTP1 ? "TP1: " + str.tostring(close + atr * tp1Mult, format.mintick) + "\n" : "") +
-          (useTP2 ? "TP2: " + str.tostring(close + atr * tp2Mult, format.mintick) + "\n" : "") +
-          (useTP3 ? "TP3: " + str.tostring(close + atr * tp3Mult, format.mintick) + "\n" : "") +
-          (useTP4 ? "TP4: " + str.tostring(close + atr * tp4Mult, format.mintick) : ""),
-          alert.freq_once_per_bar_close)
+    la1 = useTP1 ? "TP1: " + str.tostring(close + atr * tp1Mult, format.mintick) + "\n" : ""
+    la2 = useTP2 ? "TP2: " + str.tostring(close + atr * tp2Mult, format.mintick) + "\n" : ""
+    la3 = useTP3 ? "TP3: " + str.tostring(close + atr * tp3Mult, format.mintick) + "\n" : ""
+    la4 = useTP4 ? "TP4: " + str.tostring(close + atr * tp4Mult, format.mintick) : ""
+    lMsg = "⚡ APEX LONG [" + str.tostring(longScore) + "/6]\n" + syminfo.ticker + " · " + tf + "\n진입: " + px + "\nSL:  " + str.tostring(close - atr * slMult, format.mintick) + "\n" + la1 + la2 + la3 + la4
+    alert(lMsg, alert.freq_once_per_bar_close)
 if shortCond
-    alert("⚡ APEX SHORT [" + str.tostring(shortScore) + "/6]\n" +
-          syminfo.ticker + " · " + tf + "\n진입: " + px + "\n" +
-          "SL:  " + str.tostring(close + atr * slMult, format.mintick) + "\n" +
-          (useTP1 ? "TP1: " + str.tostring(close - atr * tp1Mult, format.mintick) + "\n" : "") +
-          (useTP2 ? "TP2: " + str.tostring(close - atr * tp2Mult, format.mintick) + "\n" : "") +
-          (useTP3 ? "TP3: " + str.tostring(close - atr * tp3Mult, format.mintick) + "\n" : "") +
-          (useTP4 ? "TP4: " + str.tostring(close - atr * tp4Mult, format.mintick) : ""),
-          alert.freq_once_per_bar_close)
+    sa1 = useTP1 ? "TP1: " + str.tostring(close - atr * tp1Mult, format.mintick) + "\n" : ""
+    sa2 = useTP2 ? "TP2: " + str.tostring(close - atr * tp2Mult, format.mintick) + "\n" : ""
+    sa3 = useTP3 ? "TP3: " + str.tostring(close - atr * tp3Mult, format.mintick) + "\n" : ""
+    sa4 = useTP4 ? "TP4: " + str.tostring(close - atr * tp4Mult, format.mintick) : ""
+    sMsg = "⚡ APEX SHORT [" + str.tostring(shortScore) + "/6]\n" + syminfo.ticker + " · " + tf + "\n진입: " + px + "\nSL:  " + str.tostring(close + atr * slMult, format.mintick) + "\n" + sa1 + sa2 + sa3 + sa4
+    alert(sMsg, alert.freq_once_per_bar_close)
