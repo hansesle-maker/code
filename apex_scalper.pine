@@ -9,10 +9,10 @@ strategy("⚡ APEX Multi-Confluence Scalper", shorttitle="⚡ APEX",
 // INPUTS
 // ═══════════════════════════════════════════════════════════════════════════════
 g1 = "📐 Trend Engine"
-emaFast  = input.int(9,   "Fast EMA",              minval=1, group=g1)
-emaSlow  = input.int(21,  "Slow EMA",              minval=1, group=g1)
-stLen    = input.int(10,  "Supertrend ATR Length", minval=1, group=g1)
-stMult   = input.float(3.0,"Supertrend Multiplier",minval=0.1, step=0.1, group=g1)
+emaFast  = input.int(9,    "Fast EMA",              minval=1, group=g1)
+emaSlow  = input.int(21,   "Slow EMA",              minval=1, group=g1)
+stLen    = input.int(10,   "Supertrend ATR Length", minval=1, group=g1)
+stMult   = input.float(3.0,"Supertrend Multiplier", minval=0.1, step=0.1, group=g1)
 
 g2 = "🎯 Momentum Engine"
 stRsiLen = input.int(14, "Stoch RSI Length",    minval=3,  group=g2)
@@ -22,38 +22,60 @@ stRsiOB  = input.int(80, "Overbought Level",    minval=50, maxval=100, group=g2)
 stRsiOS  = input.int(20, "Oversold Level",      minval=0,  maxval=50,  group=g2)
 
 g3 = "📊 Volume & VWAP"
-volLen   = input.int(20,   "Volume MA Length",         minval=5, group=g3)
-volMult  = input.float(1.2,"Volume Threshold (×avg)",  minval=1.0, step=0.1, group=g3)
-useVWAP  = input.bool(true,"VWAP Side Filter",         group=g3)
+volLen   = input.int(20,   "Volume MA Length",        minval=5, group=g3)
+volMult  = input.float(1.2,"Volume Threshold (×avg)", minval=1.0, step=0.1, group=g3)
+useVWAP  = input.bool(true,"VWAP Side Filter",        group=g3)
 
 g4 = "💰 Risk Management"
-atrLen   = input.int(14,   "ATR Length",         minval=1, group=g4)
-slMult   = input.float(1.5,"SL ATR Multiple",    minval=0.1, step=0.1, group=g4)
-tp1Mult  = input.float(1.5,"TP1 ATR Multiple",   minval=0.1, step=0.1, group=g4)
-tp2Mult  = input.float(3.0,"TP2 ATR Multiple (useTrail=OFF일 때만)",   minval=0.1, step=0.1, group=g4)
-tp1Pct   = input.float(50, "TP1 Close %",        minval=1, maxval=100, step=1, group=g4)
-riskPct  = input.float(1.0,"Risk Per Trade %",   minval=0.1, maxval=10, step=0.1, group=g4)
-useBE    = input.bool(true, "Move SL to BE after TP1", group=g4)
-useTrail = input.bool(true,  "Trailing Stop after TP1 (TP2 대체)",    group=g4,
-                     tooltip="TP1 이후 고점(저점)에서 ATR만큼 뒤따르는 트레일링 스탑. ON이면 TP2 무시.")
-trailMult= input.float(1.5, "Trailing Stop ATR Multiple", minval=0.1, step=0.1, group=g4)
+atrLen       = input.int(14,    "ATR Length",         minval=1, group=g4)
+slMult       = input.float(1.5, "SL ATR Multiple",    minval=0.1, step=0.1, group=g4)
+tp1Mult      = input.float(1.5, "TP1 ATR Multiple",   minval=0.1, step=0.1, group=g4)
+tp2Mult      = input.float(3.0, "TP2 ATR Multiple (useTrail=OFF일 때만)", minval=0.1, step=0.1, group=g4)
+tp1Pct       = input.float(50,  "TP1 Close %",        minval=1, maxval=100, step=1, group=g4)
+riskPct      = input.float(1.0, "Risk Per Trade %",   minval=0.1, maxval=10, step=0.1, group=g4)
+useBE        = input.bool(true,  "Move SL to BE after TP1", group=g4)
+useTrail     = input.bool(true,  "Trailing Stop after TP1 (TP2 대체)", group=g4,
+                          tooltip="TP1 이후 ATR 거리만큼 뒤따르는 트레일링 스탑. ON이면 TP2 무시.")
+trailMult    = input.float(1.5,  "↳ Trailing Stop ATR Multiple", minval=0.1, step=0.1, group=g4)
+useScoreSize = input.bool(false, "Score-Based Position Sizing", group=g4,
+                          tooltip="컨플루언스 점수에 비례해 포지션 크기 조정.\n최소점수 → Min배수 / 6점 → Max배수")
+scoreMultMin = input.float(0.5,  "↳ Min Size Multiplier (minScore pts)", minval=0.1, maxval=5.0, step=0.1, group=g4)
+scoreMultMax = input.float(1.5,  "↳ Max Size Multiplier (6/6 pts)",      minval=0.1, maxval=5.0, step=0.1, group=g4)
 
 g5 = "🔧 Signal Filter"
-minScore = input.int(5,  "Min Confluence Score (of 6)", minval=1, maxval=6, group=g5)
-minBars  = input.int(5,  "Min Bars Between Signals",    minval=0, group=g5)
+minScore        = input.int(5,    "Min Confluence Score (of 6)", minval=1, maxval=6, group=g5)
+minBars         = input.int(5,    "Min Bars Between Signals",    minval=0, group=g5)
+useCandleFilter = input.bool(false,"Candle Pattern Filter", group=g5,
+                             tooltip="해머·불리시인걸핑(롱) / 슈팅스타·베어리시인걸핑(숏) 패턴 확인 시만 진입")
+avoidDoji       = input.bool(true, "Avoid Doji Entry Bars", group=g5,
+                             tooltip="몸통이 범위의 10% 미만인 도지봉 진입 차단 (방향성 불명확)")
 
 g7 = "🔭 Regime & MTF Filter"
-useADX      = input.bool(true,  "ADX Trend Filter",           group=g7,
-                         tooltip="ADX 미만 구간(횡보장) 진입 차단")
-adxLen      = input.int(14,     "ADX Length",                 minval=5, group=g7)
-adxMin      = input.float(20.0, "Min ADX Threshold",          minval=5, maxval=60, step=1.0, group=g7)
-useDailyBias= input.bool(true,  "Daily EMA200 Bias Filter",   group=g7,
-                         tooltip="일봉 EMA200 위면 롱만, 아래면 숏만 허용. 강세/약세 편향 필터.")
-dailyEmaLen = input.int(200,    "Daily EMA Length",           minval=20, group=g7)
-useMTF      = input.bool(true,  "Higher TF Confirmation",     group=g7,
-                         tooltip="상위 TF Supertrend가 반대 방향이면 진입 차단")
-mtfTF       = input.timeframe("240", "Higher Timeframe",      group=g7,
-                         tooltip="1h 차트 → 240(4h) 권장 / 4h 차트 → D(1일) 권장")
+useADX       = input.bool(true,   "ADX Trend Filter", group=g7,
+                          tooltip="ADX 미만 구간(횡보장) 진입 차단")
+adxLen       = input.int(14,      "↳ ADX Length",     minval=5, group=g7)
+adxMin       = input.float(20.0,  "↳ Min ADX Threshold", minval=5, maxval=60, step=1.0, group=g7)
+useDailyBias = input.bool(true,   "Daily EMA200 Bias Filter", group=g7,
+                          tooltip="일봉 EMA200 위면 롱만, 아래면 숏만 허용. 거시 편향 필터.")
+dailyEmaLen  = input.int(200,     "↳ Daily EMA Length", minval=20, group=g7)
+useMTF       = input.bool(true,   "Higher TF Confirmation", group=g7,
+                          tooltip="상위 TF Supertrend가 반대 방향이면 진입 차단")
+mtfTF        = input.timeframe("240","↳ Higher Timeframe", group=g7,
+                          tooltip="1h 차트 → 240(4h) 권장 / 4h 차트 → D(1일) 권장")
+useEmaSlope  = input.bool(false,  "EMA Slope Filter", group=g7,
+                          tooltip="Fast·Slow EMA 기울기가 모두 진입 방향과 일치할 때만 허용")
+emaSlopeLen  = input.int(3,       "↳ Slope Lookback Bars", minval=1, maxval=20, group=g7)
+useBBSqueeze = input.bool(false,  "BB Squeeze Breakout Filter", group=g7,
+                          tooltip="볼린저밴드 폭이 전봉 대비 확장 중일 때만 진입 (스퀴즈 탈출 포착)")
+bbLen        = input.int(20,      "↳ BB Length",     minval=5, group=g7)
+bbMult       = input.float(2.0,   "↳ BB Multiplier", minval=0.5, step=0.1, group=g7)
+
+g8 = "🕐 Session Filter"
+useSession = input.bool(false, "Session Time Filter (UTC)", group=g8,
+                        tooltip="체크된 세션에서만 거래 허용. OR 조건 (하나 이상 겹치면 진입 가능).")
+sessAsian  = input.bool(false, "Asian    00:00–09:00 UTC", group=g8)
+sessLondon = input.bool(true,  "London   07:00–17:00 UTC", group=g8)
+sessNY     = input.bool(true,  "New York 13:00–22:00 UTC", group=g8)
 
 g6 = "🎨 Visuals"
 showEMA    = input.bool(true, "Show EMAs",         group=g6)
@@ -64,9 +86,9 @@ showDash   = input.bool(true, "Show Dashboard",    group=g6)
 // ═══════════════════════════════════════════════════════════════════════════════
 // CORE CALCULATIONS
 // ═══════════════════════════════════════════════════════════════════════════════
-atr    = ta.atr(atrLen)
-ema9   = ta.ema(close, emaFast)
-ema21  = ta.ema(close, emaSlow)
+atr   = ta.atr(atrLen)
+ema9  = ta.ema(close, emaFast)
+ema21 = ta.ema(close, emaSlow)
 
 // Supertrend
 [stLine, stDir] = ta.supertrend(stMult, stLen)
@@ -78,14 +100,14 @@ rsi        = ta.rsi(close, stRsiLen)
 rsiLow     = ta.lowest(rsi,  stRsiLen)
 rsiHigh    = ta.highest(rsi, stRsiLen)
 stRaw      = rsiHigh != rsiLow ? (rsi - rsiLow) / (rsiHigh - rsiLow) * 100 : 50
-kVal       = ta.sma(stRaw,   stRsiK)
-dVal       = ta.sma(kVal,    stRsiD)
+kVal       = ta.sma(stRaw, stRsiK)
+dVal       = ta.sma(kVal,  stRsiD)
 kCrossUp   = ta.crossover(kVal,  dVal) and kVal < stRsiOB
 kCrossDown = ta.crossunder(kVal, dVal) and kVal > stRsiOS
 
 // Volume
-volMA  = ta.sma(volume, volLen)
-volOK  = volume > volMA * volMult
+volMA = ta.sma(volume, volLen)
+volOK = volume > volMA * volMult
 
 // VWAP
 vwap      = ta.vwap(hlc3)
@@ -94,43 +116,102 @@ belowVWAP = close < vwap
 
 // RSI Velocity
 rsiVel    = rsi - rsi[3]
-risingMom = rsiVel >  0
-fallingMom= rsiVel <  0
+risingMom = rsiVel > 0
+fallingMom= rsiVel < 0
 
-// ADX — trend strength filter
+// ── Regime Filters ────────────────────────────────────────────────────────────
+
+// ADX
 [_, _, adxVal] = ta.dmi(adxLen, adxLen)
 adxOK = not useADX or adxVal >= adxMin
 
-// Daily EMA200 — macro bias filter (long only above, short only below)
-dailyEma200  = request.security(syminfo.tickerid, "D", ta.ema(close, dailyEmaLen), lookahead=barmerge.lookahead_off)
-bullBias     = not useDailyBias or close > dailyEma200
-bearBias     = not useDailyBias or close < dailyEma200
+// Daily EMA200 — macro bias
+dailyEma200 = request.security(syminfo.tickerid, "D", ta.ema(close, dailyEmaLen), lookahead=barmerge.lookahead_off)
+bullBias    = not useDailyBias or close > dailyEma200
+bearBias    = not useDailyBias or close < dailyEma200
 
-// MTF Supertrend — higher timeframe direction confirmation
-[_, mtfStDir]  = request.security(syminfo.tickerid, mtfTF, ta.supertrend(stMult, stLen), lookahead=barmerge.lookahead_off)
-mtfBull        = mtfStDir < 0
-mtfBear        = mtfStDir > 0
-mtfLongOK      = not useMTF or mtfBull
-mtfShortOK     = not useMTF or mtfBear
+// MTF Supertrend
+[_, mtfStDir] = request.security(syminfo.tickerid, mtfTF, ta.supertrend(stMult, stLen), lookahead=barmerge.lookahead_off)
+mtfBull       = mtfStDir < 0
+mtfBear       = mtfStDir > 0
+mtfLongOK     = not useMTF or mtfBull
+mtfShortOK    = not useMTF or mtfBear
+
+// ── NEW: EMA Slope Filter ─────────────────────────────────────────────────────
+// Both fast and slow EMA must be rising (long) or falling (short)
+bullSlope    = ema9 > ema9[emaSlopeLen] and ema21 > ema21[emaSlopeLen]
+bearSlope    = ema9 < ema9[emaSlopeLen] and ema21 < ema21[emaSlopeLen]
+emaSlopeOK_L = not useEmaSlope or bullSlope
+emaSlopeOK_S = not useEmaSlope or bearSlope
+
+// ── NEW: BB Squeeze Breakout Filter ──────────────────────────────────────────
+// Enter only when BB width is expanding (volatility breakout from compression)
+bbBasis     = ta.sma(close, bbLen)
+bbStdev     = ta.stdev(close, bbLen)
+bbUpper     = bbBasis + bbStdev * bbMult
+bbLower     = bbBasis - bbStdev * bbMult
+bbWidth     = bbBasis > 0 ? (bbUpper - bbLower) / bbBasis * 100 : 0.0
+bbExpanding = bbWidth > bbWidth[1]
+bbSqueezeOK = not useBBSqueeze or bbExpanding
+
+// ── NEW: Session Filter (UTC) ─────────────────────────────────────────────────
+hourUTC   = hour(time, "UTC")
+inAsian   = hourUTC >= 0  and hourUTC < 9
+inLondon  = hourUTC >= 7  and hourUTC < 17
+inNY      = hourUTC >= 13 and hourUTC < 22
+inSession = not useSession or
+            (sessAsian  and inAsian)  or
+            (sessLondon and inLondon) or
+            (sessNY     and inNY)
+
+// ── NEW: Candle Pattern Filter ────────────────────────────────────────────────
+candleBody  = math.abs(close - open)
+candleRange = high - low
+upperWick   = high - math.max(close, open)
+lowerWick   = math.min(close, open) - low
+
+// Doji: body < 10% of range
+isDoji = candleRange > 0 and candleBody < candleRange * 0.1
+
+// Bullish patterns (current bar)
+isHammer     = close > open and candleRange > 0 and
+               lowerWick >= candleBody * 2.0 and upperWick <= candleBody * 0.5
+isBullEngulf = close > open and
+               open  <= math.min(open[1], close[1]) and
+               close >= math.max(open[1], close[1]) and
+               candleBody >= math.abs(close[1] - open[1]) * 0.8
+bullPattern  = isHammer or isBullEngulf
+
+// Bearish patterns (current bar)
+isShootStar  = close < open and candleRange > 0 and
+               upperWick >= candleBody * 2.0 and lowerWick <= candleBody * 0.5
+isBearEngulf = close < open and
+               open  >= math.max(open[1], close[1]) and
+               close <= math.min(open[1], close[1]) and
+               candleBody >= math.abs(close[1] - open[1]) * 0.8
+bearPattern  = isShootStar or isBearEngulf
+
+candleLongOK  = (not useCandleFilter or bullPattern) and (not avoidDoji or not isDoji)
+candleShortOK = (not useCandleFilter or bearPattern) and (not avoidDoji or not isDoji)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONFLUENCE SCORING
 // ═══════════════════════════════════════════════════════════════════════════════
-longFactors  = array.from(
-     ema9 > ema21    ? 1 : 0,
-     stBull          ? 1 : 0,
-     kCrossUp        ? 1 : 0,
-     volOK           ? 1 : 0,
-     aboveVWAP       ? 1 : 0,
-     risingMom       ? 1 : 0)
+longFactors = array.from(
+     ema9 > ema21  ? 1 : 0,
+     stBull        ? 1 : 0,
+     kCrossUp      ? 1 : 0,
+     volOK         ? 1 : 0,
+     aboveVWAP     ? 1 : 0,
+     risingMom     ? 1 : 0)
 
 shortFactors = array.from(
-     ema9 < ema21    ? 1 : 0,
-     stBear          ? 1 : 0,
-     kCrossDown      ? 1 : 0,
-     volOK           ? 1 : 0,
-     belowVWAP       ? 1 : 0,
-     fallingMom      ? 1 : 0)
+     ema9 < ema21  ? 1 : 0,
+     stBear        ? 1 : 0,
+     kCrossDown    ? 1 : 0,
+     volOK         ? 1 : 0,
+     belowVWAP     ? 1 : 0,
+     fallingMom    ? 1 : 0)
 
 longScore  = array.sum(longFactors)
 shortScore = array.sum(shortFactors)
@@ -141,11 +222,16 @@ shortScore = array.sum(shortFactors)
 var int barsSince = 999
 barsSince += 1
 
-// 동점 시 롱/숏 동시 발생 방지 — 점수가 더 높은 방향만 진입
-_flat      = strategy.position_size == 0
-_cooldown  = barsSince >= minBars
-longCond   = longScore  >= minScore and longScore  >= shortScore and _flat and _cooldown and adxOK and bullBias and mtfLongOK
-shortCond  = shortScore >= minScore and shortScore >  longScore  and _flat and _cooldown and adxOK and bearBias and mtfShortOK
+_flat     = strategy.position_size == 0
+_cooldown = barsSince >= minBars
+
+longCond  = longScore  >= minScore and longScore  >= shortScore and _flat and _cooldown and
+            adxOK and bullBias and mtfLongOK and
+            emaSlopeOK_L and bbSqueezeOK and candleLongOK and inSession
+
+shortCond = shortScore >= minScore and shortScore >  longScore  and _flat and _cooldown and
+            adxOK and bearBias and mtfShortOK and
+            emaSlopeOK_S and bbSqueezeOK and candleShortOK and inSession
 
 if longCond or shortCond
     barsSince := 0
@@ -153,8 +239,15 @@ if longCond or shortCond
 // ═══════════════════════════════════════════════════════════════════════════════
 // POSITION MANAGEMENT
 // ═══════════════════════════════════════════════════════════════════════════════
-calcQty(slDist) =>
-    slDist > 0 ? (strategy.equity * riskPct / 100) / slDist : 1.0
+
+// Score-based sizing: linearly interpolate multiplier from scoreMultMin (minScore) to scoreMultMax (6)
+calcQty(slDist, score) =>
+    base = slDist > 0 ? (strategy.equity * riskPct / 100) / slDist : 1.0
+    if useScoreSize and 6 > minScore
+        t = math.max(0.0, math.min(1.0, (float(score) - float(minScore)) / float(6 - minScore)))
+        base * (scoreMultMin + (scoreMultMax - scoreMultMin) * t)
+    else
+        base
 
 var float slPx    = na
 var float tp1Px   = na
@@ -168,13 +261,9 @@ if longCond
     tp1Px   := close + atr * tp1Mult
     tp2Px   := close + atr * tp2Mult
     tp1Done := false
-    qty = calcQty(atr * slMult)
+    qty = calcQty(atr * slMult, longScore)
     strategy.entry("Long", strategy.long, qty=qty, comment="▲ " + str.tostring(longScore) + "/6")
     if useTrail
-        // 네이티브 트레일링 스탑 (TradingView 엔진 직접 처리 — 수동 로직 없음)
-        // L_TP1  : 부분 청산 50% (한도+스탑)
-        // L_TRAIL: 나머지 50% — SL까지 하드스탑, tp1Px 도달 시 트레일 활성화
-        //          trail_price=tp1Px, trail_offset=trailMult*ATR → 초기 trail SL = tp1Px-offset = 진입가(BE)
         trailTicks = math.round(atr * trailMult / syminfo.mintick)
         strategy.exit("L_TP1",   "Long", qty_percent=tp1Pct, limit=tp1Px, stop=slPx)
         strategy.exit("L_TRAIL", "Long", qty_percent=100,    stop=slPx,
@@ -189,7 +278,7 @@ if shortCond
     tp1Px   := close - atr * tp1Mult
     tp2Px   := close - atr * tp2Mult
     tp1Done := false
-    qty = calcQty(atr * slMult)
+    qty = calcQty(atr * slMult, shortScore)
     strategy.entry("Short", strategy.short, qty=qty, comment="▼ " + str.tostring(shortScore) + "/6")
     if useTrail
         trailTicks = math.round(atr * trailMult / syminfo.mintick)
@@ -201,8 +290,10 @@ if shortCond
         strategy.exit("S_TP2", "Short", qty_percent=100,    limit=tp2Px, stop=slPx)
 
 // ── BE Stop (trail OFF일 때만 수동 관리) ──────────────────────────────────────
-longTP1Hit  = not useTrail and strategy.position_size > 0 and prevPos > 0 and strategy.position_size < prevPos * 0.85 and not tp1Done
-shortTP1Hit = not useTrail and strategy.position_size < 0 and prevPos < 0 and strategy.position_size > prevPos * 0.85 and not tp1Done
+longTP1Hit  = not useTrail and strategy.position_size > 0 and prevPos > 0 and
+              strategy.position_size < prevPos * 0.85 and not tp1Done
+shortTP1Hit = not useTrail and strategy.position_size < 0 and prevPos < 0 and
+              strategy.position_size > prevPos * 0.85 and not tp1Done
 
 if longTP1Hit and useBE
     tp1Done := true
@@ -216,6 +307,7 @@ prevPos := strategy.position_size
 // ═══════════════════════════════════════════════════════════════════════════════
 // VISUALS
 // ═══════════════════════════════════════════════════════════════════════════════
+
 // EMAs
 plot(showEMA ? ema9  : na, "EMA Fast", color.new(#00BFFF, 0), linewidth=1)
 plot(showEMA ? ema21 : na, "EMA Slow", color.new(#FF6B6B, 0), linewidth=1)
@@ -231,8 +323,13 @@ plot(showST ? stLine : na, "Supertrend",
 plot(useVWAP ? vwap : na, "VWAP", color.new(color.orange, 0), linewidth=1, style=plot.style_circles)
 
 // Signal shapes
-plotshape(longCond,  "▲ Long",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), size=size.normal)
-plotshape(shortCond, "▼ Short", shape.triangledown,  location.abovebar, color.new(color.red, 0),  size=size.normal)
+plotshape(longCond,  "▲ Long",  shape.triangleup,  location.belowbar, color.new(color.lime, 0), size=size.normal)
+plotshape(shortCond, "▼ Short", shape.triangledown, location.abovebar, color.new(color.red,  0), size=size.normal)
+
+// Doji blocked signal marker
+dojiBLocked = avoidDoji and isDoji and _flat and (longScore >= minScore or shortScore >= minScore)
+plotshape(showLevels and dojiBLocked, "⚠ Doji Blocked",
+          shape.xcross, location.abovebar, color.new(color.yellow, 20), size=size.tiny)
 
 // Score labels on signal
 if longCond and showLevels
@@ -254,8 +351,11 @@ if shortCond and showLevels
 bgcolor(strategy.position_size > 0 ? color.new(color.lime, 96) :
         strategy.position_size < 0 ? color.new(color.red,  96) : na)
 
-// Ranging market overlay (ADX below threshold)
+// Ranging zone overlay
 bgcolor(useADX and adxVal < adxMin ? color.new(color.gray, 93) : na, title="Ranging Zone")
+
+// Out-of-session overlay
+bgcolor(useSession and not inSession ? color.new(color.navy, 93) : na, title="Closed Session")
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DASHBOARD
@@ -272,7 +372,7 @@ var table dash = na
 if showDash and barstate.islast
     if not na(dash)
         table.delete(dash)
-    dash := table.new(position.top_right, 2, 23,
+    dash := table.new(position.top_right, 2, 27,
                       bgcolor=color.new(#0d1117, 5),
                       border_color=color.new(color.gray, 55), border_width=1)
     cg  = #B2B5BE
@@ -288,44 +388,43 @@ if showDash and barstate.islast
     table.cell(dash, 0, 0, "⚡ APEX Scalper", text_color=cw, bgcolor=hdr, text_size=val, text_halign=text.align_center)
 
     // Stats
-    wr = strategy.wintrades + strategy.losstrades > 0 ? strategy.wintrades / (strategy.wintrades + strategy.losstrades) * 100 : 0.0
-    table.cell(dash, 0, 1, "Net P&L",  text_color=cg,  text_size=lbl)
-    table.cell(dash, 1, 1, "$" + str.tostring(strategy.netprofit, "#.0"), text_color=strategy.netprofit >= 0 ? cgr : cre, text_size=lbl, text_halign=text.align_right)
-    table.cell(dash, 0, 2, "Win Rate", text_color=cg,  text_size=lbl)
-    table.cell(dash, 1, 2, str.tostring(wr, "#.1") + "%", text_color=wr >= 55 ? cgr : wr >= 40 ? cyl : cre, text_size=lbl, text_halign=text.align_right)
-    table.cell(dash, 0, 3, "Trades",   text_color=cg,  text_size=lbl)
+    wr = strategy.wintrades + strategy.losstrades > 0 ?
+         strategy.wintrades / (strategy.wintrades + strategy.losstrades) * 100 : 0.0
+    table.cell(dash, 0, 1, "Net P&L",  text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 1, "$" + str.tostring(strategy.netprofit, "#.0"),
+               text_color=strategy.netprofit >= 0 ? cgr : cre, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 2, "Win Rate", text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 2, str.tostring(wr, "#.1") + "%",
+               text_color=wr >= 55 ? cgr : wr >= 40 ? cyl : cre, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 3, "Trades",   text_color=cg, text_size=lbl)
     table.cell(dash, 1, 3, str.tostring(strategy.closedtrades), text_color=cg, text_size=lbl, text_halign=text.align_right)
-    table.cell(dash, 0, 4, "Max DD",   text_color=cg,  text_size=lbl)
+    table.cell(dash, 0, 4, "Max DD",   text_color=cg, text_size=lbl)
     table.cell(dash, 1, 4, str.tostring(strategy.max_drawdown, "#.0"), text_color=cre, text_size=lbl, text_halign=text.align_right)
 
-    // Confluence bars
+    // Confluence scores
     table.merge_cells(dash, 0, 5, 1, 5)
     table.cell(dash, 0, 5, "── Confluence ──", text_color=cyl, text_size=lbl, text_halign=text.align_center)
-    table.cell(dash, 0, 6, "Long  " + scoreBar(longScore, 6),  text_color=longScore  >= 5 ? cgr : longScore  >= 3 ? cyl : cg, text_size=lbl)
-    table.cell(dash, 1, 6, str.tostring(longScore)  + "/6", text_color=longScore  >= minScore ? cgr : cg, text_size=lbl, text_halign=text.align_right)
-    table.cell(dash, 0, 7, "Short " + scoreBar(shortScore, 6), text_color=shortScore >= 5 ? cre : shortScore >= 3 ? cyl : cg, text_size=lbl)
-    table.cell(dash, 1, 7, str.tostring(shortScore) + "/6", text_color=shortScore >= minScore ? cre : cg, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 6, "Long  " + scoreBar(longScore, 6),
+               text_color=longScore >= 5 ? cgr : longScore >= 3 ? cyl : cg, text_size=lbl)
+    table.cell(dash, 1, 6, str.tostring(longScore) + "/6",
+               text_color=longScore >= minScore ? cgr : cg, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 7, "Short " + scoreBar(shortScore, 6),
+               text_color=shortScore >= 5 ? cre : shortScore >= 3 ? cyl : cg, text_size=lbl)
+    table.cell(dash, 1, 7, str.tostring(shortScore) + "/6",
+               text_color=shortScore >= minScore ? cre : cg, text_size=lbl, text_halign=text.align_right)
 
-    // Factor breakdown — three separate homogeneous arrays to avoid CE10122
+    // Factor breakdown
     table.merge_cells(dash, 0, 8, 1, 8)
     table.cell(dash, 0, 8, "── 6 Factors ──", text_color=cyl, text_size=lbl, text_halign=text.align_center)
 
-    fNames = array.from(
-         "EMA Align",
-         "Supertrend",
-         "Stoch RSI",
-         "Volume",
-         "VWAP Side",
-         "Momentum")
-
-    fVals = array.from(
+    fNames = array.from("EMA Align", "Supertrend", "Stoch RSI", "Volume", "VWAP Side", "Momentum")
+    fVals  = array.from(
          ema9 > ema21  ? "▲ Bull"  : "▼ Bear",
          stBull        ? "▲ Bull"  : "▼ Bear",
          str.tostring(kVal, "#.0"),
          volOK         ? "✓ High"  : "✗ Low",
          aboveVWAP     ? "▲ Above" : "▼ Below",
          risingMom     ? "▲ Up"    : "▼ Down")
-
     fOK = array.from(
          ema9 > ema21  ? 1 : 0,
          stBull        ? 1 : 0,
@@ -340,24 +439,61 @@ if showDash and barstate.islast
                    text_color=array.get(fOK, fi) == 1 ? cgr : cre,
                    text_size=lbl, text_halign=text.align_right)
 
-    // Regime & MTF filter status
+    // Filters status
     table.merge_cells(dash, 0, 15, 1, 15)
-    table.cell(dash, 0, 15, "── Regime Filter ──", text_color=cyl, text_size=lbl, text_halign=text.align_center)
+    table.cell(dash, 0, 15, "── Filters ──", text_color=cyl, text_size=lbl, text_halign=text.align_center)
 
-    adxColor  = not useADX ? cg : adxOK ? cgr : cre
-    adxStatus = not useADX ? "OFF" : adxOK ? "✓ " + str.tostring(adxVal, "#.1") : "✗ " + str.tostring(adxVal, "#.1")
+    // ADX
+    adxClr  = not useADX ? cg : adxOK ? cgr : cre
+    adxStat = not useADX ? "OFF" : adxOK ? "✓ " + str.tostring(adxVal, "#.1") : "✗ " + str.tostring(adxVal, "#.1")
     table.cell(dash, 0, 16, "ADX(" + str.tostring(adxLen) + ") ≥ " + str.tostring(adxMin, "#"), text_color=cg, text_size=lbl)
-    table.cell(dash, 1, 16, adxStatus, text_color=adxColor, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 1, 16, adxStat, text_color=adxClr, text_size=lbl, text_halign=text.align_right)
 
-    biasColor  = not useDailyBias ? cg : close > dailyEma200 ? cgr : cre
-    biasStatus = not useDailyBias ? "OFF" : close > dailyEma200 ? "▲ Bull (L only)" : "▼ Bear (S only)"
+    // Daily EMA200
+    biasClr  = not useDailyBias ? cg : close > dailyEma200 ? cgr : cre
+    biasStat = not useDailyBias ? "OFF" : close > dailyEma200 ? "▲ Bull (L only)" : "▼ Bear (S only)"
     table.cell(dash, 0, 17, "Daily EMA" + str.tostring(dailyEmaLen), text_color=cg, text_size=lbl)
-    table.cell(dash, 1, 17, biasStatus, text_color=biasColor, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 1, 17, biasStat, text_color=biasClr, text_size=lbl, text_halign=text.align_right)
 
-    mtfColor  = not useMTF ? cg : mtfBull ? cgr : cre
-    mtfStatus = not useMTF ? "OFF" : mtfBull ? "▲ Bull" : "▼ Bear"
+    // MTF Supertrend
+    mtfClr  = not useMTF ? cg : mtfBull ? cgr : cre
+    mtfStat = not useMTF ? "OFF" : mtfBull ? "▲ Bull" : "▼ Bear"
     table.cell(dash, 0, 18, "MTF(" + mtfTF + ") ST", text_color=cg, text_size=lbl)
-    table.cell(dash, 1, 18, mtfStatus, text_color=mtfColor, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 1, 18, mtfStat, text_color=mtfClr, text_size=lbl, text_halign=text.align_right)
+
+    // EMA Slope
+    slopeClr  = not useEmaSlope ? cg : bullSlope ? cgr : bearSlope ? cre : cyl
+    slopeStat = not useEmaSlope ? "OFF" : bullSlope ? "▲ Rising" : bearSlope ? "▼ Falling" : "→ Flat"
+    table.cell(dash, 0, 19, "EMA Slope(" + str.tostring(emaSlopeLen) + ")", text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 19, slopeStat, text_color=slopeClr, text_size=lbl, text_halign=text.align_right)
+
+    // BB Squeeze
+    bbClr  = not useBBSqueeze ? cg : bbExpanding ? cgr : cre
+    bbStat = not useBBSqueeze ? "OFF" : bbExpanding ? "▲ Expanding" : "◀▶ Squeezing"
+    table.cell(dash, 0, 20, "BB(" + str.tostring(bbLen) + ") Squeeze", text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 20, bbStat, text_color=bbClr, text_size=lbl, text_halign=text.align_right)
+
+    // Session
+    sessClr  = not useSession ? cg : inSession ? cgr : cre
+    sessStat = not useSession ? "OFF" : inSession ? "✓ Active " + str.tostring(hourUTC, "#") + "h" : "✗ Closed " + str.tostring(hourUTC, "#") + "h"
+    table.cell(dash, 0, 21, "Session (UTC)", text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 21, sessStat, text_color=sessClr, text_size=lbl, text_halign=text.align_right)
+
+    // Candle Pattern
+    candleClr  = isDoji ? cyl : bullPattern ? cgr : bearPattern ? cre : cg
+    candleStat = isDoji ? "⚠ Doji" : bullPattern ? "▲ Bullish" : bearPattern ? "▼ Bearish" : "─ Neutral"
+    table.cell(dash, 0, 22, "Candle Pattern", text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 22, candleStat, text_color=candleClr, text_size=lbl, text_halign=text.align_right)
+
+    // Score-Based Sizing
+    dispScore = longScore >= shortScore ? longScore : shortScore
+    scoreMult = useScoreSize and 6 > minScore ?
+                scoreMultMin + (scoreMultMax - scoreMultMin) *
+                math.max(0.0, math.min(1.0, (float(dispScore) - float(minScore)) / float(6 - minScore))) : 1.0
+    sizeClr  = not useScoreSize ? cg : scoreMult >= 1.0 ? cgr : cyl
+    sizeStat = not useScoreSize ? "OFF" : str.tostring(scoreMult, "#.2") + "× (" + str.tostring(dispScore) + "pt)"
+    table.cell(dash, 0, 23, "Score Sizing", text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 23, sizeStat, text_color=sizeClr, text_size=lbl, text_halign=text.align_right)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ALERTS
