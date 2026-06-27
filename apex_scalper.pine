@@ -156,85 +156,60 @@ if longCond or shortCond
 calcQty(slDist) =>
     slDist > 0 ? (strategy.equity * riskPct / 100) / slDist : 1.0
 
-var float slPx      = na
-var float tp1Px     = na
-var float tp2Px     = na
-var bool  tp1Done   = false
-var float prevPos   = 0.0
-var float peakPrice = na   // trailing stop peak tracker
+var float slPx    = na
+var float tp1Px   = na
+var float tp2Px   = na
+var bool  tp1Done = false
+var float prevPos = 0.0
 
 // ── Long ──────────────────────────────────────────────────────────────────────
 if longCond
-    slPx      := close - atr * slMult
-    tp1Px     := close + atr * tp1Mult
-    tp2Px     := close + atr * tp2Mult
-    tp1Done   := false
-    peakPrice := na
+    slPx    := close - atr * slMult
+    tp1Px   := close + atr * tp1Mult
+    tp2Px   := close + atr * tp2Mult
+    tp1Done := false
     qty = calcQty(atr * slMult)
     strategy.entry("Long", strategy.long, qty=qty, comment="▲ " + str.tostring(longScore) + "/6")
     if useTrail
-        // Trail 모드: TP1 한도만 (스탑 없음) + 전체 SL 별도 분리
-        // → SL 터지면 L_SL이 100% 즉시 청산, TP1 터지면 trail 시작
-        strategy.exit("L_TP1", "Long", qty_percent=tp1Pct, limit=tp1Px)
-        strategy.exit("L_SL",  "Long", qty_percent=100,    stop=slPx)
+        // 네이티브 트레일링 스탑 (TradingView 엔진 직접 처리 — 수동 로직 없음)
+        // L_TP1  : 부분 청산 50% (한도+스탑)
+        // L_TRAIL: 나머지 50% — SL까지 하드스탑, tp1Px 도달 시 트레일 활성화
+        //          trail_price=tp1Px, trail_offset=trailMult*ATR → 초기 trail SL = tp1Px-offset = 진입가(BE)
+        trailTicks = math.round(atr * trailMult / syminfo.mintick)
+        strategy.exit("L_TP1",   "Long", qty_percent=tp1Pct, limit=tp1Px, stop=slPx)
+        strategy.exit("L_TRAIL", "Long", qty_percent=100,    stop=slPx,
+                      trail_price=tp1Px, trail_offset=trailTicks)
     else
         strategy.exit("L_TP1", "Long", qty_percent=tp1Pct, limit=tp1Px, stop=slPx)
         strategy.exit("L_TP2", "Long", qty_percent=100,    limit=tp2Px, stop=slPx)
 
 // ── Short ─────────────────────────────────────────────────────────────────────
 if shortCond
-    slPx      := close + atr * slMult
-    tp1Px     := close - atr * tp1Mult
-    tp2Px     := close - atr * tp2Mult
-    tp1Done   := false
-    peakPrice := na
+    slPx    := close + atr * slMult
+    tp1Px   := close - atr * tp1Mult
+    tp2Px   := close - atr * tp2Mult
+    tp1Done := false
     qty = calcQty(atr * slMult)
     strategy.entry("Short", strategy.short, qty=qty, comment="▼ " + str.tostring(shortScore) + "/6")
     if useTrail
-        strategy.exit("S_TP1", "Short", qty_percent=tp1Pct, limit=tp1Px)
-        strategy.exit("S_SL",  "Short", qty_percent=100,    stop=slPx)
+        trailTicks = math.round(atr * trailMult / syminfo.mintick)
+        strategy.exit("S_TP1",   "Short", qty_percent=tp1Pct, limit=tp1Px, stop=slPx)
+        strategy.exit("S_TRAIL", "Short", qty_percent=100,    stop=slPx,
+                      trail_price=tp1Px, trail_offset=trailTicks)
     else
         strategy.exit("S_TP1", "Short", qty_percent=tp1Pct, limit=tp1Px, stop=slPx)
         strategy.exit("S_TP2", "Short", qty_percent=100,    limit=tp2Px, stop=slPx)
 
-// ── TP1 한도 체결 감지 → SL 취소 → BE 스탑 + trail 시작 ──────────────────────
-// position_size > 0 이면 SL이 아닌 TP1 한도로 절반 청산된 것
-longTP1Hit  = strategy.position_size > 0 and prevPos > 0 and strategy.position_size < prevPos * 0.85 and not tp1Done
-shortTP1Hit = strategy.position_size < 0 and prevPos < 0 and strategy.position_size > prevPos * 0.85 and not tp1Done
+// ── BE Stop (trail OFF일 때만 수동 관리) ──────────────────────────────────────
+longTP1Hit  = not useTrail and strategy.position_size > 0 and prevPos > 0 and strategy.position_size < prevPos * 0.85 and not tp1Done
+shortTP1Hit = not useTrail and strategy.position_size < 0 and prevPos < 0 and strategy.position_size > prevPos * 0.85 and not tp1Done
 
-if longTP1Hit
-    tp1Done   := true
-    peakPrice := close
-    if useTrail
-        strategy.cancel("L_SL")   // 전체 SL 취소, trail이 담당
-        strategy.exit("L_BE", "Long", qty_percent=100, stop=strategy.position_avg_price)
-    else if useBE
-        strategy.exit("L_TP2_BE", "Long", qty_percent=100, limit=tp2Px, stop=strategy.position_avg_price)
-
-if shortTP1Hit
-    tp1Done   := true
-    peakPrice := close
-    if useTrail
-        strategy.cancel("S_SL")
-        strategy.exit("S_BE", "Short", qty_percent=100, stop=strategy.position_avg_price)
-    else if useBE
-        strategy.exit("S_TP2_BE", "Short", qty_percent=100, limit=tp2Px, stop=strategy.position_avg_price)
-
-// ── 트레일링 스탑: TP1 이후 고점(저점)에서 ATR × trailMult 뒤따라옴 ────────────
-if strategy.position_size > 0 and tp1Done and useTrail
-    peakPrice := na(peakPrice) ? close : math.max(peakPrice, close)
-    if close < peakPrice - atr * trailMult
-        strategy.close("Long", comment="▲ Trail")
-        peakPrice := na
-
-if strategy.position_size < 0 and tp1Done and useTrail
-    peakPrice := na(peakPrice) ? close : math.min(peakPrice, close)
-    if close > peakPrice + atr * trailMult
-        strategy.close("Short", comment="▼ Trail")
-        peakPrice := na
-
-if strategy.position_size == 0
-    peakPrice := na
+if longTP1Hit and useBE
+    tp1Done := true
+    strategy.exit("L_TP2_BE", "Long",  qty_percent=100, limit=tp2Px, stop=strategy.position_avg_price)
+if shortTP1Hit and useBE
+    tp1Done := true
+    strategy.exit("S_TP2_BE", "Short", qty_percent=100, limit=tp2Px, stop=strategy.position_avg_price)
 
 prevPos := strategy.position_size
 
