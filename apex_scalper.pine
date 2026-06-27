@@ -39,6 +39,16 @@ g5 = "🔧 Signal Filter"
 minScore = input.int(5,  "Min Confluence Score (of 6)", minval=1, maxval=6, group=g5)
 minBars  = input.int(5,  "Min Bars Between Signals",    minval=0, group=g5)
 
+g7 = "🔭 Regime & MTF Filter"
+useADX  = input.bool(true,  "ADX Trend Filter",           group=g7,
+                     tooltip="ADX 미만 구간(횡보장) 진입 차단")
+adxLen  = input.int(14,     "ADX Length",                 minval=5, group=g7)
+adxMin  = input.float(20.0, "Min ADX Threshold",          minval=5, maxval=60, step=1.0, group=g7)
+useMTF  = input.bool(true,  "Higher TF Confirmation",     group=g7,
+                     tooltip="상위 TF Supertrend가 반대 방향이면 진입 차단")
+mtfTF   = input.timeframe("240", "Higher Timeframe",      group=g7,
+                     tooltip="1h 차트 → 240(4h) 권장 / 4h 차트 → D(1일) 권장")
+
 g6 = "🎨 Visuals"
 showEMA    = input.bool(true, "Show EMAs",         group=g6)
 showST     = input.bool(true, "Show Supertrend",   group=g6)
@@ -81,6 +91,17 @@ rsiVel    = rsi - rsi[3]
 risingMom = rsiVel >  0
 fallingMom= rsiVel <  0
 
+// ADX — trend strength filter
+[_, _, adxVal] = ta.dmi(adxLen, adxLen)
+adxOK = not useADX or adxVal >= adxMin
+
+// MTF Supertrend — higher timeframe direction confirmation
+[_, mtfStDir]  = request.security(syminfo.tickerid, mtfTF, ta.supertrend(stMult, stLen), lookahead=barmerge.lookahead_off)
+mtfBull        = mtfStDir < 0
+mtfBear        = mtfStDir > 0
+mtfLongOK      = not useMTF or mtfBull
+mtfShortOK     = not useMTF or mtfBear
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONFLUENCE SCORING
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -112,8 +133,8 @@ barsSince += 1
 // 동점 시 롱/숏 동시 발생 방지 — 점수가 더 높은 방향만 진입
 _flat      = strategy.position_size == 0
 _cooldown  = barsSince >= minBars
-longCond   = longScore  >= minScore and longScore  >= shortScore and _flat and _cooldown
-shortCond  = shortScore >= minScore and shortScore >  longScore  and _flat and _cooldown
+longCond   = longScore  >= minScore and longScore  >= shortScore and _flat and _cooldown and adxOK and mtfLongOK
+shortCond  = shortScore >= minScore and shortScore >  longScore  and _flat and _cooldown and adxOK and mtfShortOK
 
 if longCond or shortCond
     barsSince := 0
@@ -206,6 +227,9 @@ if shortCond and showLevels
 bgcolor(strategy.position_size > 0 ? color.new(color.lime, 96) :
         strategy.position_size < 0 ? color.new(color.red,  96) : na)
 
+// Ranging market overlay (ADX below threshold)
+bgcolor(useADX and adxVal < adxMin ? color.new(color.gray, 93) : na, title="Ranging Zone")
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // DASHBOARD
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -221,7 +245,7 @@ var table dash = na
 if showDash and barstate.islast
     if not na(dash)
         table.delete(dash)
-    dash := table.new(position.top_right, 2, 17,
+    dash := table.new(position.top_right, 2, 21,
                       bgcolor=color.new(#0d1117, 5),
                       border_color=color.new(color.gray, 55), border_width=1)
     cg  = #B2B5BE
@@ -288,6 +312,20 @@ if showDash and barstate.islast
         table.cell(dash, 1, 9 + fi, array.get(fVals,  fi),
                    text_color=array.get(fOK, fi) == 1 ? cgr : cre,
                    text_size=lbl, text_halign=text.align_right)
+
+    // Regime & MTF filter status
+    table.merge_cells(dash, 0, 15, 1, 15)
+    table.cell(dash, 0, 15, "── Regime Filter ──", text_color=cyl, text_size=lbl, text_halign=text.align_center)
+
+    adxColor  = not useADX ? cg : adxOK ? cgr : cre
+    adxStatus = not useADX ? "OFF" : adxOK ? "✓ " + str.tostring(adxVal, "#.1") : "✗ " + str.tostring(adxVal, "#.1")
+    table.cell(dash, 0, 16, "ADX(" + str.tostring(adxLen) + ") ≥ " + str.tostring(adxMin, "#"), text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 16, adxStatus, text_color=adxColor, text_size=lbl, text_halign=text.align_right)
+
+    mtfColor  = not useMTF ? cg : mtfBull ? cgr : cre
+    mtfStatus = not useMTF ? "OFF" : mtfBull ? "▲ Bull" : "▼ Bear"
+    table.cell(dash, 0, 17, "MTF(" + mtfTF + ") ST", text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 17, mtfStatus, text_color=mtfColor, text_size=lbl, text_halign=text.align_right)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ALERTS
