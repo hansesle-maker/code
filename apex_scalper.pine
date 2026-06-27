@@ -27,28 +27,47 @@ volMult = input.float(1.2, "Volume Threshold (×avg)", minval=1.0, step=0.1, gro
 useVWAP = input.bool(true, "VWAP Side Filter",        group=g3)
 
 g4 = "💰 Risk Management"
-atrLen       = input.int(14,    "ATR Length",                              minval=1, group=g4)
-slMult       = input.float(1.5, "SL ATR Multiple",                        minval=0.1, step=0.1, group=g4)
-tp1Mult      = input.float(1.5, "TP1 ATR Multiple",                       minval=0.1, step=0.1, group=g4)
-tp2Mult      = input.float(3.0, "TP2 ATR Multiple (useTrail=OFF일 때만)", minval=0.1, step=0.1, group=g4)
-tp1Pct       = input.float(50,  "TP1 Close %",                            minval=1, maxval=100, step=1, group=g4)
-riskPct      = input.float(1.0, "Risk Per Trade %",                       minval=0.1, maxval=10, step=0.1, group=g4)
+atrLen       = input.int(14,    "ATR Length",           minval=1, group=g4)
+slMult       = input.float(1.5, "SL ATR Multiple",      minval=0.1, step=0.1, group=g4)
+riskPct      = input.float(1.0, "Risk Per Trade %",     minval=0.1, maxval=10, step=0.1, group=g4)
 useBE        = input.bool(true,  "Move SL to BE after TP1", group=g4)
-useTrail     = input.bool(true,  "Trailing Stop after TP1 (TP2 대체)", group=g4,
-                          tooltip="TP1 이후 ATR 거리만큼 뒤따르는 트레일링 스탑. ON이면 TP2 무시.")
+useTrail     = input.bool(false, "Trailing Stop (replaces TP2~4)", group=g4,
+                          tooltip="TP1 이후 ATR 거리만큼 뒤따르는 트레일링 스탑. ON이면 TP2~TP4 무시.")
 trailMult    = input.float(1.5,  "↳ Trailing Stop ATR Multiple", minval=0.1, step=0.1, group=g4)
+
+useTP1  = input.bool(true,  "TP1 Enable", group=g4)
+tp1Mult = input.float(1.5,  "↳ TP1 ATR Multiple", minval=0.1, step=0.1, group=g4)
+tp1Pct  = input.float(40.0, "↳ TP1 Exit %",       minval=1, maxval=99, step=1, group=g4)
+
+useTP2  = input.bool(true,  "TP2 Enable", group=g4)
+tp2Mult = input.float(2.5,  "↳ TP2 ATR Multiple", minval=0.1, step=0.1, group=g4)
+tp2Pct  = input.float(30.0, "↳ TP2 Exit %",       minval=1, maxval=99, step=1, group=g4)
+
+useTP3  = input.bool(false, "TP3 Enable", group=g4)
+tp3Mult = input.float(4.0,  "↳ TP3 ATR Multiple", minval=0.1, step=0.1, group=g4)
+tp3Pct  = input.float(20.0, "↳ TP3 Exit %",       minval=1, maxval=99, step=1, group=g4)
+
+useTP4  = input.bool(false, "TP4 Enable", group=g4)
+tp4Mult = input.float(6.0,  "↳ TP4 ATR Multiple", minval=0.1, step=0.1, group=g4)
+tp4Pct  = input.float(10.0, "↳ TP4 Exit % (rest always closes)", minval=1, maxval=99, step=1, group=g4)
+
 useScoreSize = input.bool(false, "Score-Based Position Sizing", group=g4,
                           tooltip="컨플루언스 점수에 비례해 포지션 크기 조정.\n최소점수 → Min배수 / 6점 → Max배수")
 scoreMultMin = input.float(0.5,  "↳ Min Size Multiplier (minScore pts)", minval=0.1, maxval=5.0, step=0.1, group=g4)
 scoreMultMax = input.float(1.5,  "↳ Max Size Multiplier (6/6 pts)",      minval=0.1, maxval=5.0, step=0.1, group=g4)
 
 g5 = "🔧 Signal Filter"
-minScore        = input.int(5,     "Min Confluence Score (of 6)", minval=1, maxval=6, group=g5)
-minBars         = input.int(5,     "Min Bars Between Signals",    minval=0, group=g5)
-useCandleFilter = input.bool(false, "Candle Pattern Filter", group=g5,
-                             tooltip="해머·불리시인걸핑(롱) / 슈팅스타·베어리시인걸핑(숏) 패턴 확인 시만 진입")
-avoidDoji       = input.bool(true,  "Avoid Doji Entry Bars", group=g5,
-                             tooltip="몸통이 범위의 10% 미만인 도지봉 진입 차단 (방향성 불명확)")
+minScore = input.int(5, "Min Confluence Score (of 6)", minval=1, maxval=6, group=g5)
+minBars  = input.int(5, "Min Bars Between Signals",    minval=0, group=g5)
+
+useCircuitBreaker = input.bool(true, "Consecutive Loss Circuit Breaker", group=g5,
+                               tooltip="N번 연속 손실 후 다음 1 신호 차단 (감정 쿨다운 + MDD 억제)")
+maxConsecLoss     = input.int(3,     "↳ Max Consecutive Losses",         minval=1, maxval=10, group=g5)
+
+useAtrSpike = input.bool(true,  "Block Extreme Volatility (ATR Spike)", group=g5,
+                         tooltip="현재 ATR이 평균 ATR의 N배 이상이면 진입 차단 — 크래시/급등 구간 회피")
+atrSpikeLen  = input.int(50,   "↳ ATR Avg Length",     minval=10, group=g5)
+atrSpikeMult = input.float(2.5,"↳ Spike Threshold (×avg ATR)", minval=1.0, step=0.1, group=g5)
 
 g7 = "🔭 Regime & MTF Filter"
 useADX       = input.bool(true,   "ADX Trend Filter", group=g7,
@@ -62,20 +81,6 @@ useMTF       = input.bool(true,   "Higher TF Confirmation", group=g7,
                           tooltip="상위 TF Supertrend가 반대 방향이면 진입 차단")
 mtfTF        = input.timeframe("240", "↳ Higher Timeframe", group=g7,
                           tooltip="1h 차트 → 240(4h) 권장 / 4h 차트 → D(1일) 권장")
-useEmaSlope  = input.bool(false,  "EMA Slope Filter", group=g7,
-                          tooltip="Fast·Slow EMA 기울기가 모두 진입 방향과 일치할 때만 허용")
-emaSlopeLen  = input.int(3,       "↳ Slope Lookback Bars", minval=1, maxval=20, group=g7)
-useBBSqueeze = input.bool(false,  "BB Squeeze Breakout Filter", group=g7,
-                          tooltip="볼린저밴드 폭이 전봉 대비 확장 중일 때만 진입 (스퀴즈 탈출 포착)")
-bbLen        = input.int(20,      "↳ BB Length",     minval=5, group=g7)
-bbMult       = input.float(2.0,   "↳ BB Multiplier", minval=0.5, step=0.1, group=g7)
-
-g8 = "🕐 Session Filter"
-useSession = input.bool(false, "Session Time Filter (UTC)", group=g8,
-                        tooltip="체크된 세션에서만 거래 허용. OR 조건 (하나 이상 겹치면 진입 가능).")
-sessAsian  = input.bool(false, "Asian    00:00–09:00 UTC", group=g8)
-sessLondon = input.bool(true,  "London   07:00–17:00 UTC", group=g8)
-sessNY     = input.bool(true,  "New York 13:00–22:00 UTC", group=g8)
 
 g6 = "🎨 Visuals"
 showEMA    = input.bool(true, "Show EMAs",         group=g6)
@@ -128,49 +133,27 @@ mtfBear       = mtfStDir > 0
 mtfLongOK     = not useMTF or mtfBull
 mtfShortOK    = not useMTF or mtfBear
 
-// ── EMA Slope Filter ──────────────────────────────────────────────────────────
-bullSlope    = ema9 > ema9[emaSlopeLen] and ema21 > ema21[emaSlopeLen]
-bearSlope    = ema9 < ema9[emaSlopeLen] and ema21 < ema21[emaSlopeLen]
-emaSlopeOK_L = not useEmaSlope or bullSlope
-emaSlopeOK_S = not useEmaSlope or bearSlope
+// ── ATR Spike Filter ──────────────────────────────────────────────────────────
+atrAvg     = ta.sma(atr, atrSpikeLen)
+atrSpikeOK = not useAtrSpike or atr <= atrAvg * atrSpikeMult
 
-// ── BB Squeeze Filter ─────────────────────────────────────────────────────────
-bbBasis     = ta.sma(close, bbLen)
-bbStdev     = ta.stdev(close, bbLen)
-bbWidth     = bbBasis > 0 ? (bbBasis + bbStdev * bbMult - (bbBasis - bbStdev * bbMult)) / bbBasis * 100 : 0.0
-bbExpanding = bbWidth > bbWidth[1]
-bbSqueezeOK = not useBBSqueeze or bbExpanding
+// ── Consecutive Loss Circuit Breaker ──────────────────────────────────────────
+var int consecLoss = 0
+var bool cbBlocked = false
 
-// ── Session Filter (UTC) ──────────────────────────────────────────────────────
-hourUTC    = hour(time, "UTC")
-inAsian    = hourUTC >= 0  and hourUTC < 9
-inLondon   = hourUTC >= 7  and hourUTC < 17
-inNY       = hourUTC >= 13 and hourUTC < 22
-anySession = (sessAsian and inAsian) or (sessLondon and inLondon) or (sessNY and inNY)
-inSession  = not useSession or anySession
+if strategy.closedtrades > 0
+    lastPnl = strategy.closedtrades.profit(strategy.closedtrades - 1)
+    if lastPnl < 0
+        consecLoss := consecLoss + 1
+    else
+        consecLoss := 0
 
-// ── Candle Pattern Filter ─────────────────────────────────────────────────────
-candleBody  = math.abs(close - open)
-candleRange = high - low
-upperWick   = high - math.max(close, open)
-lowerWick   = math.min(close, open) - low
-isDoji      = candleRange > 0 and candleBody < candleRange * 0.1
-
-isHammer     = close > open and candleRange > 0 and lowerWick >= candleBody * 2.0 and upperWick <= candleBody * 0.5
-isBullEngulf = close > open and open <= math.min(open[1], close[1]) and close >= math.max(open[1], close[1]) and candleBody >= math.abs(close[1] - open[1]) * 0.8
-bullPattern  = isHammer or isBullEngulf
-
-isShootStar  = close < open and candleRange > 0 and upperWick >= candleBody * 2.0 and lowerWick <= candleBody * 0.5
-isBearEngulf = close < open and open >= math.max(open[1], close[1]) and close <= math.min(open[1], close[1]) and candleBody >= math.abs(close[1] - open[1]) * 0.8
-bearPattern  = isShootStar or isBearEngulf
-
-candleLongOK  = (not useCandleFilter or bullPattern) and (not avoidDoji or not isDoji)
-candleShortOK = (not useCandleFilter or bearPattern) and (not avoidDoji or not isDoji)
+cbBlocked := useCircuitBreaker and consecLoss >= maxConsecLoss
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONFLUENCE SCORING
 // ═══════════════════════════════════════════════════════════════════════════════
-longFactors = array.from(ema9 > ema21 ? 1 : 0, stBull ? 1 : 0, kCrossUp ? 1 : 0, volOK ? 1 : 0, aboveVWAP ? 1 : 0, risingMom ? 1 : 0)
+longFactors  = array.from(ema9 > ema21 ? 1 : 0, stBull ? 1 : 0, kCrossUp ? 1 : 0, volOK ? 1 : 0, aboveVWAP ? 1 : 0, risingMom ? 1 : 0)
 shortFactors = array.from(ema9 < ema21 ? 1 : 0, stBear ? 1 : 0, kCrossDown ? 1 : 0, volOK ? 1 : 0, belowVWAP ? 1 : 0, fallingMom ? 1 : 0)
 
 longScore  = array.sum(longFactors)
@@ -184,17 +167,22 @@ barsSince += 1
 
 _flat     = strategy.position_size == 0
 _cooldown = barsSince >= minBars
+_filters  = adxOK and atrSpikeOK and not cbBlocked
 
 longBase  = longScore >= minScore and longScore >= shortScore and _flat and _cooldown
-longExtra = adxOK and bullBias and mtfLongOK and emaSlopeOK_L and bbSqueezeOK and candleLongOK and inSession
+longExtra = _filters and bullBias and mtfLongOK
 longCond  = longBase and longExtra
 
 shortBase  = shortScore >= minScore and shortScore > longScore and _flat and _cooldown
-shortExtra = adxOK and bearBias and mtfShortOK and emaSlopeOK_S and bbSqueezeOK and candleShortOK and inSession
+shortExtra = _filters and bearBias and mtfShortOK
 shortCond  = shortBase and shortExtra
 
 if longCond or shortCond
     barsSince := 0
+
+// ── Reset circuit breaker on new entry (counts as cleared for this signal) ───
+if longCond or shortCond
+    consecLoss := 0
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // POSITION MANAGEMENT
@@ -207,50 +195,113 @@ calcQty(slDist, score) =>
     else
         base
 
-var float slPx    = na
-var float tp1Px   = na
-var float tp2Px   = na
-var bool  tp1Done = false
-var float prevPos = 0.0
+// Effective TP prices — computed at entry
+var float slPx  = na
+var float tp1Px = na
+var float tp2Px = na
+var float tp3Px = na
+var float tp4Px = na
+
+// Track which TPs have been hit
+var int   tpHitCount = 0
+var float prevPos    = 0.0
+
+// Remaining pct after earlier TPs (used to size each exit correctly)
+// strategy.exit qty_percent is % of REMAINING position at time of order setup
+// We set each as pct of original: TP1=tp1Pct, TP2=tp2Pct/(1-tp1Pct), etc.
+// Simpler: pass absolute exit quantities computed from total, but that requires qty.
+// Instead we compute cumulative and back-calculate the chain fraction.
+tpChainPct(p1, p2, p3, p4, level) =>
+    // returns what % of *remaining* position to close at `level`
+    // level 1 = first exit, etc.
+    float result = 100.0
+    if level == 1
+        result := p1
+    else if level == 2
+        rem1 = 100.0 - p1
+        result := rem1 > 0 ? math.min(100.0, p2 / rem1 * 100.0) : 100.0
+    else if level == 3
+        rem2 = 100.0 - p1 - p2
+        result := rem2 > 0 ? math.min(100.0, p3 / rem2 * 100.0) : 100.0
+    else if level == 4
+        rem3 = 100.0 - p1 - p2 - p3
+        result := rem3 > 0 ? math.min(100.0, p4 / rem3 * 100.0) : 100.0
+    result
+
+// Determine last active TP level (for final 100% close)
+lastActiveTP() =>
+    int last = 1
+    if useTP4
+        last := 4
+    else if useTP3
+        last := 3
+    else if useTP2
+        last := 2
+    else
+        last := 1
+    last
+
+placeExits(dir, slP, tp1P, tp2P, tp3P, tp4P) =>
+    prefix = dir == 1 ? "L" : "S"
+    if useTrail
+        trailTicks = math.round(atr * trailMult / syminfo.mintick)
+        if useTP1
+            strategy.exit(prefix + "_TP1", prefix == "L" ? "Long" : "Short",
+                          qty_percent=tp1Pct, limit=tp1P, stop=slP)
+        strategy.exit(prefix + "_TRAIL", prefix == "L" ? "Long" : "Short",
+                      qty_percent=100, stop=slP, trail_price=tp1P, trail_offset=trailTicks)
+    else
+        lastTP = lastActiveTP()
+        if useTP1
+            pct1 = lastTP == 1 ? 100.0 : tpChainPct(tp1Pct, tp2Pct, tp3Pct, tp4Pct, 1)
+            strategy.exit(prefix + "_TP1", prefix == "L" ? "Long" : "Short",
+                          qty_percent=pct1, limit=tp1P, stop=slP)
+        if useTP2
+            pct2 = lastTP == 2 ? 100.0 : tpChainPct(tp1Pct, tp2Pct, tp3Pct, tp4Pct, 2)
+            strategy.exit(prefix + "_TP2", prefix == "L" ? "Long" : "Short",
+                          qty_percent=pct2, limit=tp2P, stop=slP)
+        if useTP3
+            pct3 = lastTP == 3 ? 100.0 : tpChainPct(tp1Pct, tp2Pct, tp3Pct, tp4Pct, 3)
+            strategy.exit(prefix + "_TP3", prefix == "L" ? "Long" : "Short",
+                          qty_percent=pct3, limit=tp3P, stop=slP)
+        if useTP4
+            strategy.exit(prefix + "_TP4", prefix == "L" ? "Long" : "Short",
+                          qty_percent=100, limit=tp4P, stop=slP)
+        if not useTP1 and not useTP2 and not useTP3 and not useTP4
+            strategy.exit(prefix + "_SL", prefix == "L" ? "Long" : "Short",
+                          qty_percent=100, stop=slP)
 
 if longCond
-    slPx    := close - atr * slMult
-    tp1Px   := close + atr * tp1Mult
-    tp2Px   := close + atr * tp2Mult
-    tp1Done := false
+    slPx  := close - atr * slMult
+    tp1Px := close + atr * tp1Mult
+    tp2Px := close + atr * tp2Mult
+    tp3Px := close + atr * tp3Mult
+    tp4Px := close + atr * tp4Mult
+    tpHitCount := 0
     qty = calcQty(atr * slMult, longScore)
     strategy.entry("Long", strategy.long, qty=qty, comment="▲ " + str.tostring(longScore) + "/6")
-    if useTrail
-        trailTicks = math.round(atr * trailMult / syminfo.mintick)
-        strategy.exit("L_TP1",   "Long", qty_percent=tp1Pct, limit=tp1Px, stop=slPx)
-        strategy.exit("L_TRAIL", "Long", qty_percent=100, stop=slPx, trail_price=tp1Px, trail_offset=trailTicks)
-    else
-        strategy.exit("L_TP1", "Long", qty_percent=tp1Pct, limit=tp1Px, stop=slPx)
-        strategy.exit("L_TP2", "Long", qty_percent=100,    limit=tp2Px, stop=slPx)
+    placeExits(1, slPx, tp1Px, tp2Px, tp3Px, tp4Px)
 
 if shortCond
-    slPx    := close + atr * slMult
-    tp1Px   := close - atr * tp1Mult
-    tp2Px   := close - atr * tp2Mult
-    tp1Done := false
+    slPx  := close + atr * slMult
+    tp1Px := close - atr * tp1Mult
+    tp2Px := close - atr * tp2Mult
+    tp3Px := close - atr * tp3Mult
+    tp4Px := close - atr * tp4Mult
+    tpHitCount := 0
     qty = calcQty(atr * slMult, shortScore)
     strategy.entry("Short", strategy.short, qty=qty, comment="▼ " + str.tostring(shortScore) + "/6")
-    if useTrail
-        trailTicks = math.round(atr * trailMult / syminfo.mintick)
-        strategy.exit("S_TP1",   "Short", qty_percent=tp1Pct, limit=tp1Px, stop=slPx)
-        strategy.exit("S_TRAIL", "Short", qty_percent=100, stop=slPx, trail_price=tp1Px, trail_offset=trailTicks)
-    else
-        strategy.exit("S_TP1", "Short", qty_percent=tp1Pct, limit=tp1Px, stop=slPx)
-        strategy.exit("S_TP2", "Short", qty_percent=100,    limit=tp2Px, stop=slPx)
+    placeExits(-1, slPx, tp1Px, tp2Px, tp3Px, tp4Px)
 
-longTP1Hit  = not useTrail and strategy.position_size > 0 and prevPos > 0 and strategy.position_size < prevPos * 0.85 and not tp1Done
-shortTP1Hit = not useTrail and strategy.position_size < 0 and prevPos < 0 and strategy.position_size > prevPos * 0.85 and not tp1Done
+// ── BE Stop update after TP1 ──────────────────────────────────────────────────
+longTP1Hit  = not useTrail and strategy.position_size > 0 and prevPos > 0 and strategy.position_size < prevPos * 0.85 and tpHitCount == 0
+shortTP1Hit = not useTrail and strategy.position_size < 0 and prevPos < 0 and strategy.position_size > prevPos * 0.85 and tpHitCount == 0
 
 if longTP1Hit and useBE
-    tp1Done := true
+    tpHitCount := 1
     strategy.exit("L_TP2_BE", "Long",  qty_percent=100, limit=tp2Px, stop=strategy.position_avg_price)
 if shortTP1Hit and useBE
-    tp1Done := true
+    tpHitCount := 1
     strategy.exit("S_TP2_BE", "Short", qty_percent=100, limit=tp2Px, stop=strategy.position_avg_price)
 
 prevPos := strategy.position_size
@@ -270,24 +321,29 @@ plot(useVWAP ? vwap : na,  "VWAP",       color.new(color.orange, 0), linewidth=1
 plotshape(longCond,  "▲ Long",  shape.triangleup,  location.belowbar, color.new(color.lime, 0), size=size.normal)
 plotshape(shortCond, "▼ Short", shape.triangledown, location.abovebar, color.new(color.red,  0), size=size.normal)
 
-dojiBlocked = avoidDoji and isDoji and _flat and (longScore >= minScore or shortScore >= minScore)
-plotshape(showLevels and dojiBlocked, "⚠ Doji Blocked", shape.xcross, location.abovebar, color.new(color.yellow, 20), size=size.tiny)
+plotshape(showLevels and cbBlocked and _flat, "⛔ CB Blocked", shape.xcross, location.abovebar, color.new(color.orange, 20), size=size.tiny)
 
 if longCond and showLevels
+    tpStr = (useTP1 ? "\nTP1 " + str.tostring(tp1Px, format.mintick) : "") +
+            (useTP2 ? "\nTP2 " + str.tostring(tp2Px, format.mintick) : "") +
+            (useTP3 ? "\nTP3 " + str.tostring(tp3Px, format.mintick) : "") +
+            (useTP4 ? "\nTP4 " + str.tostring(tp4Px, format.mintick) : "")
     label.new(bar_index, low - atr * 0.3,
-              str.tostring(longScore) + "/6 ▲\nTP1 " + str.tostring(tp1Px, format.mintick) +
-              "\nTP2 " + str.tostring(tp2Px, format.mintick) + "\nSL  " + str.tostring(slPx, format.mintick),
+              str.tostring(longScore) + "/6 ▲" + tpStr + "\nSL  " + str.tostring(slPx, format.mintick),
               color=color.new(#0d3b1e, 10), textcolor=color.lime, style=label.style_label_up, size=size.tiny)
 if shortCond and showLevels
+    tpStr = (useTP1 ? "\nTP1 " + str.tostring(tp1Px, format.mintick) : "") +
+            (useTP2 ? "\nTP2 " + str.tostring(tp2Px, format.mintick) : "") +
+            (useTP3 ? "\nTP3 " + str.tostring(tp3Px, format.mintick) : "") +
+            (useTP4 ? "\nTP4 " + str.tostring(tp4Px, format.mintick) : "")
     label.new(bar_index, high + atr * 0.3,
-              str.tostring(shortScore) + "/6 ▼\nTP1 " + str.tostring(tp1Px, format.mintick) +
-              "\nTP2 " + str.tostring(tp2Px, format.mintick) + "\nSL  " + str.tostring(slPx, format.mintick),
+              str.tostring(shortScore) + "/6 ▼" + tpStr + "\nSL  " + str.tostring(slPx, format.mintick),
               color=color.new(#3b0d0d, 10), textcolor=color.red, style=label.style_label_down, size=size.tiny)
 
 posColor = strategy.position_size > 0 ? color.new(color.lime, 96) : strategy.position_size < 0 ? color.new(color.red, 96) : na
 bgcolor(posColor)
 bgcolor(useADX and adxVal < adxMin ? color.new(color.gray, 93) : na, title="Ranging Zone")
-bgcolor(useSession and not inSession ? color.new(color.navy, 93) : na, title="Closed Session")
+bgcolor(useAtrSpike and atr > atrAvg * atrSpikeMult ? color.new(color.purple, 93) : na, title="ATR Spike Zone")
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DASHBOARD
@@ -304,7 +360,7 @@ var table dash = na
 if showDash and barstate.islast
     if not na(dash)
         table.delete(dash)
-    dash := table.new(position.top_right, 2, 27,
+    dash := table.new(position.top_right, 2, 28,
                       bgcolor=color.new(#0d1117, 5),
                       border_color=color.new(color.gray, 55), border_width=1)
     cg  = #B2B5BE
@@ -312,6 +368,7 @@ if showDash and barstate.islast
     cgr = #26A69A
     cre = #EF5350
     cyl = #FFD700
+    cor = color.new(color.orange, 0)
     hdr = color.new(#0d1117, 0)
     lbl = size.tiny
     val = size.small
@@ -328,16 +385,18 @@ if showDash and barstate.islast
     table.cell(dash, 1, 3, str.tostring(strategy.closedtrades), text_color=cg, text_size=lbl, text_halign=text.align_right)
     table.cell(dash, 0, 4, "Max DD",   text_color=cg, text_size=lbl)
     table.cell(dash, 1, 4, str.tostring(strategy.max_drawdown, "#.0"), text_color=cre, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 5, "Consec Loss", text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 5, str.tostring(consecLoss) + (cbBlocked ? " ⛔" : ""), text_color=consecLoss >= maxConsecLoss ? cre : consecLoss > 0 ? cyl : cgr, text_size=lbl, text_halign=text.align_right)
 
-    table.merge_cells(dash, 0, 5, 1, 5)
-    table.cell(dash, 0, 5, "── Confluence ──", text_color=cyl, text_size=lbl, text_halign=text.align_center)
-    table.cell(dash, 0, 6, "Long  " + scoreBar(longScore, 6), text_color=longScore >= 5 ? cgr : longScore >= 3 ? cyl : cg, text_size=lbl)
-    table.cell(dash, 1, 6, str.tostring(longScore) + "/6", text_color=longScore >= minScore ? cgr : cg, text_size=lbl, text_halign=text.align_right)
-    table.cell(dash, 0, 7, "Short " + scoreBar(shortScore, 6), text_color=shortScore >= 5 ? cre : shortScore >= 3 ? cyl : cg, text_size=lbl)
-    table.cell(dash, 1, 7, str.tostring(shortScore) + "/6", text_color=shortScore >= minScore ? cre : cg, text_size=lbl, text_halign=text.align_right)
+    table.merge_cells(dash, 0, 6, 1, 6)
+    table.cell(dash, 0, 6, "── Confluence ──", text_color=cyl, text_size=lbl, text_halign=text.align_center)
+    table.cell(dash, 0, 7, "Long  " + scoreBar(longScore, 6), text_color=longScore >= 5 ? cgr : longScore >= 3 ? cyl : cg, text_size=lbl)
+    table.cell(dash, 1, 7, str.tostring(longScore) + "/6", text_color=longScore >= minScore ? cgr : cg, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 8, "Short " + scoreBar(shortScore, 6), text_color=shortScore >= 5 ? cre : shortScore >= 3 ? cyl : cg, text_size=lbl)
+    table.cell(dash, 1, 8, str.tostring(shortScore) + "/6", text_color=shortScore >= minScore ? cre : cg, text_size=lbl, text_halign=text.align_right)
 
-    table.merge_cells(dash, 0, 8, 1, 8)
-    table.cell(dash, 0, 8, "── 6 Factors ──", text_color=cyl, text_size=lbl, text_halign=text.align_center)
+    table.merge_cells(dash, 0, 9, 1, 9)
+    table.cell(dash, 0, 9, "── 6 Factors ──", text_color=cyl, text_size=lbl, text_halign=text.align_center)
 
     fNames = array.from("EMA Align", "Supertrend", "Stoch RSI", "Volume", "VWAP Side", "Momentum")
     fVals  = array.from(ema9 > ema21 ? "▲ Bull" : "▼ Bear", stBull ? "▲ Bull" : "▼ Bear",
@@ -348,54 +407,61 @@ if showDash and barstate.islast
                         volOK ? 1 : 0, aboveVWAP ? 1 : 0, risingMom ? 1 : 0)
 
     for fi = 0 to 5
-        table.cell(dash, 0, 9 + fi, array.get(fNames, fi), text_color=cg, text_size=lbl)
-        table.cell(dash, 1, 9 + fi, array.get(fVals, fi), text_color=array.get(fOK, fi) == 1 ? cgr : cre, text_size=lbl, text_halign=text.align_right)
+        table.cell(dash, 0, 10 + fi, array.get(fNames, fi), text_color=cg, text_size=lbl)
+        table.cell(dash, 1, 10 + fi, array.get(fVals, fi), text_color=array.get(fOK, fi) == 1 ? cgr : cre, text_size=lbl, text_halign=text.align_right)
 
-    table.merge_cells(dash, 0, 15, 1, 15)
-    table.cell(dash, 0, 15, "── Filters ──", text_color=cyl, text_size=lbl, text_halign=text.align_center)
+    table.merge_cells(dash, 0, 16, 1, 16)
+    table.cell(dash, 0, 16, "── Filters ──", text_color=cyl, text_size=lbl, text_halign=text.align_center)
 
     adxClr  = not useADX ? cg : adxOK ? cgr : cre
     adxStat = not useADX ? "OFF" : adxOK ? "✓ " + str.tostring(adxVal, "#.1") : "✗ " + str.tostring(adxVal, "#.1")
-    table.cell(dash, 0, 16, "ADX(" + str.tostring(adxLen) + ") ≥ " + str.tostring(adxMin, "#"), text_color=cg, text_size=lbl)
-    table.cell(dash, 1, 16, adxStat, text_color=adxClr, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 17, "ADX(" + str.tostring(adxLen) + ") ≥ " + str.tostring(adxMin, "#"), text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 17, adxStat, text_color=adxClr, text_size=lbl, text_halign=text.align_right)
 
     biasClr  = not useDailyBias ? cg : close > dailyEma200 ? cgr : cre
     biasStat = not useDailyBias ? "OFF" : close > dailyEma200 ? "▲ Bull (L only)" : "▼ Bear (S only)"
-    table.cell(dash, 0, 17, "Daily EMA" + str.tostring(dailyEmaLen), text_color=cg, text_size=lbl)
-    table.cell(dash, 1, 17, biasStat, text_color=biasClr, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 18, "Daily EMA" + str.tostring(dailyEmaLen), text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 18, biasStat, text_color=biasClr, text_size=lbl, text_halign=text.align_right)
 
     mtfClr  = not useMTF ? cg : mtfBull ? cgr : cre
     mtfStat = not useMTF ? "OFF" : mtfBull ? "▲ Bull" : "▼ Bear"
-    table.cell(dash, 0, 18, "MTF(" + mtfTF + ") ST", text_color=cg, text_size=lbl)
-    table.cell(dash, 1, 18, mtfStat, text_color=mtfClr, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 19, "MTF(" + mtfTF + ") ST", text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 19, mtfStat, text_color=mtfClr, text_size=lbl, text_halign=text.align_right)
 
-    slopeClr  = not useEmaSlope ? cg : bullSlope ? cgr : bearSlope ? cre : cyl
-    slopeStat = not useEmaSlope ? "OFF" : bullSlope ? "▲ Rising" : bearSlope ? "▼ Falling" : "→ Flat"
-    table.cell(dash, 0, 19, "EMA Slope(" + str.tostring(emaSlopeLen) + ")", text_color=cg, text_size=lbl)
-    table.cell(dash, 1, 19, slopeStat, text_color=slopeClr, text_size=lbl, text_halign=text.align_right)
+    atrSpikeRatio = atrAvg > 0 ? atr / atrAvg : 1.0
+    spikeClr  = not useAtrSpike ? cg : atrSpikeOK ? cgr : cre
+    spikeStat = not useAtrSpike ? "OFF" : atrSpikeOK ? "✓ " + str.tostring(atrSpikeRatio, "#.2") + "×" : "✗ " + str.tostring(atrSpikeRatio, "#.2") + "× SPIKE"
+    table.cell(dash, 0, 20, "ATR Spike (×" + str.tostring(atrSpikeMult, "#.1") + ")", text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 20, spikeStat, text_color=spikeClr, text_size=lbl, text_halign=text.align_right)
 
-    bbClr  = not useBBSqueeze ? cg : bbExpanding ? cgr : cre
-    bbStat = not useBBSqueeze ? "OFF" : bbExpanding ? "▲ Expanding" : "◀▶ Squeezing"
-    table.cell(dash, 0, 20, "BB(" + str.tostring(bbLen) + ") Squeeze", text_color=cg, text_size=lbl)
-    table.cell(dash, 1, 20, bbStat, text_color=bbClr, text_size=lbl, text_halign=text.align_right)
+    cbClr  = not useCircuitBreaker ? cg : not cbBlocked ? cgr : cre
+    cbStat = not useCircuitBreaker ? "OFF" : cbBlocked ? "⛔ PAUSED (" + str.tostring(consecLoss) + ")" : "✓ " + str.tostring(consecLoss) + "/" + str.tostring(maxConsecLoss)
+    table.cell(dash, 0, 21, "Circuit Breaker", text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 21, cbStat, text_color=cbClr, text_size=lbl, text_halign=text.align_right)
 
-    sessClr  = not useSession ? cg : inSession ? cgr : cre
-    sessStat = not useSession ? "OFF" : inSession ? "✓ Active " + str.tostring(hourUTC, "#") + "h" : "✗ Closed " + str.tostring(hourUTC, "#") + "h"
-    table.cell(dash, 0, 21, "Session (UTC)", text_color=cg, text_size=lbl)
-    table.cell(dash, 1, 21, sessStat, text_color=sessClr, text_size=lbl, text_halign=text.align_right)
+    table.merge_cells(dash, 0, 22, 1, 22)
+    table.cell(dash, 0, 22, "── TP Levels ──", text_color=cyl, text_size=lbl, text_halign=text.align_center)
 
-    candleClr  = isDoji ? cyl : bullPattern ? cgr : bearPattern ? cre : cg
-    candleStat = isDoji ? "⚠ Doji" : bullPattern ? "▲ Bullish" : bearPattern ? "▼ Bearish" : "─ Neutral"
-    table.cell(dash, 0, 22, "Candle Pattern", text_color=cg, text_size=lbl)
-    table.cell(dash, 1, 22, candleStat, text_color=candleClr, text_size=lbl, text_halign=text.align_right)
+    tp1Stat = useTP1 ? str.tostring(tp1Mult, "#.1") + "× ATR / " + str.tostring(tp1Pct, "#") + "%" : "OFF"
+    tp2Stat = useTP2 ? str.tostring(tp2Mult, "#.1") + "× ATR / " + str.tostring(tp2Pct, "#") + "%" : "OFF"
+    tp3Stat = useTP3 ? str.tostring(tp3Mult, "#.1") + "× ATR / " + str.tostring(tp3Pct, "#") + "%" : "OFF"
+    tp4Stat = useTP4 ? str.tostring(tp4Mult, "#.1") + "× ATR / " + str.tostring(tp4Pct, "#") + "%" : "OFF"
+    table.cell(dash, 0, 23, "TP1", text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 23, tp1Stat, text_color=useTP1 ? cgr : cg, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 24, "TP2", text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 24, tp2Stat, text_color=useTP2 ? cgr : cg, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 25, "TP3", text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 25, tp3Stat, text_color=useTP3 ? cgr : cg, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 26, "TP4", text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 26, tp4Stat, text_color=useTP4 ? cgr : cg, text_size=lbl, text_halign=text.align_right)
 
     dispScore = longScore >= shortScore ? longScore : shortScore
     scoreT    = 6 > minScore ? math.max(0.0, math.min(1.0, (float(dispScore) - float(minScore)) / float(6 - minScore))) : 0.0
     scoreMult = useScoreSize and 6 > minScore ? scoreMultMin + (scoreMultMax - scoreMultMin) * scoreT : 1.0
     sizeClr   = not useScoreSize ? cg : scoreMult >= 1.0 ? cgr : cyl
     sizeStat  = not useScoreSize ? "OFF" : str.tostring(scoreMult, "#.2") + "× (" + str.tostring(dispScore) + "pt)"
-    table.cell(dash, 0, 23, "Score Sizing", text_color=cg, text_size=lbl)
-    table.cell(dash, 1, 23, sizeStat, text_color=sizeClr, text_size=lbl, text_halign=text.align_right)
+    table.cell(dash, 0, 27, "Score Sizing", text_color=cg, text_size=lbl)
+    table.cell(dash, 1, 27, sizeStat, text_color=sizeClr, text_size=lbl, text_halign=text.align_right)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ALERTS
@@ -406,13 +472,17 @@ if longCond
     alert("⚡ APEX LONG [" + str.tostring(longScore) + "/6]\n" +
           syminfo.ticker + " · " + tf + "\n진입: " + px + "\n" +
           "SL:  " + str.tostring(close - atr * slMult, format.mintick) + "\n" +
-          "TP1: " + str.tostring(close + atr * tp1Mult, format.mintick) + "\n" +
-          "TP2: " + str.tostring(close + atr * tp2Mult, format.mintick),
+          (useTP1 ? "TP1: " + str.tostring(close + atr * tp1Mult, format.mintick) + "\n" : "") +
+          (useTP2 ? "TP2: " + str.tostring(close + atr * tp2Mult, format.mintick) + "\n" : "") +
+          (useTP3 ? "TP3: " + str.tostring(close + atr * tp3Mult, format.mintick) + "\n" : "") +
+          (useTP4 ? "TP4: " + str.tostring(close + atr * tp4Mult, format.mintick) : ""),
           alert.freq_once_per_bar_close)
 if shortCond
     alert("⚡ APEX SHORT [" + str.tostring(shortScore) + "/6]\n" +
           syminfo.ticker + " · " + tf + "\n진입: " + px + "\n" +
           "SL:  " + str.tostring(close + atr * slMult, format.mintick) + "\n" +
-          "TP1: " + str.tostring(close - atr * tp1Mult, format.mintick) + "\n" +
-          "TP2: " + str.tostring(close - atr * tp2Mult, format.mintick),
+          (useTP1 ? "TP1: " + str.tostring(close - atr * tp1Mult, format.mintick) + "\n" : "") +
+          (useTP2 ? "TP2: " + str.tostring(close - atr * tp2Mult, format.mintick) + "\n" : "") +
+          (useTP3 ? "TP3: " + str.tostring(close - atr * tp3Mult, format.mintick) + "\n" : "") +
+          (useTP4 ? "TP4: " + str.tostring(close - atr * tp4Mult, format.mintick) : ""),
           alert.freq_once_per_bar_close)
