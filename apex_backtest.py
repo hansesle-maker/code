@@ -6,6 +6,9 @@ Periods: 2024, 2025, 2026-YTD  |  Symbol: BTCUSDT 1h (Binance Futures)
 
 Usage
 -----
+  # TradingView exported CSV (OHLCV):
+  python apex_backtest.py --csv BINANCE_BTCUSDT.P_240.csv
+
   # Real data (requires Binance Futures access):
   python apex_backtest.py --symbol BTCUSDT --interval 1h
 
@@ -13,7 +16,7 @@ Usage
   python apex_backtest.py --synthetic
 
   # Limit grid size for a quick run:
-  python apex_backtest.py --synthetic --top 10
+  python apex_backtest.py --csv data.csv --top 10
 
 Fixed parameters (not searched)
 --------------------------------
@@ -82,6 +85,20 @@ def all_combos():
         if p["emaFast"] >= p["emaSlow"]:   # skip invalid
             continue
         yield p
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CSV LOADER (TradingView export format)
+# ─────────────────────────────────────────────────────────────────────────────
+def load_csv(path: str) -> pd.DataFrame:
+    """Load TradingView-exported CSV: time,open,high,low,close,Volume,..."""
+    df = pd.read_csv(path)
+    df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+    # Parse time — TradingView exports with timezone offset (e.g. +09:00)
+    df["datetime"] = pd.to_datetime(df["time"], utc=True)
+    df = df.set_index("datetime").sort_index()
+    for c in ["open", "high", "low", "close", "volume"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df[["open", "high", "low", "close", "volume"]].dropna()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DATA FETCHING (Binance Futures)
@@ -426,18 +443,34 @@ def metrics(trades: List[float]) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
-def run(use_synthetic: bool, symbol: str, interval: str, top_n: int):
+def run(use_synthetic: bool, symbol: str, interval: str, top_n: int,
+        csv_path: Optional[str] = None):
     combos = list(all_combos())
     print(f"Grid: {len(combos)} combinations × {len(PERIODS)} periods")
+
+    # Load full dataset once (for CSV mode), then slice per period
+    full_df: Optional[pd.DataFrame] = None
+    if csv_path:
+        print(f"  Loading CSV: {csv_path} ...", end=" ", flush=True)
+        full_df = load_csv(csv_path)
+        print(f"{len(full_df)} bars  ({full_df.index[0].date()} → {full_df.index[-1].date()})")
 
     # Load data for each period
     period_dfs: Dict[str, pd.DataFrame] = {}
     for name, (start, end) in PERIODS.items():
-        print(f"  Loading {name} ({start} → {end}) ...", end=" ", flush=True)
-        if use_synthetic:
+        if csv_path and full_df is not None:
+            # Slice with extra warmup bars before the period start
+            warmup = pd.Timedelta(days=30)
+            slice_start = pd.Timestamp(start, tz="UTC") - warmup
+            mask = (full_df.index >= slice_start) & (full_df.index < pd.Timestamp(end, tz="UTC"))
+            df = full_df[mask].copy()
+            print(f"  Period {name}: {len(df)} bars (incl. 30d warmup)")
+        elif use_synthetic:
+            print(f"  Loading {name} ({start} → {end}) ...", end=" ", flush=True)
             df = gen_synthetic(start, end, seed=int(name))
             print(f"[SYNTHETIC] {len(df)} bars")
         else:
+            print(f"  Loading {name} ({start} → {end}) ...", end=" ", flush=True)
             df = fetch_binance(symbol, interval, start, end)
             print(f"[BINANCE] {len(df)} bars")
         period_dfs[name] = df
@@ -553,15 +586,17 @@ def run(use_synthetic: bool, symbol: str, interval: str, top_n: int):
     if use_synthetic:
         print("\n" + "!"*80)
         print("  WARNING: Results are based on SYNTHETIC BTC-like data.")
-        print("  Run with real Binance data locally:")
-        print("    python apex_backtest.py --symbol BTCUSDT --interval 1h")
+        print("  Run with real data:")
+        print("    python apex_backtest.py --csv BINANCE_BTCUSDT.P_240.csv")
         print("!"*80)
 
 # ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
+    ap.add_argument("--csv",      default=None,
+                    help="Path to TradingView-exported CSV (time,open,high,low,close,Volume,...)")
     ap.add_argument("--synthetic", action="store_true",
-                    help="Use synthetic BTC-like data instead of Binance")
+                    help="Use synthetic BTC-like data instead of real data")
     ap.add_argument("--symbol",   default="BTCUSDT")
     ap.add_argument("--interval", default="1h")
     ap.add_argument("--top",      type=int, default=20,
@@ -570,4 +605,5 @@ if __name__ == "__main__":
     run(use_synthetic=args.synthetic,
         symbol=args.symbol,
         interval=args.interval,
-        top_n=args.top)
+        top_n=args.top,
+        csv_path=args.csv)
