@@ -17,7 +17,7 @@ stLen   = input.int(10,   "Supertrend ATR Length", minval=1, group=g1)
 stMult  = input.float(3.0,"Supertrend Multiplier", minval=0.1, step=0.1, group=g1)
 
 g2 = "🎯 Momentum Engine"
-momType = input.string("Stoch RSI", "Momentum Type",
+momType = input.string("TSI", "Momentum Type",
                        options=["Stoch RSI","RSI","TSI","MACD","CCI","MFI"], group=g2,
                        tooltip="TSI = 이중 스무딩, 노이즈 ↓ / MACD = 추세+모멘텀 / MFI = 거래량 반영 RSI")
 momFast = input.int(14, "Fast Length",    minval=2, group=g2,
@@ -45,10 +45,10 @@ trailMult    = input.float(1.5, "↳ Trailing Stop ATR Multiple", minval=0.1, st
 
 useTP1  = input.bool(true,  "TP1 Enable", group=g4)
 tp1Mult = input.float(1.5,  "↳ TP1 ATR Multiple", minval=0.1, step=0.1, group=g4)
-tp1Pct  = input.float(40.0, "↳ TP1 Exit %",       minval=1, maxval=99, step=1, group=g4)
+tp1Pct  = input.float(50.0, "↳ TP1 Exit %",       minval=1, maxval=99, step=1, group=g4)
 
 useTP2  = input.bool(true,  "TP2 Enable", group=g4)
-tp2Mult = input.float(2.5,  "↳ TP2 ATR Multiple", minval=0.1, step=0.1, group=g4)
+tp2Mult = input.float(3.0,  "↳ TP2 ATR Multiple", minval=0.1, step=0.1, group=g4)
 tp2Pct  = input.float(30.0, "↳ TP2 Exit %",       minval=1, maxval=99, step=1, group=g4)
 
 useTP3  = input.bool(false, "TP3 Enable", group=g4)
@@ -65,10 +65,10 @@ scoreMultMin = input.float(0.5, "↳ Min Size Multiplier", minval=0.1, maxval=5.
 scoreMultMax = input.float(1.5, "↳ Max Size Multiplier", minval=0.1, maxval=5.0, step=0.1, group=g4)
 
 g5 = "🔧 Signal Filter"
-minScore = input.int(4, "Min Confluence Score (max 6, or 7 with P/V)", minval=1, maxval=7, group=g5)
+minScore = input.int(5, "Min Confluence Score (max 6, or 7 with P/V)", minval=1, maxval=7, group=g5)
 minBars  = input.int(5, "Min Bars Between Signals", minval=0, group=g5)
 
-usePivot   = input.bool(false, "Peak/Valley as Confluence Factor (+1 point)", group=g5,
+usePivot   = input.bool(true, "Peak/Valley as Confluence Factor (+1 point)", group=g5,
                          tooltip="피벗 저점(롱) / 피벗 고점(숏) 발생 N봉 내에 있으면 스코어 +1점\n기본 6점 만점 → 7점 만점으로 상향 (진입 차단이 아닌 품질 가중)")
 pivotLeft  = input.int(5,  "↳ Pivot Left Bars",      minval=2, maxval=30, group=g5)
 pivotRight = input.int(2,  "↳ Pivot Right Bars",     minval=1, maxval=10, group=g5,
@@ -198,7 +198,7 @@ momCrossDown = switch momType
     "MFI"       => mfiCrossDown
     => false
 
-// ── Momentum velocity (factor 6) ─────────────────────────────────────────────
+// ── Momentum velocity (dashboard label only) ─────────────────────────────────
 momLine = switch momType
     "Stoch RSI" => kVal
     "RSI"       => rsiVal
@@ -208,8 +208,12 @@ momLine = switch momType
     "MFI"       => mfiVal
     => 0.0
 
-risingMom  = momLine > momLine[3]
-fallingMom = momLine < momLine[3]
+// ── RSI-14 Trend Bias (factor 6) — independent of selected momType ───────────
+// Replaces risingMom: measures whether price is in bull/bear regime on RSI scale.
+// Crossover (F3) tells you WHEN to enter; RSI>50 tells you WHETHER trend supports it.
+rsi14Val  = ta.rsi(close, 14)
+rsi14Bull = rsi14Val > 50
+rsi14Bear = rsi14Val < 50
 
 // ── Regime Filters ────────────────────────────────────────────────────────────
 [_, _, adxVal] = ta.dmi(adxLen, adxLen)
@@ -260,8 +264,8 @@ cbBlocked := useCircuitBreaker and consecLoss >= maxConsecLoss
 // ═══════════════════════════════════════════════════════════════════════════════
 maxScore = usePivot ? 7 : 6
 
-longFactors  = array.from(maFast > maSlow ? 1 : 0, stBull ? 1 : 0, momCrossUp   ? 1 : 0, volOK ? 1 : 0, aboveVWAP ? 1 : 0, risingMom  ? 1 : 0, pivotLongFactor)
-shortFactors = array.from(maFast < maSlow ? 1 : 0, stBear ? 1 : 0, momCrossDown ? 1 : 0, volOK ? 1 : 0, belowVWAP ? 1 : 0, fallingMom ? 1 : 0, pivotShortFactor)
+longFactors  = array.from(maFast > maSlow ? 1 : 0, stBull ? 1 : 0, momCrossUp   ? 1 : 0, volOK ? 1 : 0, aboveVWAP ? 1 : 0, rsi14Bull ? 1 : 0, pivotLongFactor)
+shortFactors = array.from(maFast < maSlow ? 1 : 0, stBear ? 1 : 0, momCrossDown ? 1 : 0, volOK ? 1 : 0, belowVWAP ? 1 : 0, rsi14Bear ? 1 : 0, pivotShortFactor)
 
 longScore  = array.sum(longFactors)
 shortScore = array.sum(shortFactors)
@@ -508,14 +512,15 @@ if showDash and barstate.islast
     table.cell(dash, 0, 9, factorHdr, text_color=cyl, text_size=lbl, text_halign=text.align_center)
 
     maLbl  = maType + "(" + str.tostring(maFastL) + "/" + str.tostring(maSlowL) + ")"
-    fNames = array.from(maLbl, "Supertrend", momType, "Volume", "VWAP Side", "Mom Velocity", "Peak/Valley")
+    fNames = array.from(maLbl, "Supertrend", momType, "Volume", "VWAP Side", "RSI-14 Bias", "Peak/Valley")
     fVals  = array.from(maFast > maSlow ? "▲ Bull" : "▼ Bear", stBull ? "▲ Bull" : "▼ Bear",
                         momLineLbl, volOK ? "✓ High" : "✗ Low",
-                        aboveVWAP ? "▲ Above" : "▼ Below", risingMom ? "▲ Up" : "▼ Down",
+                        aboveVWAP ? "▲ Above" : "▼ Below",
+                        str.tostring(rsi14Val, "#.1") + (rsi14Bull ? " ▲" : " ▼"),
                         pivotLongFactor == 1 ? "▽ Valley" : pivotShortFactor == 1 ? "△ Peak" : "—")
     fOK    = array.from(maFast > maSlow ? 1 : 0, stBull ? 1 : 0,
                         momCrossUp ? 1 : momCrossDown ? -1 : 0,
-                        volOK ? 1 : 0, aboveVWAP ? 1 : 0, risingMom ? 1 : 0,
+                        volOK ? 1 : 0, aboveVWAP ? 1 : 0, rsi14Bull ? 1 : 0,
                         usePivot ? (pivotLongFactor == 1 or pivotShortFactor == 1 ? 1 : 0) : -2)
 
     showRows = usePivot ? 6 : 5
