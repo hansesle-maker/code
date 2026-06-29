@@ -32,7 +32,7 @@ momOS   = input.int(20, "Oversold Level",   minval=0,  maxval=50,  group=g2)
 g3 = "📊 Volume & VWAP"
 volLen  = input.int(20,    "Volume MA Length",        minval=5, group=g3)
 volMult = input.float(1.2, "Volume Threshold (×avg)", minval=1.0, step=0.1, group=g3)
-useVWAP = input.bool(true, "VWAP Side Filter",        group=g3)
+useVWAP = input.bool(true, "Show Session VWAP",       group=g3)
 
 g4 = "💰 Risk Management"
 atrLen       = input.int(14,    "ATR Length",           minval=1, group=g4)
@@ -64,20 +64,37 @@ useScoreSize = input.bool(false, "Score-Based Position Sizing", group=g4,
 scoreMultMin = input.float(0.5, "↳ Min Size Multiplier", minval=0.1, maxval=5.0, step=0.1, group=g4)
 scoreMultMax = input.float(1.5, "↳ Max Size Multiplier", minval=0.1, maxval=5.0, step=0.1, group=g4)
 
+// ── Confluence factor on/off (each enabled factor adds 1 to maxScore) ──────────
+gF = "🎚️ Confluence Factors (each = +1)"
+useF_MA    = input.bool(true,  "1. MA Alignment",     group=gF)
+useF_ST    = input.bool(true,  "2. Supertrend",       group=gF)
+useF_MomX  = input.bool(true,  "3. Momentum Cross",   group=gF)
+useF_Vol   = input.bool(true,  "4. Volume Surge",     group=gF)
+useF_VWAP  = input.bool(true,  "5. VWAP Side",        group=gF)
+useF_RSI   = input.bool(true,  "6. RSI-14 Bias",      group=gF)
+useF_PV    = input.bool(true,  "7. Peak / Valley",    group=gF)
+useF_CVD   = input.bool(false, "8. CVD Pressure",     group=gF,
+                        tooltip="누적 거래량 델타(근사). 최근 N봉 순매수 우위면 롱 +1")
+useF_OI    = input.bool(false, "9. Open Interest",    group=gF,
+                        tooltip="미결제약정 증가 + 가격 방향 일치 시 해당 방향 +1 (데이터 없으면 자동 비활성)")
+useF_CBP   = input.bool(false, "10. Coinbase Premium",group=gF,
+                        tooltip="코인베이스 > 레퍼런스 = 미국 현물 매수세 = 롱 +1 (데이터 없으면 자동 비활성)")
+useF_AVWAP = input.bool(false, "11. Anchored VWAP",   group=gF,
+                        tooltip="직전 피벗에서 앵커링한 VWAP 위/아래 (구조적 평균단가 기준)")
+
 g5 = "🔧 Signal Filter"
-minScore = input.int(5, "Min Confluence Score (max 6, or 7 with P/V)", minval=1, maxval=7, group=g5)
+minScore = input.int(5, "Min Confluence Score", minval=1, maxval=11, group=g5,
+                     tooltip="활성 팩터 수(maxScore)에 맞춰 자동 클램프됨")
 minBars  = input.int(5, "Min Bars Between Signals", minval=0, group=g5)
 
-usePivot   = input.bool(true, "Peak/Valley as Confluence Factor (+1 point)", group=g5,
-                         tooltip="피벗 저점(롱) / 피벗 고점(숏) 발생 N봉 내에 있으면 스코어 +1점\n기본 6점 만점 → 7점 만점으로 상향 (진입 차단이 아닌 품질 가중)")
-pivotLeft  = input.int(5,  "↳ Pivot Left Bars",      minval=2, maxval=30, group=g5)
-pivotRight = input.int(2,  "↳ Pivot Right Bars",     minval=1, maxval=10, group=g5,
+pivotLeft  = input.int(5,  "Pivot Left Bars",      minval=2, maxval=30, group=g5)
+pivotRight = input.int(2,  "Pivot Right Bars",     minval=1, maxval=10, group=g5,
                         tooltip="클수록 확인 늦어지지만 정확. 작을수록 빠르지만 노이즈 증가")
-pivotProx  = input.int(10, "↳ Max Bars Since Pivot", minval=2, maxval=50, group=g5,
-                        tooltip="피벗 발생 후 최대 N봉 내에 있어야 +1점")
+pivotProx  = input.int(10, "Max Bars Since Pivot", minval=2, maxval=50, group=g5,
+                        tooltip="피벗 발생 후 최대 N봉 내에 있어야 Peak/Valley 팩터 +1")
 
-useCircuitBreaker = input.bool(true, "Consecutive Loss Circuit Breaker", group=g5,
-                               tooltip="N번 연속 손실 후 다음 신호 차단 — MDD 억제")
+useCircuitBreaker = input.bool(false, "Consecutive Loss Circuit Breaker", group=g5,
+                               tooltip="N번 연속 손실 진입 후 다음 신호 1개 건너뜀(자동 리셋) — MDD 억제")
 maxConsecLoss     = input.int(3, "↳ Max Consecutive Losses", minval=1, maxval=10, group=g5)
 
 useAtrSpike  = input.bool(true,  "Block Extreme Volatility (ATR Spike)", group=g5,
@@ -94,8 +111,18 @@ useDailyBias = input.bool(true,   "Daily EMA200 Bias Filter", group=g7,
                           tooltip="일봉 EMA200 위면 롱만, 아래면 숏만 허용")
 dailyEmaLen  = input.int(200,     "↳ Daily EMA Length", minval=20, group=g7)
 useMTF       = input.bool(true,   "Higher TF Confirmation", group=g7,
-                          tooltip="상위 TF Supertrend가 반대 방향이면 진입 차단")
+                          tooltip="상위 TF Supertrend가 반대면 진입 차단. 단, HTF가 차트 TF 이하면 자동 무효화됨.")
 mtfTF        = input.timeframe("240", "↳ Higher Timeframe", group=g7)
+
+gADV = "🧪 Advanced Data Factors"
+cvdLen   = input.int(14, "CVD Lookback (bars)", minval=2, group=gADV,
+                     tooltip="최근 N봉 순매수/매도 볼륨 합. 양수=매수우위. 봉방향×볼륨 근사치(진짜 틱델타 아님)")
+oiSym    = input.symbol("", "Open Interest Symbol (blank=auto)", group=gADV,
+                        tooltip="비워두면 현재심볼_OI 자동 시도. 데이터 없으면 OI 팩터 자동 비활성")
+oiLen    = input.int(14, "OI Change Lookback", minval=1, group=gADV)
+cbpSym   = input.symbol("COINBASE:BTCUSD", "Coinbase Spot Symbol", group=gADV)
+cbpRef   = input.symbol("BINANCE:BTCUSDT", "Reference Spot Symbol", group=gADV,
+                        tooltip="프리미엄 = (코인베이스 − 레퍼런스)/레퍼런스. 양수 = 미국 매수세")
 
 gBT       = "📅 Backtest Range"
 useRange  = input.bool(false, "Limit Backtest Period", group=gBT,
@@ -104,11 +131,11 @@ startDate = input.time(timestamp("2020 01 01 00:00"), "Start Date", group=gBT)
 endDate   = input.time(timestamp("2025 12 31 23:59"), "End Date",   group=gBT)
 
 g6 = "🎨 Visuals"
-showEMA    = input.bool(true, "Show MAs",           group=g6)
-showST     = input.bool(true, "Show Supertrend",    group=g6)
-showLevels = input.bool(true, "Show SL/TP Labels",  group=g6)
-showPivots = input.bool(true, "Show Pivot Markers", group=g6)
-showDash   = input.bool(true, "Show Dashboard",     group=g6)
+showEMA    = input.bool(true, "Show MAs",            group=g6)
+showST     = input.bool(true, "Show Supertrend",     group=g6)
+showLevels = input.bool(true, "Show SL/TP Labels",   group=g6)
+showPivots = input.bool(true, "Show Pivot Markers",  group=g6)
+showDash   = input.bool(true, "Show Dashboard",      group=g6)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CORE CALCULATIONS
@@ -198,19 +225,7 @@ momCrossDown = switch momType
     "MFI"       => mfiCrossDown
     => false
 
-// ── Momentum velocity (dashboard label only) ─────────────────────────────────
-momLine = switch momType
-    "Stoch RSI" => kVal
-    "RSI"       => rsiVal
-    "TSI"       => tsiVal
-    "MACD"      => macdLine
-    "CCI"       => cciVal
-    "MFI"       => mfiVal
-    => 0.0
-
 // ── RSI-14 Trend Bias (factor 6) — independent of selected momType ───────────
-// Replaces risingMom: measures whether price is in bull/bear regime on RSI scale.
-// Crossover (F3) tells you WHEN to enter; RSI>50 tells you WHETHER trend supports it.
 rsi14Val  = ta.rsi(close, 14)
 rsi14Bull = rsi14Val > 50
 rsi14Bear = rsi14Val < 50
@@ -223,52 +238,84 @@ dailyEma200 = request.security(syminfo.tickerid, "D", ta.ema(close, dailyEmaLen)
 bullBias    = not useDailyBias or close > dailyEma200
 bearBias    = not useDailyBias or close < dailyEma200
 
+// HTF Supertrend — auto-disabled if HTF is not strictly higher than chart TF
 [_, mtfStDir] = request.security(syminfo.tickerid, mtfTF, ta.supertrend(stMult, stLen), lookahead=barmerge.lookahead_off)
-mtfBull       = mtfStDir < 0
-mtfBear       = mtfStDir > 0
-mtfLongOK     = not useMTF or mtfBull
-mtfShortOK    = not useMTF or mtfBear
+mtfHigher  = timeframe.in_seconds(mtfTF) > timeframe.in_seconds(timeframe.period)
+mtfActive  = useMTF and mtfHigher
+mtfBull    = mtfStDir < 0
+mtfBear    = mtfStDir > 0
+mtfLongOK  = not mtfActive or mtfBull
+mtfShortOK = not mtfActive or mtfBear
 
 // ── ATR Spike Filter ──────────────────────────────────────────────────────────
 atrAvg     = ta.sma(atr, atrSpikeLen)
 atrSpikeOK = not useAtrSpike or atr <= atrAvg * atrSpikeMult
 
-// ── Peak / Valley — scoring factor 7 (0 if usePivot=false) ───────────────────
+// ── Peak / Valley (factor 7) ──────────────────────────────────────────────────
 pivHigh = ta.pivothigh(high, pivotLeft, pivotRight)
 pivLow  = ta.pivotlow(low,  pivotLeft, pivotRight)
-
 barsSincePivLow  = ta.barssince(not na(pivLow))
 barsSincePivHigh = ta.barssince(not na(pivHigh))
+pvLong  = not na(barsSincePivLow)  and barsSincePivLow  <= pivotProx
+pvShort = not na(barsSincePivHigh) and barsSincePivHigh <= pivotProx
 
-pivotLongFactor  = usePivot and not na(barsSincePivLow)  and barsSincePivLow  <= pivotProx ? 1 : 0
-pivotShortFactor = usePivot and not na(barsSincePivHigh) and barsSincePivHigh <= pivotProx ? 1 : 0
+// ── CVD pressure (factor 8) — signed-volume proxy ─────────────────────────────
+cvdDelta = close > open ? volume : close < open ? -volume : 0.0
+cvdRoll  = math.sum(cvdDelta, cvdLen)
+cvdBull  = cvdRoll > 0
+cvdBear  = cvdRoll < 0
 
-// ── Consecutive Loss Circuit Breaker ──────────────────────────────────────────
-var int  consecLoss = 0
-var bool cbBlocked  = false
+// ── Open Interest (factor 9) ──────────────────────────────────────────────────
+oiTicker = oiSym == "" ? syminfo.tickerid + "_OI" : oiSym
+oiClose  = request.security(oiTicker, timeframe.period, close, ignore_invalid_symbol=true)
+oiAvail  = not na(oiClose) and not na(oiClose[oiLen])
+oiUp     = oiAvail and oiClose > oiClose[oiLen]
+oiBull   = oiUp and close > close[oiLen]
+oiBear   = oiUp and close < close[oiLen]
 
-if strategy.closedtrades > 0
-    lastPnl = strategy.closedtrades.profit(strategy.closedtrades - 1)
-    if lastPnl < 0
-        consecLoss := consecLoss + 1
-    else
-        consecLoss := 0
+// ── Coinbase Premium (factor 10) ──────────────────────────────────────────────
+cbpClose = request.security(cbpSym, timeframe.period, close, ignore_invalid_symbol=true)
+cbpRefCl = request.security(cbpRef, timeframe.period, close, ignore_invalid_symbol=true)
+cbpAvail = not na(cbpClose) and not na(cbpRefCl) and cbpRefCl != 0
+premium  = cbpAvail ? (cbpClose - cbpRefCl) / cbpRefCl * 100 : na
+cbpBull  = cbpAvail and premium > 0
+cbpBear  = cbpAvail and premium < 0
 
-cbBlocked := useCircuitBreaker and consecLoss >= maxConsecLoss
+// ── Anchored VWAP (factor 11) — anchored at last pivot ────────────────────────
+newAnchor  = not na(pivHigh) or not na(pivLow)
+avwap      = ta.vwap(hlc3, newAnchor)
+aboveAVWAP = close > avwap
+belowAVWAP = close < avwap
+
+// ── Consecutive Loss Circuit Breaker (per-entry, equity-based) ────────────────
+// FIX: evaluate ONLY when a position fully closes (flat transition), not every bar.
+var int   consecLoss    = 0
+var float equityAtEntry = na
+if strategy.position_size == 0 and strategy.position_size[1] != 0 and not na(equityAtEntry)
+    consecLoss := strategy.equity < equityAtEntry ? consecLoss + 1 : 0
+cbBlocked = useCircuitBreaker and consecLoss >= maxConsecLoss
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CONFLUENCE SCORING
-// Factor 1: MA alignment   2: Supertrend   3: Momentum cross
-// Factor 4: Volume         5: VWAP side    6: Momentum velocity
-// Factor 7: Peak/Valley recency (+1 if usePivot=ON and within pivotProx bars)
+// CONFLUENCE SCORING — dynamic, one point per ENABLED factor
+// 1 MA  2 Supertrend  3 MomCross  4 Volume  5 VWAP  6 RSI-14
+// 7 Peak/Valley  8 CVD  9 OI  10 Coinbase Prem  11 Anchored VWAP
 // ═══════════════════════════════════════════════════════════════════════════════
-maxScore = usePivot ? 7 : 6
+fNames   = array.from("MA Align", "Supertrend", "Mom Cross", "Volume", "VWAP Side", "RSI-14", "Peak/Valley", "CVD", "Open Int", "CB Premium", "Anch VWAP")
+fEnabled = array.from(useF_MA, useF_ST, useF_MomX, useF_Vol, useF_VWAP, useF_RSI, useF_PV, useF_CVD, useF_OI and oiAvail, useF_CBP and cbpAvail, useF_AVWAP)
+fLongHit = array.from(maFast > maSlow, stBull, momCrossUp, volOK, aboveVWAP, rsi14Bull, pvLong, cvdBull, oiBull, cbpBull, aboveAVWAP)
+fShortHit= array.from(maFast < maSlow, stBear, momCrossDown, volOK, belowVWAP, rsi14Bear, pvShort, cvdBear, oiBear, cbpBear, belowAVWAP)
 
-longFactors  = array.from(maFast > maSlow ? 1 : 0, stBull ? 1 : 0, momCrossUp   ? 1 : 0, volOK ? 1 : 0, aboveVWAP ? 1 : 0, rsi14Bull ? 1 : 0, pivotLongFactor)
-shortFactors = array.from(maFast < maSlow ? 1 : 0, stBear ? 1 : 0, momCrossDown ? 1 : 0, volOK ? 1 : 0, belowVWAP ? 1 : 0, rsi14Bear ? 1 : 0, pivotShortFactor)
-
-longScore  = array.sum(longFactors)
-shortScore = array.sum(shortFactors)
+int maxScore   = 0
+int longScore  = 0
+int shortScore = 0
+for i = 0 to array.size(fEnabled) - 1
+    if array.get(fEnabled, i)
+        maxScore   := maxScore + 1
+        longScore  := longScore  + (array.get(fLongHit,  i) ? 1 : 0)
+        shortScore := shortScore + (array.get(fShortHit, i) ? 1 : 0)
+maxScore := maxScore < 1 ? 1 : maxScore
+effMinScore = minScore < maxScore ? minScore : maxScore
+maxScoStr   = str.tostring(maxScore)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ENTRY CONDITIONS
@@ -278,28 +325,28 @@ barsSince += 1
 
 _flat     = strategy.position_size == 0
 _cooldown = barsSince >= minBars
-_regime   = adxOK and atrSpikeOK and not cbBlocked
+_regime   = adxOK and atrSpikeOK
 
-longBase  = longScore  >= minScore and longScore  >= shortScore and _flat and _cooldown
-longExtra = _regime and bullBias and mtfLongOK
-longCond  = longBase and longExtra and inRange
+longRaw  = longScore  >= effMinScore and longScore  >= shortScore and _flat and _cooldown and _regime and bullBias and mtfLongOK and inRange
+shortRaw = shortScore >= effMinScore and shortScore >  longScore  and _flat and _cooldown and _regime and bearBias and mtfShortOK and inRange
 
-shortBase  = shortScore >= minScore and shortScore > longScore  and _flat and _cooldown
-shortExtra = _regime and bearBias and mtfShortOK
-shortCond  = shortBase and shortExtra and inRange
+// Circuit breaker: skip ONE signal after the loss streak, then auto-reset
+if cbBlocked and (longRaw or shortRaw)
+    consecLoss := 0
+
+longCond  = longRaw  and not cbBlocked
+shortCond = shortRaw and not cbBlocked
 
 if longCond or shortCond
-    barsSince  := 0
-    consecLoss := 0
+    barsSince := 0
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // POSITION MANAGEMENT
 // ═══════════════════════════════════════════════════════════════════════════════
-calcQty(slDist, score) =>
+calcQty(slDist, score, topS, minS) =>
     base = slDist > 0 ? (strategy.equity * riskPct / 100) / slDist : 1.0
-    topS = usePivot ? 7 : 6
-    if useScoreSize and topS > minScore
-        t = math.max(0.0, math.min(1.0, (float(score) - float(minScore)) / float(topS - minScore)))
+    if useScoreSize and topS > minS
+        t = math.max(0.0, math.min(1.0, (float(score) - float(minS)) / float(topS - minS)))
         base * (scoreMultMin + (scoreMultMax - scoreMultMin) * t)
     else
         base
@@ -363,8 +410,6 @@ var float tp4Px      = na
 var int   tpHitCount = 0
 var float prevPos    = 0.0
 
-maxScoStr = str.tostring(maxScore)
-
 if longCond
     slPx  := close - atr * slMult
     tp1Px := close + atr * tp1Mult
@@ -372,7 +417,8 @@ if longCond
     tp3Px := close + atr * tp3Mult
     tp4Px := close + atr * tp4Mult
     tpHitCount := 0
-    qty = calcQty(atr * slMult, longScore)
+    equityAtEntry := strategy.equity
+    qty = calcQty(atr * slMult, longScore, maxScore, effMinScore)
     strategy.entry("Long", strategy.long, qty=qty, comment="▲ " + str.tostring(longScore) + "/" + maxScoStr)
     placeExits(1, slPx, tp1Px, tp2Px, tp3Px, tp4Px)
 
@@ -383,7 +429,8 @@ if shortCond
     tp3Px := close - atr * tp3Mult
     tp4Px := close - atr * tp4Mult
     tpHitCount := 0
-    qty = calcQty(atr * slMult, shortScore)
+    equityAtEntry := strategy.equity
+    qty = calcQty(atr * slMult, shortScore, maxScore, effMinScore)
     strategy.entry("Short", strategy.short, qty=qty, comment="▼ " + str.tostring(shortScore) + "/" + maxScoStr)
     placeExits(-1, slPx, tp1Px, tp2Px, tp3Px, tp4Px)
 
@@ -410,6 +457,7 @@ fill(emaFill1, emaFill2, color=showEMA ? (maFast > maSlow ? color.new(color.lime
 
 plot(showST ? stLine : na, "Supertrend", stBull ? color.new(color.lime, 20) : color.new(color.red, 20), linewidth=2)
 plot(useVWAP ? vwap : na, "VWAP", color.new(color.orange, 0), linewidth=1, style=plot.style_circles)
+plot(useF_AVWAP ? avwap : na, "Anchored VWAP", color.new(color.yellow, 0), linewidth=1, style=plot.style_stepline)
 
 plotshape(showPivots and not na(pivLow),  "Valley ▽", shape.triangleup,   location.belowbar, color.new(color.aqua,    30), size=size.tiny)
 plotshape(showPivots and not na(pivHigh), "Peak △",   shape.triangledown, location.abovebar, color.new(color.fuchsia, 30), size=size.tiny)
@@ -463,137 +511,123 @@ momLineLbl = switch momType
     "MFI"       => str.tostring(mfiVal, "#.1")
     => "—"
 
+dRow(t, ri, lblTxt, valTxt, vClr) =>
+    table.cell(t, 0, ri, lblTxt, text_color=#B2B5BE, text_size=size.tiny)
+    table.cell(t, 1, ri, valTxt, text_color=vClr, text_size=size.tiny, text_halign=text.align_right)
+    ri
+
+dHdr(t, ri, txt) =>
+    table.merge_cells(t, 0, ri, 1, ri)
+    table.cell(t, 0, ri, txt, text_color=#FFD700, text_size=size.tiny, text_halign=text.align_center)
+    ri
+
 var table dash = na
 if showDash and barstate.islast
     if not na(dash)
         table.delete(dash)
-    numRows = usePivot ? 31 : 30
-    dash := table.new(position.top_right, 2, numRows,
+    dash := table.new(position.top_right, 2, 44,
                       bgcolor=color.new(#0d1117, 5),
                       border_color=color.new(color.gray, 55), border_width=1)
-    cg  = #B2B5BE
-    cw  = color.white
     cgr = #26A69A
     cre = #EF5350
     cyl = #FFD700
-    hdr = color.new(#0d1117, 0)
-    lbl = size.tiny
-    val = size.small
+    cg  = #B2B5BE
 
-    table.merge_cells(dash, 0, 0, 1, 0)
-    table.cell(dash, 0, 0, "⚡ APEX Scalper v6", text_color=cw, bgcolor=hdr, text_size=val, text_halign=text.align_center)
+    int r = 0
+    table.merge_cells(dash, 0, r, 1, r)
+    table.cell(dash, 0, r, "⚡ APEX Scalper v6", text_color=color.white, bgcolor=color.new(#0d1117, 0), text_size=size.small, text_halign=text.align_center)
+    r += 1
 
     wr = strategy.wintrades + strategy.losstrades > 0 ? strategy.wintrades / (strategy.wintrades + strategy.losstrades) * 100 : 0.0
-    table.cell(dash, 0, 1, "Net P&L",     text_color=cg, text_size=lbl)
-    table.cell(dash, 1, 1, "$" + str.tostring(strategy.netprofit, "#.0"), text_color=strategy.netprofit >= 0 ? cgr : cre, text_size=lbl, text_halign=text.align_right)
-    table.cell(dash, 0, 2, "Win Rate",    text_color=cg, text_size=lbl)
-    table.cell(dash, 1, 2, str.tostring(wr, "#.1") + "%", text_color=wr >= 55 ? cgr : wr >= 40 ? cyl : cre, text_size=lbl, text_halign=text.align_right)
-    table.cell(dash, 0, 3, "Trades",      text_color=cg, text_size=lbl)
-    table.cell(dash, 1, 3, str.tostring(strategy.closedtrades), text_color=cg, text_size=lbl, text_halign=text.align_right)
-    table.cell(dash, 0, 4, "Max DD",      text_color=cg, text_size=lbl)
-    table.cell(dash, 1, 4, str.tostring(strategy.max_drawdown, "#.0"), text_color=cre, text_size=lbl, text_halign=text.align_right)
-    table.cell(dash, 0, 5, "Consec Loss", text_color=cg, text_size=lbl)
-    table.cell(dash, 1, 5, str.tostring(consecLoss) + (cbBlocked ? " ⛔" : ""), text_color=consecLoss >= maxConsecLoss ? cre : consecLoss > 0 ? cyl : cgr, text_size=lbl, text_halign=text.align_right)
+    dRow(dash, r, "Net P&L", "$" + str.tostring(strategy.netprofit, "#.0"), strategy.netprofit >= 0 ? cgr : cre)
+    r += 1
+    dRow(dash, r, "Win Rate", str.tostring(wr, "#.1") + "%", wr >= 55 ? cgr : wr >= 40 ? cyl : cre)
+    r += 1
+    dRow(dash, r, "Trades", str.tostring(strategy.closedtrades), cg)
+    r += 1
+    dRow(dash, r, "Max DD", str.tostring(strategy.max_drawdown, "#.0"), cre)
+    r += 1
+    dRow(dash, r, "Consec Loss", str.tostring(consecLoss) + (cbBlocked ? " ⛔" : ""), consecLoss >= maxConsecLoss ? cre : consecLoss > 0 ? cyl : cgr)
+    r += 1
 
-    table.merge_cells(dash, 0, 6, 1, 6)
-    table.cell(dash, 0, 6, "── Confluence ──", text_color=cyl, text_size=lbl, text_halign=text.align_center)
+    dHdr(dash, r, "── Confluence ──")
+    r += 1
+    dRow(dash, r, "Long  " + scoreBar(longScore, maxScore),  str.tostring(longScore)  + "/" + maxScoStr, longScore  >= effMinScore ? cgr : cg)
+    r += 1
+    dRow(dash, r, "Short " + scoreBar(shortScore, maxScore), str.tostring(shortScore) + "/" + maxScoStr, shortScore >= effMinScore ? cre : cg)
+    r += 1
 
-    lBar = scoreBar(longScore,  maxScore)
-    sBar = scoreBar(shortScore, maxScore)
-    lFrac = str.tostring(longScore)  + "/" + maxScoStr
-    sFrac = str.tostring(shortScore) + "/" + maxScoStr
-    table.cell(dash, 0, 7, "Long  " + lBar, text_color=longScore  >= 5 ? cgr : longScore  >= 3 ? cyl : cg, text_size=lbl)
-    table.cell(dash, 1, 7, lFrac,           text_color=longScore  >= minScore ? cgr : cg, text_size=lbl, text_halign=text.align_right)
-    table.cell(dash, 0, 8, "Short " + sBar, text_color=shortScore >= 5 ? cre : shortScore >= 3 ? cyl : cg, text_size=lbl)
-    table.cell(dash, 1, 8, sFrac,           text_color=shortScore >= minScore ? cre : cg, text_size=lbl, text_halign=text.align_right)
+    enabledCount = 0
+    for i = 0 to array.size(fEnabled) - 1
+        if array.get(fEnabled, i)
+            enabledCount += 1
+    dHdr(dash, r, "── " + str.tostring(enabledCount) + " Factors ──")
+    r += 1
+    for i = 0 to array.size(fNames) - 1
+        if array.get(fEnabled, i)
+            lh   = array.get(fLongHit,  i)
+            sh   = array.get(fShortHit, i)
+            stxt = lh and not sh ? "▲ Long" : sh and not lh ? "▼ Short" : lh and sh ? "▲▼ Both" : "· —"
+            sclr = lh and not sh ? cgr : sh and not lh ? cre : lh and sh ? cyl : cg
+            dRow(dash, r, array.get(fNames, i), stxt, sclr)
+            r += 1
 
-    table.merge_cells(dash, 0, 9, 1, 9)
-    factorHdr = usePivot ? "── 7 Factors ──" : "── 6 Factors ──"
-    table.cell(dash, 0, 9, factorHdr, text_color=cyl, text_size=lbl, text_halign=text.align_center)
+    dRow(dash, r, momType, momLineLbl, cg)
+    r += 1
 
-    maLbl  = maType + "(" + str.tostring(maFastL) + "/" + str.tostring(maSlowL) + ")"
-    fNames = array.from(maLbl, "Supertrend", momType, "Volume", "VWAP Side", "RSI-14 Bias", "Peak/Valley")
-    fVals  = array.from(maFast > maSlow ? "▲ Bull" : "▼ Bear", stBull ? "▲ Bull" : "▼ Bear",
-                        momLineLbl, volOK ? "✓ High" : "✗ Low",
-                        aboveVWAP ? "▲ Above" : "▼ Below",
-                        str.tostring(rsi14Val, "#.1") + (rsi14Bull ? " ▲" : " ▼"),
-                        pivotLongFactor == 1 ? "▽ Valley" : pivotShortFactor == 1 ? "△ Peak" : "—")
-    fOK    = array.from(maFast > maSlow ? 1 : 0, stBull ? 1 : 0,
-                        momCrossUp ? 1 : momCrossDown ? -1 : 0,
-                        volOK ? 1 : 0, aboveVWAP ? 1 : 0, rsi14Bull ? 1 : 0,
-                        usePivot ? (pivotLongFactor == 1 or pivotShortFactor == 1 ? 1 : 0) : -2)
-
-    showRows = usePivot ? 6 : 5
-    for fi = 0 to showRows
-        rawOK = array.get(fOK, fi)
-        fc    = rawOK == 1 ? cgr : rawOK == -1 ? cre : rawOK == -2 ? cg : cg
-        table.cell(dash, 0, 10 + fi, array.get(fNames, fi), text_color=rawOK == -2 ? color.new(cg, 50) : cg, text_size=lbl)
-        table.cell(dash, 1, 10 + fi, array.get(fVals,  fi), text_color=fc, text_size=lbl, text_halign=text.align_right)
-
-    fBase = usePivot ? 17 : 16
-
-    table.merge_cells(dash, 0, fBase, 1, fBase)
-    table.cell(dash, 0, fBase, "── Filters ──", text_color=cyl, text_size=lbl, text_halign=text.align_center)
-
-    adxClr  = not useADX ? cg : adxOK ? cgr : cre
+    dHdr(dash, r, "── Filters ──")
+    r += 1
     adxStat = not useADX ? "OFF" : adxOK ? "✓ " + str.tostring(adxVal, "#.1") : "✗ " + str.tostring(adxVal, "#.1")
-    table.cell(dash, 0, fBase + 1, "ADX ≥ " + str.tostring(adxMin, "#"), text_color=cg, text_size=lbl)
-    table.cell(dash, 1, fBase + 1, adxStat, text_color=adxClr, text_size=lbl, text_halign=text.align_right)
-
-    biasClr  = not useDailyBias ? cg : close > dailyEma200 ? cgr : cre
-    biasStat = not useDailyBias ? "OFF" : close > dailyEma200 ? "▲ Bull (L only)" : "▼ Bear (S only)"
-    table.cell(dash, 0, fBase + 2, "Daily EMA" + str.tostring(dailyEmaLen), text_color=cg, text_size=lbl)
-    table.cell(dash, 1, fBase + 2, biasStat, text_color=biasClr, text_size=lbl, text_halign=text.align_right)
-
-    mtfClr  = not useMTF ? cg : mtfBull ? cgr : cre
-    mtfStat = not useMTF ? "OFF" : mtfBull ? "▲ Bull" : "▼ Bear"
-    table.cell(dash, 0, fBase + 3, "MTF(" + mtfTF + ") ST", text_color=cg, text_size=lbl)
-    table.cell(dash, 1, fBase + 3, mtfStat, text_color=mtfClr, text_size=lbl, text_halign=text.align_right)
-
+    dRow(dash, r, "ADX ≥ " + str.tostring(adxMin, "#"), adxStat, not useADX ? cg : adxOK ? cgr : cre)
+    r += 1
+    biasStat = not useDailyBias ? "OFF" : close > dailyEma200 ? "▲ Bull (L)" : "▼ Bear (S)"
+    dRow(dash, r, "Daily EMA" + str.tostring(dailyEmaLen), biasStat, not useDailyBias ? cg : close > dailyEma200 ? cgr : cre)
+    r += 1
+    mtfStat = not useMTF ? "OFF" : not mtfHigher ? "AUTO-OFF" : mtfBull ? "▲ Bull" : "▼ Bear"
+    mtfClr  = not useMTF or not mtfHigher ? cg : mtfBull ? cgr : cre
+    dRow(dash, r, "MTF(" + mtfTF + ") ST", mtfStat, mtfClr)
+    r += 1
     atrRatio  = atrAvg > 0 ? atr / atrAvg : 1.0
-    spikeClr  = not useAtrSpike ? cg : atrSpikeOK ? cgr : cre
     spikeStat = not useAtrSpike ? "OFF" : atrSpikeOK ? "✓ " + str.tostring(atrRatio, "#.2") + "×" : "✗ " + str.tostring(atrRatio, "#.2") + "× SPIKE"
-    table.cell(dash, 0, fBase + 4, "ATR Spike ×" + str.tostring(atrSpikeMult, "#.1"), text_color=cg, text_size=lbl)
-    table.cell(dash, 1, fBase + 4, spikeStat, text_color=spikeClr, text_size=lbl, text_halign=text.align_right)
+    dRow(dash, r, "ATR Spike ×" + str.tostring(atrSpikeMult, "#.1"), spikeStat, not useAtrSpike ? cg : atrSpikeOK ? cgr : cre)
+    r += 1
+    cbStat = not useCircuitBreaker ? "OFF" : cbBlocked ? "⛔ SKIP (" + str.tostring(consecLoss) + ")" : "✓ " + str.tostring(consecLoss) + "/" + str.tostring(maxConsecLoss)
+    dRow(dash, r, "Circuit Breaker", cbStat, not useCircuitBreaker ? cg : not cbBlocked ? cgr : cre)
+    r += 1
+    if useF_OI and not oiAvail
+        dRow(dash, r, "Open Int", "⚠ no data", cre)
+        r += 1
+    if useF_CBP and not cbpAvail
+        dRow(dash, r, "CB Premium", "⚠ no data", cre)
+        r += 1
+    rangeStat = not useRange ? "OFF" : inRange ? "✓ In Range" : "✗ Out"
+    dRow(dash, r, "Backtest Range", rangeStat, not useRange ? cg : inRange ? cgr : cre)
+    r += 1
 
-    cbClr  = not useCircuitBreaker ? cg : not cbBlocked ? cgr : cre
-    cbStat = not useCircuitBreaker ? "OFF" : cbBlocked ? "⛔ PAUSED (" + str.tostring(consecLoss) + ")" : "✓ " + str.tostring(consecLoss) + "/" + str.tostring(maxConsecLoss)
-    table.cell(dash, 0, fBase + 5, "Circuit Breaker", text_color=cg, text_size=lbl)
-    table.cell(dash, 1, fBase + 5, cbStat, text_color=cbClr, text_size=lbl, text_halign=text.align_right)
+    dHdr(dash, r, "── TP Levels ──")
+    r += 1
+    tp1Stat = useTP1 ? str.tostring(tp1Mult, "#.1") + "× / " + str.tostring(tp1Pct, "#") + "%" : "OFF"
+    tp2Stat = useTP2 ? str.tostring(tp2Mult, "#.1") + "× / " + str.tostring(tp2Pct, "#") + "%" : "OFF"
+    tp3Stat = useTP3 ? str.tostring(tp3Mult, "#.1") + "× / " + str.tostring(tp3Pct, "#") + "%" : "OFF"
+    tp4Stat = useTP4 ? str.tostring(tp4Mult, "#.1") + "× / " + str.tostring(tp4Pct, "#") + "%" : "OFF"
+    dRow(dash, r, "TP1", tp1Stat, useTP1 ? cgr : cg)
+    r += 1
+    dRow(dash, r, "TP2", tp2Stat, useTP2 ? cgr : cg)
+    r += 1
+    dRow(dash, r, "TP3", tp3Stat, useTP3 ? cgr : cg)
+    r += 1
+    dRow(dash, r, "TP4", tp4Stat, useTP4 ? cgr : cg)
+    r += 1
 
-    rangeClr  = not useRange ? cg : inRange ? cgr : cre
-    rangeStat = not useRange ? "OFF" : inRange ? "✓ In Range" : "✗ Out of Range"
-    table.cell(dash, 0, fBase + 6, "Backtest Range", text_color=cg, text_size=lbl)
-    table.cell(dash, 1, fBase + 6, rangeStat, text_color=rangeClr, text_size=lbl, text_halign=text.align_right)
-
-    table.merge_cells(dash, 0, fBase + 7, 1, fBase + 7)
-    table.cell(dash, 0, fBase + 7, "── TP Levels ──", text_color=cyl, text_size=lbl, text_halign=text.align_center)
-
-    tp1Stat = useTP1 ? str.tostring(tp1Mult, "#.1") + "× ATR / " + str.tostring(tp1Pct, "#") + "%" : "OFF"
-    tp2Stat = useTP2 ? str.tostring(tp2Mult, "#.1") + "× ATR / " + str.tostring(tp2Pct, "#") + "%" : "OFF"
-    tp3Stat = useTP3 ? str.tostring(tp3Mult, "#.1") + "× ATR / " + str.tostring(tp3Pct, "#") + "%" : "OFF"
-    tp4Stat = useTP4 ? str.tostring(tp4Mult, "#.1") + "× ATR / " + str.tostring(tp4Pct, "#") + "%" : "OFF"
-    table.cell(dash, 0, fBase +  8, "TP1", text_color=cg, text_size=lbl)
-    table.cell(dash, 1, fBase +  8, tp1Stat, text_color=useTP1 ? cgr : cg, text_size=lbl, text_halign=text.align_right)
-    table.cell(dash, 0, fBase +  9, "TP2", text_color=cg, text_size=lbl)
-    table.cell(dash, 1, fBase +  9, tp2Stat, text_color=useTP2 ? cgr : cg, text_size=lbl, text_halign=text.align_right)
-    table.cell(dash, 0, fBase + 10, "TP3", text_color=cg, text_size=lbl)
-    table.cell(dash, 1, fBase + 10, tp3Stat, text_color=useTP3 ? cgr : cg, text_size=lbl, text_halign=text.align_right)
-    table.cell(dash, 0, fBase + 11, "TP4", text_color=cg, text_size=lbl)
-    table.cell(dash, 1, fBase + 11, tp4Stat, text_color=useTP4 ? cgr : cg, text_size=lbl, text_halign=text.align_right)
-
-    dispScore = longScore >= shortScore ? longScore : shortScore
-    topS      = usePivot ? 7 : 6
-    scoreT    = topS > minScore ? math.max(0.0, math.min(1.0, (float(dispScore) - float(minScore)) / float(topS - minScore))) : 0.0
-    scoreMult = useScoreSize and topS > minScore ? scoreMultMin + (scoreMultMax - scoreMultMin) * scoreT : 1.0
-    sizeClr   = not useScoreSize ? cg : scoreMult >= 1.0 ? cgr : cyl
+    dispScore = math.max(longScore, shortScore)
+    scoreT    = maxScore > effMinScore ? math.max(0.0, math.min(1.0, (float(dispScore) - float(effMinScore)) / float(maxScore - effMinScore))) : 0.0
+    scoreMult = useScoreSize and maxScore > effMinScore ? scoreMultMin + (scoreMultMax - scoreMultMin) * scoreT : 1.0
     sizeStat  = not useScoreSize ? "OFF" : str.tostring(scoreMult, "#.2") + "× (" + str.tostring(dispScore) + "pt)"
-    table.cell(dash, 0, fBase + 12, "Score Sizing", text_color=cg, text_size=lbl)
-    table.cell(dash, 1, fBase + 12, sizeStat, text_color=sizeClr, text_size=lbl, text_halign=text.align_right)
+    dRow(dash, r, "Score Sizing", sizeStat, not useScoreSize ? cg : scoreMult >= 1.0 ? cgr : cyl)
+    r += 1
 
-    table.merge_cells(dash, 0, fBase + 13, 1, fBase + 13)
-    modeStr = maType + " | " + momType + (usePivot ? " | P/V" : "")
-    table.cell(dash, 0, fBase + 13, modeStr, text_color=cyl, text_size=lbl, text_halign=text.align_center)
+    dHdr(dash, r, maType + " | " + momType)
+    r += 1
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ALERTS
