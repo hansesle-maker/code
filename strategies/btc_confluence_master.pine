@@ -1,37 +1,36 @@
 //@version=6
 // ============================================================================
-// BTC Confluence Master  —  6-Strategy Synthesis
+// BTC Confluence Master  —  6-Strategy MTF Synthesis
 // ----------------------------------------------------------------------------
-// Combines the strongest component of each of six proven BTC strategies into
-// a single confluence-scored system:
+// Combines six proven BTC strategies, but respects the timeframe each one
+// actually works on. They are NOT forced onto a single chart timeframe:
 //
-//   1. VWAP Trend Momentum ......... session VWAP regime filter, pullback
-//                                    entry timing, ATR SL/TP, UT Bot trailing
-//                                    stop, max-trades-per-day risk cap
-//   2. SuperTrend STRATEGY ......... ATR-band trend direction (10, 3.0)
-//   3. Hull Suite Strategy ......... HMA-55 slope trend confirmation
-//   4. Single EMA Cross ............ EMA 10/20 fast momentum alignment
-//   5. Twin Optimized Trend Tracker  VAR-based OTT band trend state
-//   6. MACD ReLoaded ............... VAR (VIDYA) MACD histogram momentum
+//   HIGHER TIMEFRAME (default 4H)  ->  TREND BIAS  (which side to trade)
+//     2. SuperTrend STRATEGY ......... ATR-band trend direction (10, 3.0)
+//     3. Hull Suite Strategy ......... HMA-55 slope
+//     4. Single EMA Cross ............ EMA 10/20 alignment
+//     5. Twin Optimized Trend Tracker  VAR-based OTT band state
+//     6. MACD ReLoaded ............... VAR (VIDYA) MACD histogram
+//   These five vote on the 4H timeframe (via request.security, non-repainting)
+//   to produce a 0..5 bull / bear bias score.
 //
-// Method: each of the 6 components votes bullish / bearish every bar.
-// A trade is only opened when at least `Entry Confluence Score` components
-// agree (default 5 of 6), so whipsaw signals from any single indicator are
-// filtered out by the others. Exits combine a hard ATR stop-loss, an ATR
-// take-profit, the UT Bot trailing stop, and an early "confluence lost"
-// exit when the vote count collapses.
+//   CHART TIMEFRAME (run on 1H)    ->  ENTRY TIMING + RISK
+//     1. VWAP Trend Momentum ......... session VWAP regime, pullback entry,
+//                                      ATR SL/TP, UT Bot trailing stop,
+//                                      max-trades-per-day cap
 //
-// Entry modes:
-//   - "Confluence": enter the moment the score first reaches the threshold
-//     (captures trend starts like SuperTrend / TOTT / MACD / EMA-cross).
-//   - "VWAP Pullback": with the score at/above threshold, wait for a shallow
-//     pullback to the session VWAP that resumes trendward (strategy 1 logic;
-//     fewer but higher-quality intraday entries).
+// Logic: only when the 4H bias score agrees (>= HTF Bias Score) do we arm the
+// 1H VWAP pullback entry. The 4H swing stack decides direction; the 1H VWAP
+// engine decides the moment and manages the trade. This resolves the mismatch
+// where VWAP is an intraday (1H) tool and the trend stack is tuned for 4H.
 //
-// Works on any timeframe; designed and tuned for BTC. Not financial advice.
-// Backtested / past performance does not guarantee future results.
+// Credit: SuperTrend / TOTT / MACD ReLoaded (c) KivancOzbilgic; Twin OTT by
+// Anil Ozeksi; Hull Suite by InSilico; UT Bot trailing stop by HPotter.
+//
+// Not financial advice. Past performance does not guarantee future results.
+// RECOMMENDED: apply this strategy on a 1H BTC chart, keep HTF = 240 (4H).
 // ============================================================================
-strategy("BTC Confluence Master [6-in-1]", overlay=true,
+strategy("BTC Confluence Master [MTF 6-in-1]", overlay=true,
      initial_capital=50000,
      default_qty_type=strategy.percent_of_equity, default_qty_value=100,
      commission_type=strategy.commission.percent, commission_value=0.05,
@@ -45,42 +44,44 @@ var color C_PURPLE=#b388ff, var color C_NEON=#76ff03,  var color C_RED=#ff1744
 var color C_ORANGE=#ff9100, var color C_ELECTRIC=#448aff, var color C_CYAN=#18ffff
 
 // ----------------------------------------------------------------- inputs --
-grpSig   = "Signal Engine"
-grpEntry = "Entry"
+grpMTF   = "Higher-Timeframe Bias (4H stack)"
+grpEntry = "Entry (1H VWAP engine)"
 grpRisk  = "Risk"
 grpTrail = "Trailing Stop (UT Bot)"
 grpFilt  = "Backtest Window"
 grpVis   = "Visuals"
 
-i_threshold = input.int(5, "Entry Confluence Score (of 6)", minval=3, maxval=6, group=grpSig,
-     tooltip="Minimum number of the 6 components that must agree before a trade opens.")
-i_exitScore = input.int(2, "Exit When Score Falls To", minval=0, maxval=4, group=grpSig,
-     tooltip="Close the position early when agreement collapses to this count or lower.")
+i_htf       = input.timeframe("240", "Higher Timeframe", group=grpMTF,
+     tooltip="Timeframe the 5 swing-trend components vote on. Keep at 240 (4H) while the chart is on 1H.")
+i_htfScore  = input.int(4, "HTF Bias Score (of 5)", minval=1, maxval=5, group=grpMTF,
+     tooltip="Minimum number of the five 4H components that must agree before entries are armed.")
+i_stLen     = input.int(10, "SuperTrend ATR Period", group=grpMTF)
+i_stMult    = input.float(3.0, "SuperTrend Multiplier", step=0.1, group=grpMTF)
+i_hullLen   = input.int(55, "Hull MA Length", group=grpMTF)
+i_emaFast   = input.int(10, "Fast EMA", group=grpMTF)
+i_emaSlow   = input.int(20, "Slow EMA", group=grpMTF)
+i_tottLen   = input.int(40, "TOTT Period (VAR)", minval=1, group=grpMTF)
+i_tottPct   = input.float(1.0, "TOTT Optimization %", step=0.1, minval=0, group=grpMTF)
+i_tottCoeff = input.float(0.001, "TOTT Twin Coefficient", step=0.001, minval=0, group=grpMTF)
+i_macdFast  = input.int(12, "MACD Fast (VAR)", minval=1, group=grpMTF)
+i_macdSlow  = input.int(26, "MACD Slow (VAR)", minval=1, group=grpMTF)
+i_macdTrig  = input.int(9, "MACD Trigger (VAR)", minval=1, group=grpMTF)
 
-i_entryMode = input.string("Confluence", "Entry Mode", options=["Confluence", "VWAP Pullback"], group=grpEntry)
+i_entryMode = input.string("VWAP Pullback", "Entry Trigger", options=["VWAP Pullback", "VWAP Cross"], group=grpEntry,
+     tooltip="Pullback: wait for a shallow return to session VWAP that resumes trendward. Cross: enter on close crossing VWAP in the biased direction.")
 i_longOnly  = input.bool(true, "Long Only Mode", group=grpEntry)
 i_maxTrades = input.int(6, "Max Trades/Day", minval=1, maxval=20, group=grpEntry)
 i_pullbackDist = input.float(0.15, "Max Pullback to VWAP %", step=0.05, group=grpEntry)
-
-// component parameters (defaults = each source strategy's proven defaults)
-i_stLen    = input.int(10, "SuperTrend ATR Period", group=grpSig)
-i_stMult   = input.float(3.0, "SuperTrend Multiplier", step=0.1, group=grpSig)
-i_hullLen  = input.int(55, "Hull MA Length", group=grpSig)
-i_emaFast  = input.int(10, "Fast EMA", group=grpSig)
-i_emaSlow  = input.int(20, "Slow EMA", group=grpSig)
-i_tottLen  = input.int(40, "TOTT Period (VAR)", minval=1, group=grpSig)
-i_tottPct  = input.float(1.0, "TOTT Optimization %", step=0.1, minval=0, group=grpSig)
-i_tottCoeff= input.float(0.001, "TOTT Twin Coefficient", step=0.001, minval=0, group=grpSig)
-i_macdFast = input.int(12, "MACD Fast (VAR)", minval=1, group=grpSig)
-i_macdSlow = input.int(26, "MACD Slow (VAR)", minval=1, group=grpSig)
-i_macdTrig = input.int(9, "MACD Trigger (VAR)", minval=1, group=grpSig)
-i_emaTrendLen = input.int(34, "VWAP Regime EMA Length", group=grpSig)
-i_slopeLb  = input.int(3, "VWAP Regime EMA Slope Lookback", group=grpSig)
+i_emaTrendLen  = input.int(34, "VWAP Regime EMA Length", group=grpEntry)
+i_slopeLb      = input.int(3, "VWAP Regime EMA Slope Lookback", group=grpEntry)
+i_requireLocal = input.bool(true, "Require 1H VWAP regime to agree", group=grpEntry,
+     tooltip="Also require close vs session VWAP and 1H EMA slope to align with the 4H bias.")
 
 i_atrLen  = input.int(14, "ATR Length", group=grpRisk)
 i_slMult  = input.float(2.0, "SL Multiplier (x ATR)", step=0.1, group=grpRisk)
 i_useTP   = input.bool(true, "Use ATR Take-Profit", group=grpRisk)
 i_tpMult  = input.float(3.0, "TP Multiplier (x ATR)", step=0.1, group=grpRisk)
+i_exitOnFlip = input.bool(true, "Exit When 4H Bias Flips Against Position", group=grpRisk)
 
 i_useTrail = input.bool(true, "Use UT Bot Trailing Stop", group=grpTrail)
 i_utKey    = input.float(1.0, "Trail Sensitivity", step=0.1, group=grpTrail)
@@ -91,7 +92,7 @@ i_toDate   = input.time(timestamp("1 Jan 2099 00:00 +0000"), "Backtest End", gro
 inWindow = time >= i_fromDate and time <= i_toDate
 
 i_showDash  = input.bool(true, "Show Dashboard", group=grpVis)
-i_scoreBars = input.bool(true, "Color Bars by Score", group=grpVis)
+i_scoreBars = input.bool(true, "Color Bars by Bias", group=grpVis)
 
 // ------------------------------------------------- shared helper: VAR MA ---
 // VIDYA-style adaptive MA used by TOTT and MACD ReLoaded (KivancOzbilgic).
@@ -106,7 +107,64 @@ varma(float s, simple int l) =>
     v := nz(valpha * math.abs(vCMO) * s) + (1 - valpha * math.abs(vCMO)) * nz(v[1])
     v
 
-// -------------------------------------- component 1: session VWAP regime ---
+// ============================================================================
+//  HTF COMPONENTS  (calculated so they can be pulled at the 4H timeframe)
+// ============================================================================
+
+// --- 2. SuperTrend ---------------------------------------------------------
+stAtr = ta.atr(i_stLen)
+stUp = hl2 - i_stMult * stAtr
+stUp1 = nz(stUp[1], stUp)
+stUp := close[1] > stUp1 ? math.max(stUp, stUp1) : stUp
+stDn = hl2 + i_stMult * stAtr
+stDn1 = nz(stDn[1], stDn)
+stDn := close[1] < stDn1 ? math.min(stDn, stDn1) : stDn
+var int stTrend = 1
+stTrend := stTrend == -1 and close > stDn1 ? 1 : stTrend == 1 and close < stUp1 ? -1 : stTrend
+stDir = stTrend == 1 ? 1 : -1
+
+// --- 3. Hull Suite ---------------------------------------------------------
+hull = ta.hma(close, i_hullLen)
+hullDir = hull > hull[2] ? 1 : hull < hull[2] ? -1 : 0
+
+// --- 4. EMA cross ----------------------------------------------------------
+emaDir = ta.ema(close, i_emaFast) > ta.ema(close, i_emaSlow) ? 1 : -1
+
+// --- 5. Twin OTT -----------------------------------------------------------
+tottMa = varma(close, i_tottLen)
+fark = tottMa * i_tottPct * 0.01
+longStop = tottMa - fark
+longStopPrev = nz(longStop[1], longStop)
+longStop := tottMa > longStopPrev ? math.max(longStop, longStopPrev) : longStop
+shortStop = tottMa + fark
+shortStopPrev = nz(shortStop[1], shortStop)
+shortStop := tottMa < shortStopPrev ? math.min(shortStop, shortStopPrev) : shortStop
+var int tottState = 1
+tottState := tottState == -1 and tottMa > shortStopPrev ? 1 : tottState == 1 and tottMa < longStopPrev ? -1 : tottState
+MT = tottState == 1 ? longStop : shortStop
+OTT = tottMa > MT ? MT * (200 + i_tottPct) / 200 : MT * (200 - i_tottPct) / 200
+OTTup = OTT * (1 + i_tottCoeff)
+OTTdn = OTT * (1 - i_tottCoeff)
+tottDir = tottMa > OTTup[2] ? 1 : tottMa < OTTdn[2] ? -1 : 0
+
+// --- 6. MACD ReLoaded ------------------------------------------------------
+macdLine = varma(close, i_macdFast) - varma(close, i_macdSlow)
+macdHist = macdLine - varma(macdLine, i_macdTrig)
+macdDir = macdHist > 0 ? 1 : macdHist < 0 ? -1 : 0
+
+// --- pull the five component directions from the 4H timeframe (no repaint) --
+[hSt, hHull, hEma, hTott, hMacd] = request.security(syminfo.tickerid, i_htf,
+     [stDir[1], hullDir[1], emaDir[1], tottDir[1], macdDir[1]],
+     lookahead=barmerge.lookahead_off)
+
+htfBullScore = (hSt == 1 ? 1 : 0) + (hHull == 1 ? 1 : 0) + (hEma == 1 ? 1 : 0) + (hTott == 1 ? 1 : 0) + (hMacd == 1 ? 1 : 0)
+htfBearScore = (hSt == -1 ? 1 : 0) + (hHull == -1 ? 1 : 0) + (hEma == -1 ? 1 : 0) + (hTott == -1 ? 1 : 0) + (hMacd == -1 ? 1 : 0)
+htfBull = htfBullScore >= i_htfScore
+htfBear = htfBearScore >= i_htfScore
+
+// ============================================================================
+//  CHART-TIMEFRAME ENGINE  (1H VWAP Trend Momentum: timing + risk)
+// ============================================================================
 newDay = ta.change(time("D")) != 0
 var float svNum = 0.0
 var float svDen = 0.0
@@ -122,61 +180,12 @@ sVwap := svDen > 0 ? svNum / svDen : close
 
 emaTrend = ta.ema(close, i_emaTrendLen)
 emaSlope = emaTrend - emaTrend[i_slopeLb]
-vwapBull = not na(sVwap) and close > sVwap and emaSlope > 0
-vwapBear = not na(sVwap) and close < sVwap and emaSlope < 0
+localBull = not na(sVwap) and close > sVwap and emaSlope > 0
+localBear = not na(sVwap) and close < sVwap and emaSlope < 0
 
-// ----------------------------------------------- component 2: SuperTrend ---
-stAtr = ta.atr(i_stLen)
-stUp = hl2 - i_stMult * stAtr
-stUp1 = nz(stUp[1], stUp)
-stUp := close[1] > stUp1 ? math.max(stUp, stUp1) : stUp
-stDn = hl2 + i_stMult * stAtr
-stDn1 = nz(stDn[1], stDn)
-stDn := close[1] < stDn1 ? math.min(stDn, stDn1) : stDn
-var int stTrend = 1
-stTrend := stTrend == -1 and close > stDn1 ? 1 : stTrend == 1 and close < stUp1 ? -1 : stTrend
-stBull = stTrend == 1
-stBear = stTrend == -1
+atr = ta.atr(i_atrLen)
 
-// ----------------------------------------------- component 3: Hull Suite ---
-hull = ta.hma(close, i_hullLen)
-hullBull = hull > hull[2]
-hullBear = hull < hull[2]
-
-// ------------------------------------------------ component 4: EMA cross ---
-emaF = ta.ema(close, i_emaFast)
-emaS = ta.ema(close, i_emaSlow)
-emaBull = emaF > emaS
-emaBear = emaF < emaS
-
-// ----------------------------------------------------- component 5: TOTT ---
-tottMa = varma(close, i_tottLen)
-fark = tottMa * i_tottPct * 0.01
-longStop = tottMa - fark
-longStopPrev = nz(longStop[1], longStop)
-longStop := tottMa > longStopPrev ? math.max(longStop, longStopPrev) : longStop
-shortStop = tottMa + fark
-shortStopPrev = nz(shortStop[1], shortStop)
-shortStop := tottMa < shortStopPrev ? math.min(shortStop, shortStopPrev) : shortStop
-var int tottDir = 1
-tottDir := tottDir == -1 and tottMa > shortStopPrev ? 1 : tottDir == 1 and tottMa < longStopPrev ? -1 : tottDir
-MT = tottDir == 1 ? longStop : shortStop
-OTT = tottMa > MT ? MT * (200 + i_tottPct) / 200 : MT * (200 - i_tottPct) / 200
-OTTup = OTT * (1 + i_tottCoeff)
-OTTdn = OTT * (1 - i_tottCoeff)
-tottBull = tottMa > OTTup[2]
-tottBear = tottMa < OTTdn[2]
-
-// -------------------------------------------- component 6: MACD ReLoaded ---
-macdFast = varma(close, i_macdFast)
-macdSlow = varma(close, i_macdSlow)
-macdLine = macdFast - macdSlow
-macdTrig = varma(macdLine, i_macdTrig)
-macdHist = macdLine - macdTrig
-macdBull = macdHist > 0
-macdBear = macdHist < 0
-
-// -------------------------------------------------- UT Bot trailing stop ---
+// --- UT Bot trailing stop (chart timeframe) --------------------------------
 utAtr = ta.atr(i_utAtrLen)
 utLoss = i_utKey * utAtr
 var float utTrail = 0.0
@@ -190,27 +199,25 @@ else if close > utPrev
 else
     utTrail := close + utLoss
 
-// -------------------------------------------------------- confluence vote --
-bullScore = (stBull ? 1 : 0) + (hullBull ? 1 : 0) + (emaBull ? 1 : 0) + (tottBull ? 1 : 0) + (macdBull ? 1 : 0) + (vwapBull ? 1 : 0)
-bearScore = (stBear ? 1 : 0) + (hullBear ? 1 : 0) + (emaBear ? 1 : 0) + (tottBear ? 1 : 0) + (macdBear ? 1 : 0) + (vwapBear ? 1 : 0)
-
-// ------------------------------------------------- VWAP pullback trigger ---
-atr = ta.atr(i_atrLen)
+// --- VWAP entry triggers ---------------------------------------------------
 vwapDist = not na(sVwap) ? math.abs(close - sVwap) / close * 100 : 99.0
 nearVwap = vwapDist <= i_pullbackDist
 wasNearVwap = nearVwap or nearVwap[1] or nearVwap[2] or nearVwap[3]
-bounceLong = wasNearVwap and close > sVwap and close > high[1]
+bounceLong  = wasNearVwap and close > sVwap and close > high[1]
 bounceShort = wasNearVwap and close < sVwap and close < low[1]
+crossUpVwap   = ta.crossover(close, sVwap)
+crossDnVwap   = ta.crossunder(close, sVwap)
 
-// ------------------------------------------------------------------ entry --
-confluenceLong  = bullScore >= i_threshold and bullScore[1] < i_threshold
-confluenceShort = bearScore >= i_threshold and bearScore[1] < i_threshold
-triggerLong  = i_entryMode == "Confluence" ? confluenceLong  : bullScore >= i_threshold and bounceLong
-triggerShort = i_entryMode == "Confluence" ? confluenceShort : bearScore >= i_threshold and bounceShort
+trigLong  = i_entryMode == "VWAP Pullback" ? bounceLong  : crossUpVwap
+trigShort = i_entryMode == "VWAP Pullback" ? bounceShort : crossDnVwap
+
+// --- bias gate + local agreement -------------------------------------------
+biasLong  = htfBull and (not i_requireLocal or localBull)
+biasShort = htfBear and (not i_requireLocal or localBear)
 
 canTrade = inWindow and tCount < i_maxTrades and strategy.position_size == 0 and not na(atr) and atr > 0
-goLong  = canTrade and triggerLong
-goShort = canTrade and triggerShort and not i_longOnly
+goLong  = canTrade and biasLong and trigLong
+goShort = canTrade and biasShort and trigShort and not i_longOnly
 
 var float slPrice = na
 var float tpPrice = na
@@ -219,64 +226,64 @@ if goLong
     tpPrice := close + atr * i_tpMult
     strategy.entry("Long", strategy.long)
     tCount += 1
-    alert("BUY " + syminfo.ticker + " @ " + str.tostring(close, format.mintick) + " | Score " + str.tostring(bullScore) + "/6 | TP: " + str.tostring(tpPrice, format.mintick) + " | SL: " + str.tostring(slPrice, format.mintick), alert.freq_once_per_bar)
+    alert("BUY " + syminfo.ticker + " @ " + str.tostring(close, format.mintick) + " | 4H bias " + str.tostring(htfBullScore) + "/5 | TP: " + str.tostring(tpPrice, format.mintick) + " | SL: " + str.tostring(slPrice, format.mintick), alert.freq_once_per_bar)
 if goShort
     slPrice := close + atr * i_slMult
     tpPrice := close - atr * i_tpMult
     strategy.entry("Short", strategy.short)
     tCount += 1
-    alert("SELL " + syminfo.ticker + " @ " + str.tostring(close, format.mintick) + " | Score " + str.tostring(bearScore) + "/6 | TP: " + str.tostring(tpPrice, format.mintick) + " | SL: " + str.tostring(slPrice, format.mintick), alert.freq_once_per_bar)
+    alert("SELL " + syminfo.ticker + " @ " + str.tostring(close, format.mintick) + " | 4H bias " + str.tostring(htfBearScore) + "/5 | TP: " + str.tostring(tpPrice, format.mintick) + " | SL: " + str.tostring(slPrice, format.mintick), alert.freq_once_per_bar)
 
-// ------------------------------------------------------------------- exit --
+// --- exits: ATR stop/target + UT Bot trail + HTF bias flip -----------------
 if strategy.position_size > 0
     float stopLvlL = i_useTrail ? math.max(slPrice, utTrail) : slPrice
     strategy.exit("XL", "Long", stop=stopLvlL, limit=i_useTP ? tpPrice : na)
-    if bullScore <= i_exitScore
-        strategy.close("Long", comment="Confluence Lost")
+    if i_exitOnFlip and htfBear
+        strategy.close("Long", comment="4H Bias Flip")
 if strategy.position_size < 0
     float stopLvlS = i_useTrail ? math.min(slPrice, utTrail) : slPrice
     strategy.exit("XS", "Short", stop=stopLvlS, limit=i_useTP ? tpPrice : na)
-    if bearScore <= i_exitScore
-        strategy.close("Short", comment="Confluence Lost")
+    if i_exitOnFlip and htfBull
+        strategy.close("Short", comment="4H Bias Flip")
 
 // ------------------------------------------------------------------ plots --
-plot(sVwap, "VWAP", color=color.new(C_GOLD, 10), linewidth=2)
-plot(stTrend == 1 ? stUp : na, "SuperTrend Up", style=plot.style_linebr, color=color.new(C_BULL, 30), linewidth=2)
-plot(stTrend == -1 ? stDn : na, "SuperTrend Down", style=plot.style_linebr, color=color.new(C_BEAR, 30), linewidth=2)
-plot(hull, "Hull-55", color=hullBull ? color.new(C_NEON, 50) : color.new(C_RED, 50), linewidth=2)
+plot(sVwap, "Session VWAP (1H)", color=color.new(C_GOLD, 10), linewidth=2)
 plot(strategy.position_size != 0 ? utTrail : na, "UT Trail", style=plot.style_linebr, color=color.new(C_ORANGE, 20), linewidth=2)
-pOttU = plot(OTTup[2], "OTT Up", color=color.new(C_ELECTRIC, 70))
-pOttD = plot(OTTdn[2], "OTT Down", color=color.new(C_PURPLE, 70))
-fill(pOttU, pOttD, color=color.new(C_ELECTRIC, 94), title="OTT Zone")
+vwapHi = not na(sVwap) ? sVwap * (1 + i_pullbackDist / 100) : na
+vwapLo = not na(sVwap) ? sVwap * (1 - i_pullbackDist / 100) : na
+pVH = plot(vwapHi, "VWAP+", color=color.new(C_GOLD, 75), style=plot.style_linebr)
+pVL = plot(vwapLo, "VWAP-", color=color.new(C_GOLD, 75), style=plot.style_linebr)
+fill(pVH, pVL, color=color.new(C_GOLD, 93), title="Pullback Zone")
 
 plotshape(goLong, "Buy", shape.labelup, location.belowbar, color=color.new(C_BULL, 0), text="BUY", textcolor=color.new(#0e1726, 0), size=size.small)
 plotshape(goShort, "Sell", shape.labeldown, location.abovebar, color=color.new(C_BEAR, 0), text="SELL", textcolor=color.new(C_WHITE, 0), size=size.small)
 
-scoreColor = bullScore >= i_threshold ? C_NEON : bearScore >= i_threshold ? C_RED : bullScore > bearScore ? color.new(C_BULL, 40) : bearScore > bullScore ? color.new(C_ORANGE, 40) : C_DIM
-barcolor(i_scoreBars ? scoreColor : na)
-bgcolor(bullScore >= i_threshold ? color.new(C_BULL, 96) : bearScore >= i_threshold ? color.new(C_BEAR, 96) : na, title="Confluence BG")
+biasColor = htfBull ? C_NEON : htfBear ? C_RED : htfBullScore > htfBearScore ? color.new(C_BULL, 45) : htfBearScore > htfBullScore ? color.new(C_ORANGE, 45) : C_DIM
+barcolor(i_scoreBars ? biasColor : na)
+bgcolor(htfBull ? color.new(C_BULL, 96) : htfBear ? color.new(C_BEAR, 96) : na, title="4H Bias BG")
 
 // -------------------------------------------------------------- dashboard --
-stateTxt(bool b, bool s) => b ? "BULL" : s ? "BEAR" : "----"
-stateCol(bool b, bool s) => b ? C_BULL : s ? C_BEAR : C_DIM
-var table d = table.new(position.top_right, 2, 9, bgcolor=color.new(C_PANEL, 0), border_color=C_BORDER, border_width=1, frame_color=C_BORDER, frame_width=2)
+stateTxt(int d) => d == 1 ? "BULL" : d == -1 ? "BEAR" : "----"
+stateCol(int d) => d == 1 ? C_BULL : d == -1 ? C_BEAR : C_DIM
+var table t = table.new(position.top_right, 2, 9, bgcolor=color.new(C_PANEL, 0), border_color=C_BORDER, border_width=1, frame_color=C_BORDER, frame_width=2)
 if i_showDash and barstate.islast
-    table.cell(d, 0, 0, "COMPONENT", text_color=C_SILVER, text_size=size.small)
-    table.cell(d, 1, 0, "STATE", text_color=C_SILVER, text_size=size.small)
-    table.cell(d, 0, 1, "SuperTrend", text_color=C_WHITE, text_size=size.tiny)
-    table.cell(d, 1, 1, stateTxt(stBull, stBear), text_color=stateCol(stBull, stBear), text_size=size.tiny)
-    table.cell(d, 0, 2, "Hull-55", text_color=C_WHITE, text_size=size.tiny)
-    table.cell(d, 1, 2, stateTxt(hullBull, hullBear), text_color=stateCol(hullBull, hullBear), text_size=size.tiny)
-    table.cell(d, 0, 3, "EMA 10/20", text_color=C_WHITE, text_size=size.tiny)
-    table.cell(d, 1, 3, stateTxt(emaBull, emaBear), text_color=stateCol(emaBull, emaBear), text_size=size.tiny)
-    table.cell(d, 0, 4, "TOTT", text_color=C_WHITE, text_size=size.tiny)
-    table.cell(d, 1, 4, stateTxt(tottBull, tottBear), text_color=stateCol(tottBull, tottBear), text_size=size.tiny)
-    table.cell(d, 0, 5, "MACD-VAR", text_color=C_WHITE, text_size=size.tiny)
-    table.cell(d, 1, 5, stateTxt(macdBull, macdBear), text_color=stateCol(macdBull, macdBear), text_size=size.tiny)
-    table.cell(d, 0, 6, "VWAP Regime", text_color=C_WHITE, text_size=size.tiny)
-    table.cell(d, 1, 6, stateTxt(vwapBull, vwapBear), text_color=stateCol(vwapBull, vwapBear), text_size=size.tiny)
-    table.cell(d, 0, 7, "SCORE", text_color=C_GOLD, text_size=size.small)
-    table.cell(d, 1, 7, str.tostring(bullScore) + "▲ / " + str.tostring(bearScore) + "▼", text_color=bullScore >= i_threshold ? C_NEON : bearScore >= i_threshold ? C_RED : C_WHITE, text_size=size.small)
-    table.cell(d, 0, 8, "POS / TRADES", text_color=C_DIM, text_size=size.tiny)
+    table.cell(t, 0, 0, "4H COMPONENT", text_color=C_SILVER, text_size=size.small)
+    table.cell(t, 1, 0, "STATE", text_color=C_SILVER, text_size=size.small)
+    table.cell(t, 0, 1, "SuperTrend", text_color=C_WHITE, text_size=size.tiny)
+    table.cell(t, 1, 1, stateTxt(hSt), text_color=stateCol(hSt), text_size=size.tiny)
+    table.cell(t, 0, 2, "Hull-55", text_color=C_WHITE, text_size=size.tiny)
+    table.cell(t, 1, 2, stateTxt(hHull), text_color=stateCol(hHull), text_size=size.tiny)
+    table.cell(t, 0, 3, "EMA 10/20", text_color=C_WHITE, text_size=size.tiny)
+    table.cell(t, 1, 3, stateTxt(hEma), text_color=stateCol(hEma), text_size=size.tiny)
+    table.cell(t, 0, 4, "TOTT", text_color=C_WHITE, text_size=size.tiny)
+    table.cell(t, 1, 4, stateTxt(hTott), text_color=stateCol(hTott), text_size=size.tiny)
+    table.cell(t, 0, 5, "MACD-VAR", text_color=C_WHITE, text_size=size.tiny)
+    table.cell(t, 1, 5, stateTxt(hMacd), text_color=stateCol(hMacd), text_size=size.tiny)
+    table.cell(t, 0, 6, "1H VWAP Regime", text_color=C_WHITE, text_size=size.tiny)
+    localDir = localBull ? 1 : localBear ? -1 : 0
+    table.cell(t, 1, 6, stateTxt(localDir), text_color=stateCol(localDir), text_size=size.tiny)
+    table.cell(t, 0, 7, "4H BIAS", text_color=C_GOLD, text_size=size.small)
+    table.cell(t, 1, 7, str.tostring(htfBullScore) + "▲ / " + str.tostring(htfBearScore) + "▼", text_color=htfBull ? C_NEON : htfBear ? C_RED : C_WHITE, text_size=size.small)
+    table.cell(t, 0, 8, "POS / TRADES", text_color=C_DIM, text_size=size.tiny)
     posTxt = strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : "FLAT"
-    table.cell(d, 1, 8, posTxt + "  " + str.tostring(tCount) + "/" + str.tostring(i_maxTrades), text_color=strategy.position_size > 0 ? C_BULL : strategy.position_size < 0 ? C_BEAR : C_SILVER, text_size=size.tiny)
+    table.cell(t, 1, 8, posTxt + "  " + str.tostring(tCount) + "/" + str.tostring(i_maxTrades), text_color=strategy.position_size > 0 ? C_BULL : strategy.position_size < 0 ? C_BEAR : C_SILVER, text_size=size.tiny)
