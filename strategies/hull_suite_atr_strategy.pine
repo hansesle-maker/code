@@ -1,0 +1,99 @@
+//@version=6
+// Basic Hull MA Pack tinkered by InSilico
+// Converted to Strategy by DashTrader
+// Upgraded to Pine v6 + ATR-based Stop-Loss / Take-Profit
+strategy("Hull Suite Strategy + ATR SL/TP", overlay=true, pyramiding=1,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+     calc_on_order_fills=false, slippage=0,
+     commission_type=strategy.commission.percent, commission_value=0)
+
+// ---------------------------------------------------------------- direction
+strat_dir_input = input.string("long", title="Strategy Direction", options=["long", "short", "all"])
+strat_dir_value = strat_dir_input == "long" ? strategy.direction.long : strat_dir_input == "short" ? strategy.direction.short : strategy.direction.all
+strategy.risk.allow_entry_in(strat_dir_value)
+
+// ------------------------------------------------------------ backtest window
+testStartYear  = input.int(2016, "Backtest Start Year")
+testStartMonth = input.int(1, "Backtest Start Month", minval=1, maxval=12)
+testStartDay   = input.int(1, "Backtest Start Day", minval=1, maxval=31)
+testPeriodStart = timestamp(testStartYear, testStartMonth, testStartDay, 0, 0)
+testStopYear   = input.int(2030, "Backtest Stop Year")
+testStopMonth  = input.int(12, "Backtest Stop Month", minval=1, maxval=12)
+testStopDay    = input.int(30, "Backtest Stop Day", minval=1, maxval=31)
+testPeriodStop = timestamp(testStopYear, testStopMonth, testStopDay, 0, 0)
+testPeriod() => time >= testPeriodStart and time <= testPeriodStop
+
+// ------------------------------------------------------------------- inputs
+src            = input.source(close, title="Source")
+modeSwitch     = input.string("Hma", title="Hull Variation", options=["Hma", "Thma", "Ehma"])
+length         = input.int(55, title="Length (180-200 for floating S/R, 55 for swing entry)")
+switchColor    = input.bool(true, "Color Hull according to trend?")
+candleCol      = input.bool(false, title="Color candles based on Hull's Trend?")
+visualSwitch   = input.bool(true, title="Show as a Band?")
+thicknesSwitch = input.int(1, title="Line Thickness")
+transpSwitch   = input.int(40, title="Band Transparency", step=5)
+
+// --- ATR Stop-Loss / Take-Profit -------------------------------------------
+grpR    = "ATR Risk Management"
+useSL   = input.bool(true, "Use ATR Stop-Loss", group=grpR)
+useTP   = input.bool(true, "Use ATR Take-Profit", group=grpR)
+atrLen  = input.int(14, "ATR Length", minval=1, group=grpR)
+slMult  = input.float(2.0, "Stop-Loss (x ATR)", step=0.1, minval=0.1, group=grpR)
+tpMult  = input.float(3.0, "Take-Profit (x ATR)", step=0.1, minval=0.1, group=grpR)
+
+// ----------------------------------------------------------------- functions
+// HMA
+hma(_src, _length) => ta.wma(2 * ta.wma(_src, int(_length / 2)) - ta.wma(_src, _length), int(math.round(math.sqrt(_length))))
+// EHMA
+ehma(_src, _length) => ta.ema(2 * ta.ema(_src, int(_length / 2)) - ta.ema(_src, _length), int(math.round(math.sqrt(_length))))
+// THMA
+thma(_src, _length) => ta.wma(ta.wma(_src, int(_length / 3)) * 3 - ta.wma(_src, int(_length / 2)) - ta.wma(_src, _length), _length)
+
+// SWITCH
+Mode(simple string modeSwitch, float src, simple int len) =>
+    modeSwitch == "Hma"  ? hma(src, len) :
+      modeSwitch == "Ehma" ? ehma(src, len) :
+      modeSwitch == "Thma" ? thma(src, int(len / 2)) : na
+
+// OUT
+HULL  = Mode(modeSwitch, src, length)
+MHULL = HULL[0]
+SHULL = HULL[2]
+
+// -------------------------------------------------------------------- color
+hullColor = switchColor ? (HULL > HULL[2] ? color.rgb(0, 255, 0) : color.rgb(255, 0, 0)) : color.rgb(255, 152, 0)
+
+// --------------------------------------------------------------------- plot
+Fi1 = plot(MHULL, title="MHULL", color=color.new(hullColor, 50), linewidth=thicknesSwitch)
+Fi2 = plot(visualSwitch ? SHULL : na, title="SHULL", color=color.new(hullColor, 50), linewidth=thicknesSwitch)
+fill(Fi1, Fi2, title="Band Filler", color=color.new(hullColor, transpSwitch))
+barcolor(candleCol ? (switchColor ? hullColor : na) : na)
+
+// ----------------------------------------------------------------- signals
+atr = ta.atr(atrLen)
+trendUp   = HULL[0] > HULL[2]
+longFlip  = trendUp and not trendUp[1]
+shortFlip = not trendUp and trendUp[1]
+
+// freeze the ATR value at the moment of entry so SL/TP levels stay fixed
+var float entryAtr = na
+if (longFlip or shortFlip) and testPeriod()
+    entryAtr := atr
+
+if longFlip and testPeriod()
+    strategy.entry("buy", strategy.long)
+if shortFlip and testPeriod()
+    strategy.entry("sell", strategy.short)
+
+// ----------------------------------------------- ATR Stop-Loss / Take-Profit
+// Exit whichever comes first: the ATR stop, the ATR target, or a trend flip
+// (the opposite entry reverses the position on its own).
+avg = strategy.position_avg_price
+if strategy.position_size > 0
+    strategy.exit("XL", from_entry="buy",
+         stop  = useSL and not na(entryAtr) ? avg - entryAtr * slMult : na,
+         limit = useTP and not na(entryAtr) ? avg + entryAtr * tpMult : na)
+if strategy.position_size < 0
+    strategy.exit("XS", from_entry="sell",
+         stop  = useSL and not na(entryAtr) ? avg + entryAtr * slMult : na,
+         limit = useTP and not na(entryAtr) ? avg - entryAtr * tpMult : na)
