@@ -1,0 +1,137 @@
+//@version=6
+// ============================================================================
+// Altcoin ↔ BTC Correlation & Beta  (from a chosen date to now)
+// ----------------------------------------------------------------------------
+// For up to 12 altcoins, measures — over an EXPANDING window from a start date
+// you pick, up to the current bar — each coin's relationship to BTC:
+//
+//   CORR : Pearson correlation of the coin's returns vs BTC's returns
+//   BETA : sensitivity to BTC = cov(coin, BTC) / var(BTC)
+//          (identically corr * stdev(coin) / stdev(BTC))
+//   R²   : correlation squared (share of the coin's variance moved by BTC)
+//
+// All series are computed on the CHART timeframe, so put this on the timeframe
+// whose returns you care about (e.g. 1D for daily beta, 4H for swing beta).
+// Returns are close-to-close percentage changes. Invalid/blank symbols are
+// skipped automatically (ignore_invalid_symbol).
+//
+// Not financial advice.
+// ============================================================================
+indicator("Altcoin↔BTC Corr & Beta", overlay=true, max_bars_back=3000)
+
+var color C_BULL=#00dcb4, var color C_BEAR=#ff4976, var color C_GOLD=#f0b90b
+var color C_PANEL=#0e1726, var color C_BORDER=#1e3a5f, var color C_WHITE=#e8eaed
+var color C_DIM=#5f6368, var color C_SILVER=#8a919e, var color C_NEON=#76ff03
+
+grpB = "Benchmark & Window"
+grpA = "Altcoins"
+
+i_bench  = input.symbol("BINANCE:BTCUSDT", "Benchmark (BTC)", group=grpB)
+i_start  = input.time(timestamp("01 Jan 2024 00:00 +0000"), "From (start date)", group=grpB)
+i_minObs = input.int(20, "Min observations", minval=2, maxval=2900, group=grpB,
+     tooltip="Skip a coin until this many paired return bars have accumulated since the start date.")
+
+s01 = input.symbol("BINANCE:ETHUSDT",  "Alt 1",  group=grpA)
+s02 = input.symbol("BINANCE:SOLUSDT",  "Alt 2",  group=grpA)
+s03 = input.symbol("BINANCE:XRPUSDT",  "Alt 3",  group=grpA)
+s04 = input.symbol("BINANCE:BNBUSDT",  "Alt 4",  group=grpA)
+s05 = input.symbol("BINANCE:ADAUSDT",  "Alt 5",  group=grpA)
+s06 = input.symbol("BINANCE:DOGEUSDT", "Alt 6",  group=grpA)
+s07 = input.symbol("BINANCE:AVAXUSDT", "Alt 7",  group=grpA)
+s08 = input.symbol("BINANCE:LINKUSDT", "Alt 8",  group=grpA)
+s09 = input.symbol("BINANCE:DOTUSDT",  "Alt 9",  group=grpA)
+s10 = input.symbol("BINANCE:TRXUSDT",  "Alt 10", group=grpA)
+s11 = input.symbol("BINANCE:MATICUSDT","Alt 11", group=grpA)
+s12 = input.symbol("BINANCE:LTCUSDT",  "Alt 12", group=grpA)
+
+// close-to-close return of a symbol on the chart timeframe (na if unavailable)
+retOf(simple string sym) =>
+    c = request.security(sym, timeframe.period, close, ignore_invalid_symbol=true)
+    na(c) or na(c[1]) or c[1] == 0 ? na : c / c[1] - 1.0
+
+btcRet = retOf(i_bench)
+
+// expanding lookback: number of bars from the start date to the current bar,
+// capped to the indicator's history buffer.
+var int startBar = na
+if na(startBar) and time >= i_start
+    startBar := bar_index
+rawLen = na(startBar) ? 0 : bar_index - startBar + 1
+len = math.max(2, math.min(rawLen, 2900))
+
+sdB = ta.stdev(btcRet, len)
+
+// corr & beta of one alt vs BTC over the expanding window
+metrics(float altRet) =>
+    ready = rawLen >= i_minObs and not na(altRet)
+    corr  = ready ? ta.correlation(btcRet, altRet, len) : na
+    sdA   = ready ? ta.stdev(altRet, len) : na
+    beta  = ready and not na(corr) and sdB != 0 ? corr * sdA / sdB : na
+    [corr, beta]
+
+[c01,b01]=metrics(retOf(s01)), [c02,b02]=metrics(retOf(s02)), [c03,b03]=metrics(retOf(s03))
+[c04,b04]=metrics(retOf(s04)), [c05,b05]=metrics(retOf(s05)), [c06,b06]=metrics(retOf(s06))
+[c07,b07]=metrics(retOf(s07)), [c08,b08]=metrics(retOf(s08)), [c09,b09]=metrics(retOf(s09))
+[c10,b10]=metrics(retOf(s10)), [c11,b11]=metrics(retOf(s11)), [c12,b12]=metrics(retOf(s12))
+
+// short display name: text after the last ':' (drop the exchange prefix)
+shortName(string s) =>
+    arr = str.split(s, ":")
+    array.size(arr) > 0 ? array.get(arr, array.size(arr) - 1) : s
+
+var table t = table.new(position.top_right, 5, 14, bgcolor=color.new(C_PANEL, 0),
+     border_color=C_BORDER, border_width=1, frame_color=C_BORDER, frame_width=2)
+
+if barstate.islast
+    // collect valid rows
+    syms = array.from(shortName(s01), shortName(s02), shortName(s03), shortName(s04),
+                      shortName(s05), shortName(s06), shortName(s07), shortName(s08),
+                      shortName(s09), shortName(s10), shortName(s11), shortName(s12))
+    corrs = array.from(c01, c02, c03, c04, c05, c06, c07, c08, c09, c10, c11, c12)
+    betas = array.from(b01, b02, b03, b04, b05, b06, b07, b08, b09, b10, b11, b12)
+
+    // index list of valid (non-na) rows, sorted by correlation descending
+    order = array.new_int()
+    for i = 0 to 11
+        if not na(array.get(corrs, i))
+            array.push(order, i)
+    n = array.size(order)
+    for a = 0 to (n > 1 ? n - 2 : 0)
+        for b = 0 to n - 2 - a
+            i1 = array.get(order, b)
+            i2 = array.get(order, b + 1)
+            if array.get(corrs, i1) < array.get(corrs, i2)
+                array.set(order, b, i2)
+                array.set(order, b + 1, i1)
+
+    table.clear(t, 0, 0, 4, 13)
+    table.cell(t, 0, 0, "#",    text_color=C_SILVER, text_size=size.small)
+    table.cell(t, 1, 0, "COIN", text_color=C_SILVER, text_size=size.small)
+    table.cell(t, 2, 0, "CORR", text_color=C_SILVER, text_size=size.small)
+    table.cell(t, 3, 0, "BETA", text_color=C_SILVER, text_size=size.small)
+    table.cell(t, 4, 0, "R²",   text_color=C_SILVER, text_size=size.small)
+
+    if n == 0
+        table.cell(t, 1, 1, rawLen < i_minObs ? "warming up…" : "no data",
+             text_color=C_DIM, text_size=size.tiny)
+    for k = 0 to (n > 0 ? n - 1 : 0)
+        idx  = array.get(order, k)
+        cr   = array.get(corrs, idx)
+        bt   = array.get(betas, idx)
+        col  = cr >= 0.5 ? C_BULL : cr <= -0.5 ? C_BEAR : C_SILVER
+        table.cell(t, 0, k + 1, str.tostring(k + 1), text_color=C_DIM, text_size=size.tiny)
+        table.cell(t, 1, k + 1, array.get(syms, idx), text_color=C_WHITE, text_size=size.tiny)
+        table.cell(t, 2, k + 1, str.tostring(cr, "#.###"), text_color=col, text_size=size.tiny)
+        table.cell(t, 3, k + 1, str.tostring(bt, "#.###"),
+             text_color=bt >= 1 ? C_NEON : bt < 0 ? C_BEAR : C_WHITE, text_size=size.tiny)
+        table.cell(t, 4, k + 1, str.tostring(cr * cr, "#.###"), text_color=C_SILVER, text_size=size.tiny)
+
+// footer: window info on the benchmark line
+var label lb = na
+if barstate.islast
+    label.delete(lb)
+    dfrom = str.format_time(i_start, "yyyy-MM-dd", "GMT+0")
+    lb := label.new(bar_index, close,
+         "n=" + str.tostring(rawLen) + " bars  since " + dfrom,
+         style=label.style_label_left, color=color.new(C_PANEL, 10),
+         textcolor=C_GOLD, size=size.small)
