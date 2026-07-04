@@ -5,7 +5,10 @@
 | 도구 | 대상 | 실행 위치 |
 |------|------|-----------|
 | [`bithumb_btc_corr_beta.py`](bithumb_btc_corr_beta.py) | 빗썸 **원화마켓 전 종목** | 로컬 Python |
+| [`binance_futures_btc_corr_beta.py`](binance_futures_btc_corr_beta.py) | 바이낸스 **USDT-M 선물 전 종목** | 로컬 Python |
 | [`../strategies/altcoin_btc_corr_beta.pine`](../strategies/altcoin_btc_corr_beta.pine) | 지정한 알트코인 최대 12개 | TradingView |
+
+> 두 Python 스크립트는 상관·베타 계산 로직을 [`corr_beta.py`](corr_beta.py) 공통 모듈로 공유합니다. 거래소 API 호출부만 다릅니다.
 
 ## 지표 정의
 
@@ -68,7 +71,36 @@ SOL         548    0.771    1.640    0.594        280,500
 
 ---
 
-## 2. Pine — TradingView 지표
+## 2. Python — 바이낸스 USDT-M 선물 전 종목
+
+바이낸스 선물 공개 API(인증 불필요)로 USDT-M **무기한(PERPETUAL) 전 종목**의 klines를 받아, 시작일부터 현재까지 BTCUSDT 대비 상관계수·베타를 계산합니다. 사용법·옵션은 빗썸 스크립트와 동일하며 인터벌 표기만 바이낸스 방식입니다.
+
+### 사용 예
+
+```bash
+# 2024-01-01(KST)부터 현재까지, 일봉 기준, USDT-M 무기한 전 종목
+python analysis/binance_futures_btc_corr_beta.py --from 2024-01-01
+
+# 4시간봉, 상관계수 상위 30개, CSV 저장
+python analysis/binance_futures_btc_corr_beta.py --from 2025-01-01 --interval 4h --top 30 --csv out.csv
+
+# 특정 종목만
+python analysis/binance_futures_btc_corr_beta.py --from 2024-01-01 --symbols ETHUSDT,SOLUSDT
+```
+
+### 옵션 (빗썸과 차이나는 부분)
+
+| 옵션 | 기본값 | 설명 |
+|------|--------|------|
+| `--interval` | `1d` | 바이낸스 klines 간격: `1m 3m 5m 15m 30m 1h 2h 4h 6h 8h 12h 1d 3d 1w 1M` |
+| `--benchmark` | `BTCUSDT` | 기준 심볼 |
+| `--quote` | `USDT` | 스캔할 견적 자산 (예: `USDC`로 바꾸면 USDC-M) |
+
+나머지(`--from --symbols --min-points --top --delay --csv --self-test`)는 빗썸 스크립트와 동일합니다. klines는 1회 최대 1,500개라 장기간·짧은 인터벌은 자동 페이지네이션합니다.
+
+---
+
+## 3. Pine — TradingView 지표
 
 BTC **1D 또는 4H 차트**에 올리고, 설정에서 시작일(From)과 비교할 알트코인 심볼(최대 12개)을 지정하면 우측 상단 표에 상관계수·베타·R²가 **상관계수 내림차순**으로 표시됩니다.
 
