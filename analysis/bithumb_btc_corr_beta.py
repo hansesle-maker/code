@@ -33,8 +33,8 @@ from typing import Dict, List, Optional
 
 import requests
 
-from corr_beta import (KST, Row, make_row, parse_start, print_table, self_test,
-                       sort_rows, write_csv)
+from corr_beta import (KST, Row, make_row, parse_start, print_table, report_skips,
+                       self_test, sort_rows, write_csv)
 
 _BASE = "https://api.bithumb.com/public"
 # Bithumb candlestick intervals (chart_intervals path segment).
@@ -121,9 +121,7 @@ def run(args: argparse.Namespace) -> int:
         rows = rows[:args.top]
 
     print_table(rows, "LAST(KRW)")
-    if skipped:
-        print(f"\n# skipped {len(skipped)}: {', '.join(skipped[:20])}"
-              + (" ..." if len(skipped) > 20 else ""), file=sys.stderr)
+    report_skips(skipped, len(benchmark), args.min_points, len(rows))
     if args.csv:
         write_csv(args.csv, rows, ["benchmark", bench, "interval", args.interval, "from", args.start])
         print(f"# wrote {args.csv}", file=sys.stderr)

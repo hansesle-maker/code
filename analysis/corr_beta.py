@@ -119,6 +119,32 @@ def write_csv(path: str, rows: List[Row], meta: List) -> None:
                         f"{r.r2:.6f}", f"{r.last:.6f}"])
 
 
+def report_skips(skipped: List[str], benchmark_count: int, min_points: int,
+                 rows_count: int, out=None) -> None:
+    """Print a grouped, actionable summary of why coins were skipped."""
+    import sys as _sys
+    out = out or _sys.stderr
+    fetch_err = [s for s in skipped if "fetch error" in s]
+    low_n = [s for s in skipped if "(n=" in s]
+    print(f"\n# benchmark candles loaded: {benchmark_count}", file=out)
+    print(f"# result: {rows_count} coins shown, {len(skipped)} skipped "
+          f"({len(low_n)} too-few-points, {len(fetch_err)} fetch-error)", file=out)
+    if rows_count == 0 and low_n:
+        if benchmark_count < min_points:
+            print(f"#   -> benchmark itself has only {benchmark_count} candles "
+                  f"(< --min-points {min_points}). Use an earlier --from or a shorter --interval.",
+                  file=out)
+        else:
+            print(f"#   -> every coin overlaps BTC by < {min_points} bars for this window. "
+                  f"Try an earlier --from, or lower --min-points.", file=out)
+    if fetch_err:
+        print(f"#   -> fetch errors often mean rate-limiting or a blocked region; "
+              f"raise --delay (e.g. --delay 0.3) or narrow --symbols.", file=out)
+    if skipped:
+        print(f"# skipped detail: {', '.join(skipped[:20])}"
+              + (" ..." if len(skipped) > 20 else ""), file=out)
+
+
 def self_test() -> int:
     """Offline validation of the metric math (no network)."""
     import random
