@@ -61,16 +61,48 @@ def _get(url: str, retries: int = 4, timeout: int = 20):
     raise RuntimeError(f"request failed after {retries} tries: {url} :: {last}")
 
 
-def fetch_perp_symbols(quote: str) -> List[str]:
-    """Return every TRADING perpetual symbol with the given quote asset."""
+def fetch_symbol_meta(quote: str) -> List[dict]:
+    """Return metadata for every TRADING perpetual with the given quote asset.
+
+    No crypto-only restriction is applied: whatever Binance lists as a
+    perpetual (crypto, index, or otherwise) is returned. Binance tags each
+    contract with underlyingType (e.g. 'COIN', 'INDEX') and underlyingSubType
+    (e.g. ['Layer-1'], ['DeFi']), which is how you can spot non-crypto
+    instruments if any exist.
+    """
     info = _get(f"{_BASE}/fapi/v1/exchangeInfo")
-    out: List[str] = []
+    out: List[dict] = []
     for s in info.get("symbols", []):
         if (s.get("status") == "TRADING"
                 and s.get("contractType") == "PERPETUAL"
                 and s.get("quoteAsset") == quote):
-            out.append(s["symbol"])
-    return sorted(out)
+            out.append({
+                "symbol": s["symbol"],
+                "base": s.get("baseAsset", ""),
+                "type": s.get("underlyingType", ""),
+                "subtype": ",".join(s.get("underlyingSubType", []) or []),
+            })
+    return sorted(out, key=lambda r: r["symbol"])
+
+
+def fetch_perp_symbols(quote: str) -> List[str]:
+    """Return every TRADING perpetual symbol with the given quote asset."""
+    return [m["symbol"] for m in fetch_symbol_meta(quote)]
+
+
+def list_universe(quote: str) -> None:
+    """Print all perpetuals grouped by underlyingType/subType so non-crypto
+    instruments (if Binance lists any) are visible."""
+    meta = fetch_symbol_meta(quote)
+    by_type: Dict[str, int] = {}
+    for m in meta:
+        by_type[m["type"] or "(none)"] = by_type.get(m["type"] or "(none)", 0) + 1
+    print(f"# {len(meta)} TRADING perpetuals with quote {quote}")
+    print(f"# by underlyingType: " + ", ".join(f"{k}={v}" for k, v in sorted(by_type.items())))
+    print(f"\n{'SYMBOL':<18}{'BASE':<12}{'TYPE':<10}{'SUBTYPE'}")
+    print("-" * 60)
+    for m in meta:
+        print(f"{m['symbol']:<18}{m['base']:<12}{m['type']:<10}{m['subtype']}")
 
 
 def fetch_closes(symbol: str, interval: str, start_ms: int,
@@ -172,6 +204,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--delay", type=float, default=0.05,
                    help="seconds to sleep between requests (default 0.05)")
     p.add_argument("--csv", default="", help="also write results to this CSV path")
+    p.add_argument("--list-universe", action="store_true",
+                   help="list every perpetual with its underlyingType/subType and exit "
+                        "(use this to see whether Binance lists any non-crypto instruments)")
     p.add_argument("--self-test", action="store_true", help="run offline math checks and exit")
     return p
 
@@ -182,6 +217,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.self_test:
         return self_test()
     try:
+        if args.list_universe:
+            list_universe(args.quote.upper())
+            return 0
         return run(args)
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)

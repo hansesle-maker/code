@@ -109,6 +109,18 @@ python analysis/binance_futures_btc_corr_beta.py --from 2024-01-01 --symbols ETH
 
 나머지(`--from --symbols --min-points --top --delay --csv --self-test`)는 빗썸 스크립트와 동일합니다. klines는 1회 최대 1,500개라 장기간·짧은 인터벌은 자동 페이지네이션합니다.
 
+#### 상장 종목 전수 확인 (`--list-universe`)
+
+이 스크립트는 크립토만 걸러내는 필터가 없습니다 — 필터는 `PERPETUAL + 지정 quote + TRADING`뿐이라 **바이낸스 선물이 상장한 심볼이면 종류와 무관하게 전부** 대상입니다. 바이낸스가 주식/ETF/지수 등 비(非)크립토 선물을 상장했다면 이미 결과에 포함됩니다.
+
+실제로 어떤 종류가 있는지 눈으로 확인하려면:
+
+```bash
+python analysis/binance_futures_btc_corr_beta.py --list-universe
+```
+
+각 심볼의 `underlyingType`(예: `COIN`, `INDEX`)과 `underlyingSubType`를 출력하고 종류별 개수를 요약합니다. 비크립토 상품이 있으면 여기서 바로 드러나고, 그 심볼을 `--symbols`로 넣어 BTC 대비 상관·베타를 낼 수 있습니다.
+
 ---
 
 ## 3. Pine — TradingView 지표
