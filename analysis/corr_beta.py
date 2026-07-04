@@ -101,6 +101,17 @@ def sort_rows(rows: List[Row]) -> None:
     rows.sort(key=lambda r: (math.isnan(r.corr), -r.corr if not math.isnan(r.corr) else 0.0))
 
 
+def enable_utf8_stdout() -> None:
+    """Best-effort switch stdout/stderr to UTF-8 so non-ASCII coin names don't
+    crash printing on Windows cp949 consoles."""
+    import sys as _sys
+    for stream in (_sys.stdout, _sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001 - older Pythons / non-reconfigurable
+            pass
+
+
 def print_table(rows: List[Row], price_label: str = "LAST") -> None:
     print(f"\n{'COIN':<12}{'N':>7}{'CORR':>9}{'BETA':>9}{'R^2':>8}   {price_label:>16}")
     print("-" * 69)
@@ -110,7 +121,9 @@ def print_table(rows: List[Row], price_label: str = "LAST") -> None:
 
 
 def write_csv(path: str, rows: List[Row], meta: List) -> None:
-    with open(path, "w", newline="") as f:
+    # utf-8-sig: BOM so Excel (incl. Korean Windows / cp949 locale) reads it as
+    # UTF-8; without this, non-ASCII symbols crash the write mid-file on Windows.
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(meta)
         w.writerow(["coin", "n", "corr", "beta", "r2", "last"])

@@ -33,8 +33,8 @@ from typing import Dict, List, Optional
 
 import requests
 
-from corr_beta import (KST, Row, make_row, parse_start, print_table, report_skips,
-                       self_test, sort_rows, write_csv)
+from corr_beta import (KST, Row, enable_utf8_stdout, make_row, parse_start,
+                       print_table, report_skips, self_test, sort_rows, write_csv)
 
 _BASE = "https://api.bithumb.com/public"
 # Bithumb candlestick intervals (chart_intervals path segment).
@@ -149,6 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    enable_utf8_stdout()
     args = build_parser().parse_args(argv)
     if args.self_test:
         return self_test()
