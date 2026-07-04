@@ -73,14 +73,16 @@ def fetch_perp_symbols(quote: str) -> List[str]:
     return sorted(out)
 
 
-def fetch_closes(symbol: str, interval: str, start_ms: int, delay: float = 0.0) -> Dict[int, float]:
-    """Return {open_time_ms: close_price} from start_ms to now, paginating."""
+def fetch_closes(symbol: str, interval: str, start_ms: int,
+                 end_ms: Optional[int] = None, delay: float = 0.0) -> Dict[int, float]:
+    """Return {open_time_ms: close_price} from start_ms to end_ms (or now if
+    end_ms is None), paginating in blocks of _KLIMIT."""
     out: Dict[int, float] = {}
-    now = int(time.time() * 1000)
+    stop = end_ms if end_ms is not None else int(time.time() * 1000)
     cur = start_ms
-    while cur < now:
+    while cur < stop:
         url = (f"{_BASE}/fapi/v1/klines?symbol={symbol}&interval={interval}"
-               f"&startTime={cur}&limit={_KLIMIT}")
+               f"&startTime={cur}&endTime={stop}&limit={_KLIMIT}")
         data = _get(url)
         if not data:
             break
@@ -100,10 +102,12 @@ def fetch_closes(symbol: str, interval: str, start_ms: int, delay: float = 0.0) 
 
 def run(args: argparse.Namespace) -> int:
     start_ms = parse_start(args.start)
+    end_ms = parse_start(args.to) if args.to else None
     bench = args.benchmark.upper()
+    end_txt = f"{datetime.fromtimestamp(end_ms/1000, KST):%Y-%m-%d %H:%M}" if end_ms else "now"
     print(f"# Benchmark: {bench}   Interval: {args.interval}   "
-          f"From: {datetime.fromtimestamp(start_ms/1000, KST):%Y-%m-%d %H:%M} KST",
-          file=sys.stderr)
+          f"From: {datetime.fromtimestamp(start_ms/1000, KST):%Y-%m-%d %H:%M} "
+          f"To: {end_txt} KST", file=sys.stderr)
 
     if args.symbols:
         symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
@@ -111,7 +115,7 @@ def run(args: argparse.Namespace) -> int:
         symbols = fetch_perp_symbols(args.quote.upper())
         print(f"# {len(symbols)} USDT-M perpetual symbols ({args.quote.upper()})", file=sys.stderr)
 
-    benchmark = fetch_closes(bench, args.interval, start_ms, args.delay)
+    benchmark = fetch_closes(bench, args.interval, start_ms, end_ms, args.delay)
     if not benchmark:
         print(f"error: no kline data for benchmark {bench}", file=sys.stderr)
         return 2
@@ -122,11 +126,11 @@ def run(args: argparse.Namespace) -> int:
         if sym == bench:
             continue
         try:
-            alt = fetch_closes(sym, args.interval, start_ms, args.delay)
+            alt = fetch_closes(sym, args.interval, start_ms, end_ms, args.delay)
         except Exception:  # noqa: BLE001
             skipped.append(f"{sym} (fetch error)")
             continue
-        row, n = make_row(sym, benchmark, alt, start_ms, args.min_points)
+        row, n = make_row(sym, benchmark, alt, start_ms, args.min_points, end_ms)
         if row is None:
             skipped.append(f"{sym} (n={n})")
         else:
@@ -143,7 +147,8 @@ def run(args: argparse.Namespace) -> int:
     print_table(rows, "LAST(USDT)")
     report_skips(skipped, len(benchmark), args.min_points, len(rows))
     if args.csv:
-        write_csv(args.csv, rows, ["benchmark", bench, "interval", args.interval, "from", args.start])
+        write_csv(args.csv, rows, ["benchmark", bench, "interval", args.interval,
+                                   "from", args.start, "to", args.to or "now"])
         print(f"# wrote {args.csv}", file=sys.stderr)
     return 0
 
@@ -152,7 +157,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--from", dest="start", default="2024-01-01",
-                   help="start date, KST: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' (default 2024-01-01)")
+                   help="start, KST unless offset given: YYYY-MM-DD or YYYY-MM-DDThh:mm[+09:00] (default 2024-01-01)")
+    p.add_argument("--to", dest="to", default="",
+                   help="end (same format as --from); default is now")
     p.add_argument("--interval", default="1d", choices=_INTERVALS,
                    help="kline interval (default 1d = daily)")
     p.add_argument("--benchmark", default="BTCUSDT", help="benchmark symbol (default BTCUSDT)")

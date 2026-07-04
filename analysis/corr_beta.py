@@ -23,14 +23,36 @@ KST = timezone(timedelta(hours=9))
 
 
 def parse_start(s: str) -> int:
-    """Parse 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' (KST) into epoch milliseconds."""
-    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
-        try:
-            dt = datetime.strptime(s, fmt).replace(tzinfo=KST)
-            return int(dt.timestamp() * 1000)
-        except ValueError:
-            continue
-    raise argparse.ArgumentTypeError(f"bad date: {s!r} (use YYYY-MM-DD)")
+    """Parse a date/time into epoch milliseconds.
+
+    Time is optional; use 'T' (or quote the space) between date and time so a
+    command line doesn't split it into two arguments:
+        2024-03-15
+        2024-03-15T09:30            2024-03-15T09:30:00
+    Timezone: KST (UTC+9) is assumed unless you append an explicit offset,
+    which lets you match a UTC exchange chart directly:
+        2024-03-15T09:30+00:00      2024-03-15T09:30Z      2024-03-15T09:30+09:00
+    """
+    raw = s.strip()
+    iso = raw.replace(" ", "T")
+    if iso.endswith(("Z", "z")):
+        iso = iso[:-1] + "+00:00"
+    dt = None
+    try:
+        dt = datetime.fromisoformat(iso)  # handles date, date+time, and offset
+    except ValueError:
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(iso, fmt)
+                break
+            except ValueError:
+                continue
+    if dt is None:
+        raise argparse.ArgumentTypeError(
+            f"bad date: {s!r} (use YYYY-MM-DD or YYYY-MM-DDThh:mm[+09:00])")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=KST)  # default to KST when no offset given
+    return int(dt.timestamp() * 1000)
 
 
 def returns_from_closes(closes: List[float]) -> List[float]:
@@ -65,10 +87,13 @@ def corr_beta(x: List[float], y: List[float]) -> Tuple[float, float, float]:
 
 
 def aligned_returns(bench: Dict[int, float], alt: Dict[int, float],
-                    start_ms: int) -> Tuple[List[float], List[float], int]:
-    """Align benchmark and alt closes on shared timestamps >= start_ms, and
-    return their return series plus the number of paired return observations."""
-    common = sorted(t for t in bench.keys() & alt.keys() if t >= start_ms)
+                    start_ms: int, end_ms: Optional[int] = None
+                    ) -> Tuple[List[float], List[float], int]:
+    """Align benchmark and alt closes on shared timestamps within
+    [start_ms, end_ms] (end_ms=None means up to the latest), and return their
+    return series plus the number of paired return observations."""
+    hi = end_ms if end_ms is not None else float("inf")
+    common = sorted(t for t in bench.keys() & alt.keys() if start_ms <= t <= hi)
     if len(common) < 2:
         return [], [], 0
     b_closes = [bench[t] for t in common]
@@ -86,9 +111,10 @@ class Row:
 
 
 def make_row(symbol: str, bench: Dict[int, float], alt: Dict[int, float],
-             start_ms: int, min_points: int) -> Tuple[Optional[Row], int]:
+             start_ms: int, min_points: int, end_ms: Optional[int] = None
+             ) -> Tuple[Optional[Row], int]:
     """Compute a Row for one coin, or (None, n) if it has too few observations."""
-    xret, yret, n = aligned_returns(bench, alt, start_ms)
+    xret, yret, n = aligned_returns(bench, alt, start_ms, end_ms)
     if n < min_points:
         return None, n
     corr, beta, r2 = corr_beta(xret, yret)
