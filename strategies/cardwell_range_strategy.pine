@@ -1,0 +1,311 @@
+// This work is licensed under Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+// https://creativecommons.org/licenses/by-nc-sa/4.0/
+// © MarkitTick  — converted from indicator to STRATEGY
+//@version=6
+strategy("Cardwell Range Analyze [MarkitTick] Strategy", overlay=true, max_labels_count=500,
+     max_lines_count=500, initial_capital=10000, default_qty_type=strategy.percent_of_equity,
+     default_qty_value=100, commission_type=strategy.commission.percent, commission_value=0.04,
+     slippage=1, pyramiding=0, calc_on_every_tick=false)
+
+// ── INPUTS ──────────────────────────────────────────────────────
+var string GRP_CORE = "⚙️ Core Settings"
+i_rsiLen        = input.int(14, "RSI Length", minval=1, group=GRP_CORE)
+i_rsiSrc        = input.source(close, "Source", group=GRP_CORE)
+i_trendLen      = input.int(50, "Trend MA Length", minval=1, group=GRP_CORE)
+i_trendSrc      = input.source(close, "Trend Source", group=GRP_CORE)
+
+var string GRP_FILT = "🕯️ Filters"
+i_bullLo        = input.int(40, "Bull Range Low", minval=0, maxval=100, group=GRP_FILT)
+i_bullHi        = input.int(80, "Bull Range High", minval=0, maxval=100, group=GRP_FILT)
+i_bearLo        = input.int(20, "Bear Range Low", minval=0, maxval=100, group=GRP_FILT)
+i_bearHi        = input.int(60, "Bear Range High", minval=0, maxval=100, group=GRP_FILT)
+i_confirmBars   = input.int(2, "Regime Confirm Bars", minval=1, group=GRP_FILT)
+i_useHtf        = input.bool(true, "Use HTF Confirmation", group=GRP_FILT)
+i_htfTF         = input.timeframe("240", "HTF Timeframe", group=GRP_FILT)
+i_useAdx        = input.bool(true, "Use Chop Filter", group=GRP_FILT)
+i_adxLen        = input.int(14, "ADX Length", minval=1, group=GRP_FILT)
+i_adxMin        = input.int(20, "ADX Min Strength", minval=0, maxval=100, group=GRP_FILT)
+
+var string GRP_TT = "📐 Trade Tools"
+i_atrLen        = input.int(14, "ATR Length", minval=1, group=GRP_TT)
+i_slMult        = input.float(1.5, "SL ATR Mult", minval=0.1, step=0.1, group=GRP_TT)
+i_tp1Mult       = input.float(1.0, "TP1 ATR Mult", minval=0.1, step=0.1, group=GRP_TT)
+i_tp2Mult       = input.float(2.0, "TP2 ATR Mult", minval=0.1, step=0.1, group=GRP_TT)
+i_tp3Mult       = input.float(3.0, "TP3 ATR Mult", minval=0.1, step=0.1, group=GRP_TT)
+
+var string GRP_ST = "🤖 Strategy"
+i_tradeDir      = input.string("all", "Trade Direction", options=["long", "short", "all"], group=GRP_ST)
+i_scaleOut      = input.bool(true, "Scale out at TP1 / TP2 / TP3 (else single TP3)", group=GRP_ST)
+i_reverse       = input.bool(true, "Reverse on opposite signal", group=GRP_ST)
+
+var string GRP_VIS = "🎨 Visuals"
+i_showCandles   = input.bool(true, "Color Candles", group=GRP_VIS)
+i_showSignals   = input.bool(true, "Show Buy/Sell Signals", group=GRP_VIS)
+i_showLevels    = input.bool(true, "Show Trade Levels", group=GRP_VIS)
+
+var string GRP_DASH = "📊 Dashboard"
+i_showDash      = input.bool(true, "Show Dashboard", group=GRP_DASH)
+i_dashPos       = input.string(position.top_right, "Dashboard Position", options=[position.top_right, position.top_left, position.bottom_right, position.bottom_left], group=GRP_DASH)
+
+var string GRP_WH = "🔔 Alerts"
+i_actionLong        = input.string("long",        "↑ Long Action",        group=GRP_WH)
+i_actionShort       = input.string("short",       "↓ Short Action",       group=GRP_WH)
+i_actionCloseLong   = input.string("closelong",   "✕ Close Long Action",  group=GRP_WH)
+i_actionCloseShort  = input.string("closeshort",  "✕ Close Short Action", group=GRP_WH)
+
+var string GRP_COL = "🌈 Colors"
+c_bullCandle    = input.color(color.new(#26a69a, 0), "Bull Candle Body", group=GRP_COL)
+c_bearCandle    = input.color(color.new(#ef5350, 0), "Bear Candle Body", group=GRP_COL)
+c_neutCandle    = input.color(color.new(#787b86, 0), "Neutral Candle Body", group=GRP_COL)
+c_wickBorder    = input.color(color.new(#000000, 0), "Candle Border/Wick", group=GRP_COL)
+c_buySig        = input.color(#2196f3, "Buy Signal", group=GRP_COL)
+c_sellSig       = input.color(#ff9800, "Sell Signal", group=GRP_COL)
+c_slColor       = input.color(#ef5350, "SL Line", group=GRP_COL)
+c_entryColor    = input.color(#2196f3, "Entry Line", group=GRP_COL)
+c_tp1Color      = input.color(color.new(#26a69a, 40), "TP1 Line", group=GRP_COL)
+c_tp2Color      = input.color(color.new(#26a69a, 20), "TP2 Line", group=GRP_COL)
+c_tp3Color      = input.color(color.new(#26a69a, 0), "TP3 Line", group=GRP_COL)
+c_riskFill      = input.color(color.new(#ef5350, 80), "Risk Zone Fill", group=GRP_COL)
+c_rewardFill    = input.color(color.new(#26a69a, 85), "Reward Zone Fill", group=GRP_COL)
+c_dashBg        = input.color(color.new(#0a0f1a, 10), "Dashboard Background", group=GRP_COL)
+c_dashHeaderBg  = input.color(color.new(#14b5cb, 20), "Dashboard Header BG", group=GRP_COL)
+c_dashLabelTxt  = input.color(color.new(#ffffff, 30), "Dashboard Label Text", group=GRP_COL)
+c_dashValBg     = input.color(color.new(#0d1117, 0), "Dashboard Value BG", group=GRP_COL)
+c_dashValTxt    = input.color(color.new(#ffffff, 0), "Dashboard Value Text", group=GRP_COL)
+
+// ── CORE LOGIC ──────────────────────────────────────────────────
+rsiVal      = ta.rsi(i_rsiSrc, i_rsiLen)
+trendMA     = ta.sma(i_trendSrc, i_trendLen)
+isUptrend   = i_trendSrc > trendMA
+isDowntrend = i_trendSrc < trendMA
+
+inBullRange = rsiVal >= i_bullLo and rsiVal <= i_bullHi
+inBearRange = rsiVal >= i_bearLo and rsiVal <= i_bearHi
+
+bullRegimeRaw = isUptrend and inBullRange
+bearRegimeRaw = isDowntrend and inBearRange
+
+var int bullConfirmCount = 0
+var int bearConfirmCount = 0
+bullConfirmCount := bullRegimeRaw ? bullConfirmCount + 1 : 0
+bearConfirmCount := bearRegimeRaw ? bearConfirmCount + 1 : 0
+
+bullRegime = bullRegimeRaw and bullConfirmCount >= i_confirmBars
+bearRegime = bearRegimeRaw and bearConfirmCount >= i_confirmBars
+
+regimeState = bullRegime ? 1 : bearRegime ? -1 : 0
+prevRegimeState = regimeState[1]
+
+htfTrendUp   = request.security(syminfo.tickerid, i_htfTF, i_trendSrc[1] > ta.sma(i_trendSrc, i_trendLen)[1], lookahead=barmerge.lookahead_on)
+htfTrendDown = request.security(syminfo.tickerid, i_htfTF, i_trendSrc[1] < ta.sma(i_trendSrc, i_trendLen)[1], lookahead=barmerge.lookahead_on)
+htfBullOk = not i_useHtf or htfTrendUp
+htfBearOk = not i_useHtf or htfTrendDown
+
+[_diPlus, _diMinus, adxVal] = ta.dmi(i_adxLen, i_adxLen)
+chopOk = not i_useAdx or adxVal >= i_adxMin
+
+longSignal  = regimeState == 1 and prevRegimeState != 1 and htfBullOk and chopOk
+shortSignal = regimeState == -1 and prevRegimeState != -1 and htfBearOk and chopOk
+
+atrVal = ta.atr(i_atrLen)
+entryPrice = close[1]
+slLongPrice   = entryPrice - atrVal * i_slMult
+tp1LongPrice  = entryPrice + atrVal * i_tp1Mult
+tp2LongPrice  = entryPrice + atrVal * i_tp2Mult
+tp3LongPrice  = entryPrice + atrVal * i_tp3Mult
+slShortPrice  = entryPrice + atrVal * i_slMult
+tp1ShortPrice = entryPrice - atrVal * i_tp1Mult
+tp2ShortPrice = entryPrice - atrVal * i_tp2Mult
+tp3ShortPrice = entryPrice - atrVal * i_tp3Mult
+
+bodyColor = bullRegime ? c_bullCandle : bearRegime ? c_bearCandle : c_neutCandle
+
+// ── STRATEGY ENTRIES / EXITS ────────────────────────────────────
+strategy.risk.allow_entry_in(i_tradeDir == "long" ? strategy.direction.long :
+     i_tradeDir == "short" ? strategy.direction.short : strategy.direction.all)
+
+// Freeze the ATR-based levels at the signal bar so exits match the drawn lines.
+var float pSL = na, var float pTP1 = na, var float pTP2 = na, var float pTP3 = na
+
+if longSignal
+    pSL := slLongPrice, pTP1 := tp1LongPrice, pTP2 := tp2LongPrice, pTP3 := tp3LongPrice
+    strategy.entry("Long", strategy.long)
+else if shortSignal and strategy.position_size > 0 and not i_reverse
+    strategy.close("Long", comment="Opp signal")
+
+if shortSignal
+    pSL := slShortPrice, pTP1 := tp1ShortPrice, pTP2 := tp2ShortPrice, pTP3 := tp3ShortPrice
+    strategy.entry("Short", strategy.short)
+else if longSignal and strategy.position_size < 0 and not i_reverse
+    strategy.close("Short", comment="Opp signal")
+
+if strategy.position_size > 0
+    if i_scaleOut
+        strategy.exit("L-TP1", from_entry="Long", qty_percent=33, stop=pSL, limit=pTP1)
+        strategy.exit("L-TP2", from_entry="Long", qty_percent=50, stop=pSL, limit=pTP2)
+        strategy.exit("L-TP3", from_entry="Long", stop=pSL, limit=pTP3)
+    else
+        strategy.exit("L-X", from_entry="Long", stop=pSL, limit=pTP3)
+
+if strategy.position_size < 0
+    if i_scaleOut
+        strategy.exit("S-TP1", from_entry="Short", qty_percent=33, stop=pSL, limit=pTP1)
+        strategy.exit("S-TP2", from_entry="Short", qty_percent=50, stop=pSL, limit=pTP2)
+        strategy.exit("S-TP3", from_entry="Short", stop=pSL, limit=pTP3)
+    else
+        strategy.exit("S-X", from_entry="Short", stop=pSL, limit=pTP3)
+
+// ── ALERTS ──────────────────────────────────────────────────────
+string _longInner = str.format(
+ '"action":"{0}","ticker":"{1}","tf":"{2}","direction":"long","entry":"{3}","sl":"{4}","tp1":"{5}","tp2":"{6}","tp3":"{7}"',
+ i_actionLong, syminfo.tickerid, timeframe.period,
+ str.tostring(entryPrice, format.mintick),
+ str.tostring(slLongPrice, format.mintick),
+ str.tostring(tp1LongPrice, format.mintick),
+ str.tostring(tp2LongPrice, format.mintick),
+ str.tostring(tp3LongPrice, format.mintick))
+string longPayload = "{" + _longInner + "}"
+
+string _shortInner = str.format(
+ '"action":"{0}","ticker":"{1}","tf":"{2}","direction":"short","entry":"{3}","sl":"{4}","tp1":"{5}","tp2":"{6}","tp3":"{7}"',
+ i_actionShort, syminfo.tickerid, timeframe.period,
+ str.tostring(entryPrice, format.mintick),
+ str.tostring(slShortPrice, format.mintick),
+ str.tostring(tp1ShortPrice, format.mintick),
+ str.tostring(tp2ShortPrice, format.mintick),
+ str.tostring(tp3ShortPrice, format.mintick))
+string shortPayload = "{" + _shortInner + "}"
+
+string _closeLongInner = str.format(
+ '"action":"{0}","ticker":"{1}","tf":"{2}","direction":"closelong"',
+ i_actionCloseLong, syminfo.tickerid, timeframe.period)
+string closeLongPayload = "{" + _closeLongInner + "}"
+
+string _closeShortInner = str.format(
+ '"action":"{0}","ticker":"{1}","tf":"{2}","direction":"closeshort"',
+ i_actionCloseShort, syminfo.tickerid, timeframe.period)
+string closeShortPayload = "{" + _closeShortInner + "}"
+
+if longSignal and barstate.isconfirmed
+    alert(longPayload, alert.freq_once_per_bar_close)
+if shortSignal and barstate.isconfirmed
+    alert(shortPayload, alert.freq_once_per_bar_close)
+if shortSignal and barstate.isconfirmed
+    alert(closeLongPayload, alert.freq_once_per_bar_close)
+if longSignal and barstate.isconfirmed
+    alert(closeShortPayload, alert.freq_once_per_bar_close)
+
+alertcondition(longSignal  and barstate.isconfirmed, "BUY Signal",         "MarkitTick — BUY Signal Fired")
+alertcondition(shortSignal and barstate.isconfirmed, "SELL Signal",        "MarkitTick — SELL Signal Fired")
+alertcondition(shortSignal and barstate.isconfirmed, "Close Long Signal",  "MarkitTick — Close Long")
+alertcondition(longSignal  and barstate.isconfirmed, "Close Short Signal", "MarkitTick — Close Short")
+
+// ── VISUALS ─────────────────────────────────────────────────────
+plotcandle(open, high, low, close,
+ title       = "Heatmap Candles",
+ color       = i_showCandles ? bodyColor : na,
+ wickcolor   = i_showCandles ? bodyColor : na,
+ bordercolor = i_showCandles ? c_wickBorder : na)
+
+var label sigLbl = na
+if i_showSignals and (longSignal or shortSignal)
+    label.delete(sigLbl)
+    sigLbl := longSignal ? label.new(bar_index, low,  "BUY",  style=label.style_label_up,   yloc=yloc.belowbar, color=c_buySig,  textcolor=color.white, size=size.small) : label.new(bar_index, high, "SELL", style=label.style_label_down, yloc=yloc.abovebar, color=c_sellSig, textcolor=color.white, size=size.small)
+
+var line slLine = na
+var line entryLine = na
+var line tp1Line = na
+var line tp2Line = na
+var line tp3Line = na
+var label slLbl = na
+var label entryLbl = na
+var label tp1Lbl = na
+var label tp2Lbl = na
+var label tp3Lbl = na
+var linefill riskFill = na
+var linefill rewardFill = na
+
+f_deleteLevels() =>
+    line.delete(slLine)
+    line.delete(entryLine)
+    line.delete(tp1Line)
+    line.delete(tp2Line)
+    line.delete(tp3Line)
+    label.delete(slLbl)
+    label.delete(entryLbl)
+    label.delete(tp1Lbl)
+    label.delete(tp2Lbl)
+    label.delete(tp3Lbl)
+    linefill.delete(riskFill)
+    linefill.delete(rewardFill)
+
+if i_showLevels and (longSignal or shortSignal)
+    f_deleteLevels()
+    float slP  = longSignal ? slLongPrice  : slShortPrice
+    float tp1P = longSignal ? tp1LongPrice : tp1ShortPrice
+    float tp2P = longSignal ? tp2LongPrice : tp2ShortPrice
+    float tp3P = longSignal ? tp3LongPrice : tp3ShortPrice
+    slLine    := line.new(bar_index, slP, bar_index, slP, color=c_slColor, style=line.style_solid, width=2)
+    entryLine := line.new(bar_index, entryPrice, bar_index, entryPrice, color=c_entryColor, style=line.style_dashed, width=1)
+    tp1Line   := line.new(bar_index, tp1P, bar_index, tp1P, color=c_tp1Color, style=line.style_dashed, width=1)
+    tp2Line   := line.new(bar_index, tp2P, bar_index, tp2P, color=c_tp2Color, style=line.style_dashed, width=1)
+    tp3Line   := line.new(bar_index, tp3P, bar_index, tp3P, color=c_tp3Color, style=line.style_dashed, width=1)
+    slLbl    := label.new(bar_index, slP, "✕ SL " + str.tostring(slP, format.mintick), style=label.style_label_left, color=c_slColor, textcolor=color.white, size=size.small)
+    entryLbl := label.new(bar_index, entryPrice, "▶ Entry " + str.tostring(entryPrice, format.mintick), style=label.style_label_left, color=c_entryColor, textcolor=color.white, size=size.small)
+    tp1Lbl   := label.new(bar_index, tp1P, "◆ TP1 " + str.tostring(tp1P, format.mintick), style=label.style_label_left, color=c_tp1Color, textcolor=color.white, size=size.small)
+    tp2Lbl   := label.new(bar_index, tp2P, "✦ TP2 " + str.tostring(tp2P, format.mintick), style=label.style_label_left, color=c_tp2Color, textcolor=color.white, size=size.small)
+    tp3Lbl   := label.new(bar_index, tp3P, "◆ TP3 " + str.tostring(tp3P, format.mintick), style=label.style_label_left, color=c_tp3Color, textcolor=color.white, size=size.small)
+    riskFill   := linefill.new(slLine, entryLine, c_riskFill)
+    rewardFill := linefill.new(entryLine, tp3Line, c_rewardFill)
+
+if not na(slLine)
+    line.set_x2(slLine, bar_index)
+    line.set_x2(entryLine, bar_index)
+    line.set_x2(tp1Line, bar_index)
+    line.set_x2(tp2Line, bar_index)
+    line.set_x2(tp3Line, bar_index)
+    label.set_x(slLbl, bar_index)
+    label.set_x(entryLbl, bar_index)
+    label.set_x(tp1Lbl, bar_index)
+    label.set_x(tp2Lbl, bar_index)
+    label.set_x(tp3Lbl, bar_index)
+
+// ── DASHBOARD ───────────────────────────────────────────────────
+f_barColor(float pct) =>
+    pct >= 0.66 ? color.new(#26a69a, 0) : pct >= 0.33 ? color.new(#f9a825, 0) : color.new(#ef5350, 0)
+
+f_bar(float val, float maxVal) =>
+    int filled = math.round(math.min(val / maxVal, 1.0) * 10)
+    string bar = ""
+    for i = 1 to 10
+        bar += i <= filled ? "█" : "░"
+    bar + "  " + str.tostring(math.round(val / maxVal * 100)) + "%"
+
+var table dash = table.new(i_dashPos, 2, 7, border_width=1)
+
+if i_showDash
+    table.cell(dash, 0, 0, "MarkitTick — Cardwell RSI", text_color=c_dashValTxt, bgcolor=c_dashHeaderBg, text_size=size.normal)
+    table.cell(dash, 1, 0, "", bgcolor=c_dashHeaderBg)
+
+    table.cell(dash, 0, 1, "Regime", text_color=c_dashLabelTxt, bgcolor=c_dashBg, text_size=size.small)
+    string regimeTxt = bullRegime ? "BULLISH" : bearRegime ? "BEARISH" : "NEUTRAL"
+    color regimeClr = bullRegime ? c_bullCandle : bearRegime ? c_bearCandle : c_neutCandle
+    table.cell(dash, 1, 1, regimeTxt, text_color=regimeClr, bgcolor=c_dashValBg, text_size=size.small)
+
+    table.cell(dash, 0, 2, "RSI Value", text_color=c_dashLabelTxt, bgcolor=c_dashBg, text_size=size.small)
+    color rsiClr = bullRegime ? c_bullCandle : bearRegime ? c_bearCandle : c_neutCandle
+    table.cell(dash, 1, 2, f_bar(rsiVal, 100), text_color=rsiClr, bgcolor=c_dashValBg, text_size=size.small)
+
+    table.cell(dash, 0, 3, "Bull Range", text_color=c_dashLabelTxt, bgcolor=c_dashBg, text_size=size.small)
+    table.cell(dash, 1, 3, str.tostring(i_bullLo) + "–" + str.tostring(i_bullHi), text_color=c_dashValTxt, bgcolor=c_dashValBg, text_size=size.small)
+
+    table.cell(dash, 0, 4, "Bear Range", text_color=c_dashLabelTxt, bgcolor=c_dashBg, text_size=size.small)
+    table.cell(dash, 1, 4, str.tostring(i_bearLo) + "–" + str.tostring(i_bearHi), text_color=c_dashValTxt, bgcolor=c_dashValBg, text_size=size.small)
+
+    table.cell(dash, 0, 5, "Trend", text_color=c_dashLabelTxt, bgcolor=c_dashBg, text_size=size.small)
+    string trendTxt = isUptrend ? "UP" : "DOWN"
+    color trendClr = isUptrend ? c_bullCandle : c_bearCandle
+    table.cell(dash, 1, 5, trendTxt, text_color=trendClr, bgcolor=c_dashValBg, text_size=size.small)
+
+    table.cell(dash, 0, 6, "ADX Strength", text_color=c_dashLabelTxt, bgcolor=c_dashBg, text_size=size.small)
+    table.cell(dash, 1, 6, f_bar(adxVal, 100), text_color=f_barColor(adxVal/100), bgcolor=c_dashValBg, text_size=size.small)
