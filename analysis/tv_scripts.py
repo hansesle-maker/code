@@ -152,16 +152,43 @@ def looks_blocked(html: str) -> Optional[str]:
     return None
 
 
-def get_scripts(pages: int = 1, delay: float = 1.0) -> Dict:
-    """Fetch `pages` listing pages, parse and merge. Returns dict with rows +
-    a diagnostic note if nothing parsed."""
+def get_scripts(pages: int = 1, delay: float = 1.0, on_progress=None,
+                should_cancel=None, stop_on_empty: bool = True) -> Dict:
+    """Fetch up to `pages` listing pages, parse and merge.
+
+    Stops early when a page past the first yields no scripts or 404s (i.e. the
+    end of the listing). `on_progress(done, total, count)` is called after each
+    page; `should_cancel()` (if given) aborts between pages. Returns a dict with
+    deduped rows, a diagnostic note, and how many pages were actually fetched.
+    """
     rows: List[Dict] = []
     note = None
+    fetched = 0
     for p in range(1, pages + 1):
-        html = fetch_page(p)
+        if should_cancel is not None and should_cancel():
+            break
+        try:
+            html = fetch_page(p)
+        except requests.HTTPError as exc:
+            code = exc.response.status_code if exc.response is not None else None
+            if p == 1:
+                raise
+            if code in (404, 403):  # ran past the last page
+                break
+            break
+        except Exception:  # noqa: BLE001
+            if p == 1:
+                raise
+            break
+        fetched = p
         if p == 1:
             note = looks_blocked(html)
-        rows.extend(parse_scripts(html))
+        page_rows = parse_scripts(html)
+        if not page_rows and p > 1 and stop_on_empty:
+            break  # no more scripts — end of listing
+        rows.extend(page_rows)
+        if on_progress is not None:
+            on_progress(p, pages, len(rows))
         if delay and p < pages:
             time.sleep(delay)
     # de-dup by url
@@ -172,7 +199,7 @@ def get_scripts(pages: int = 1, delay: float = 1.0) -> Dict:
             continue
         seen.add(key)
         uniq.append(r)
-    return {"rows": uniq, "note": note}
+    return {"rows": uniq, "note": note, "pages_fetched": fetched}
 
 
 def sort_rows(rows: List[Dict], by: str) -> List[Dict]:

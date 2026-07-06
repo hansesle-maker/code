@@ -276,20 +276,25 @@ th{color:#8a919e;cursor:pointer;user-select:none}
 td.n,th.n{text-align:right}
 tbody tr:hover{background:#141e30}
 .wrap{overflow-x:auto}
+button.stop{background:#ff4976}
+.bar{height:8px;background:#1e3a5f;border-radius:4px;overflow:hidden;margin-top:6px}
+.bar>i{display:block;height:100%;width:0;background:#00dcb4;transition:width .3s}
 @media (prefers-color-scheme:light){body{background:#f5f7fa;color:#1a2233}
  form{background:#fff;border-color:#dce3ee}h1{color:#b8860b}input,select,th{background:#fff;color:#1a2233}}
 </style></head><body>
 <h1>📜 TradingView 스크립트 랭킹 &nbsp;·&nbsp; <a href="/" style="font-size:14px">← 상관·베타로</a></h1>
 <form id="f">
- <label>페이지 수<input type="number" name="pages" id="pages" value="3" min="1" max="20"></label>
+ <label>페이지 수<input type="number" name="pages" id="pages" value="10" min="1" max="500"></label>
  <label>정렬<select name="sort" id="sort">
   <option value="boosts">부스트 많은순</option>
   <option value="date">최신순</option>
   <option value="title">제목순</option>
  </select></label>
+ <label>요청 간격(초)<input type="number" name="delay" id="delay" value="1.0" step="0.1" min="0.3"></label>
  <button type="submit" id="go">불러오기</button>
+ <button type="button" id="stop" disabled>중지</button>
 </form>
-<div id="status">대기 중…</div>
+<div id="status">대기 중…<div class="bar"><i id="barfill"></i></div></div>
 <div class="wrap"><table id="tbl"><thead><tr>
  <th data-k="boosts" class="n">부스트</th><th data-k="author">작성자</th>
  <th data-k="published">게시일</th><th data-k="title">제목</th>
@@ -305,16 +310,22 @@ function render(){const r=[...rows].sort((a,b)=>{let x=a[sortK],y=b[sortK];
   <td>${o.url?`<a href="${o.url}" target="_blank">${esc(o.title)}</a>`:esc(o.title)}</td></tr>`).join('');}
 document.querySelectorAll('th').forEach(th=>th.onclick=()=>{const k=th.dataset.k;
  if(k===sortK)sortAsc=!sortAsc;else{sortK=k;sortAsc=(k==='title');}render();});
-$('#f').onsubmit=async e=>{e.preventDefault();$('#go').disabled=true;$('#status').textContent='불러오는 중…';
- try{const res=await fetch('/tv/run',{method:'POST',headers:{'Content-Type':'application/json'},
-  body:JSON.stringify({pages:+$('#pages').value,sort:$('#sort').value})});
-  const d=await res.json();
-  if(d.error){$('#status').innerHTML='<span class="warn">'+esc(d.error)+'</span>';}
-  else{rows=d.rows||[];sortK=$('#sort').value;sortAsc=(sortK==='title');
-   $('#status').innerHTML=`${rows.length}개 스크립트`+(d.note?` <span class="warn">· ${esc(d.note)} (raw: <a href="/tv/raw?page=1" target="_blank">page1 확인</a>)</span>`:'');
-   render();}
- }catch(err){$('#status').innerHTML='<span class="warn">'+esc(String(err))+'</span>';}
- $('#go').disabled=false;};
+let poll=null;
+$('#f').onsubmit=async e=>{e.preventDefault();
+ const res=await fetch('/tv/run',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({pages:+$('#pages').value,sort:$('#sort').value,delay:+$('#delay').value})});
+ if(!res.ok){const d=await res.json();$('#status').firstChild.textContent=d.error||'오류';return;}
+ $('#go').disabled=true;$('#stop').disabled=false;
+ if(poll)clearInterval(poll);poll=setInterval(tick,700);tick();};
+$('#stop').onclick=()=>fetch('/tv/cancel',{method:'POST'});
+async function tick(){const s=await (await fetch('/tv/status')).json();
+ const pct=s.total?Math.round(100*s.done/s.total):0;$('#barfill').style.width=pct+'%';
+ $('#status').firstChild.textContent=
+  (s.running?`불러오는 중… ${s.done}/${s.total} 페이지`:`${(s.rows||[]).length}개 스크립트 (${s.done}페이지)`)
+  +(s.error?(' · '+s.error):'');
+ if(s.note){$('#status').firstChild.textContent+=' · '+s.note;}
+ if(!s.running){rows=s.rows||[];sortK=$('#sort').value;sortAsc=(sortK==='title');render();
+  clearInterval(poll);poll=null;$('#go').disabled=false;$('#stop').disabled=true;}}
 </script></body></html>"""
 
 
@@ -323,22 +334,64 @@ def tv_index():
     return render_template_string(TV_PAGE)
 
 
+_tv: Dict = {"running": False, "cancel": False, "done": 0, "total": 0,
+             "rows": [], "note": None, "error": None, "sort": "boosts"}
+
+
+def _tv_set(**kw):
+    with _lock:
+        _tv.update(kw)
+
+
+def _tv_worker(pages: int, sort: str, delay: float):
+    try:
+        def prog(done, total, count):
+            _tv_set(done=done, total=total)
+
+        def cancelled():
+            with _lock:
+                return _tv["cancel"]
+        res = tvs.get_scripts(pages, delay=delay, on_progress=prog, should_cancel=cancelled)
+        rows = tvs.sort_rows(res["rows"], sort)
+        _tv_set(rows=rows, note=res.get("note"), done=res.get("pages_fetched", pages))
+    except Exception as exc:  # noqa: BLE001
+        _tv_set(error=str(exc))
+    finally:
+        _tv_set(running=False, cancel=False)
+
+
 @app.route("/tv/run", methods=["POST"])
 def tv_run():
+    with _lock:
+        if _tv["running"]:
+            return jsonify({"error": "이미 실행 중입니다"}), 409
     p = request.get_json(force=True) or {}
-    pages = max(1, min(int(p.get("pages", 3)), 20))
-    try:
-        res = tvs.get_scripts(pages, delay=1.0)
-    except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": f"가져오기 실패: {exc}"}), 502
-    rows = tvs.sort_rows(res["rows"], p.get("sort", "boosts"))
-    return jsonify({"rows": rows, "note": res.get("note")})
+    pages = max(1, min(int(p.get("pages", 5)), 500))
+    sort = p.get("sort", "boosts")
+    delay = max(0.3, float(p.get("delay", 1.0)))
+    _tv_set(running=True, cancel=False, done=0, total=pages, rows=[], note=None,
+            error=None, sort=sort)
+    threading.Thread(target=_tv_worker, args=(pages, sort, delay), daemon=True).start()
+    return jsonify({"status": "started"})
+
+
+@app.route("/tv/status")
+def tv_status():
+    with _lock:
+        return jsonify({k: _tv[k] for k in
+                        ("running", "done", "total", "rows", "note", "error", "sort")})
+
+
+@app.route("/tv/cancel", methods=["POST"])
+def tv_cancel():
+    _tv_set(cancel=True)
+    return jsonify({"status": "cancelling"})
 
 
 @app.route("/tv/raw")
 def tv_raw():
     from flask import Response
-    page = max(1, min(int(request.args.get("page", 1)), 20))
+    page = max(1, min(int(request.args.get("page", 1)), 500))
     try:
         return Response(tvs.fetch_page(page), mimetype="text/plain")
     except Exception as exc:  # noqa: BLE001
