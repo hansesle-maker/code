@@ -1,0 +1,178 @@
+//@version=6
+// Scalping PullBack Tool R1.1 by JustUncleL — converted from study to STRATEGY
+// and upgraded to Pine v6. Original indicator © JustUncleL (Revision 1.1).
+//
+// Signal logic is unchanged: Price Action Channel (PAC = EMA of high/low/close),
+// EMA ribbon trend filter, fractals, HH/LH/HL/LL, and pullback-recovery arrows.
+// Added on top: strategy entries on the Buy/Sell (Long/Short) recovery signals,
+// a native exit when price closes back through the PAC centre (the tool's own
+// "trade over" condition), an optional ATR stop/target, and a direction filter.
+//
+// NOTE: with "Use Heikin Ashi in Algo" ON, signals are computed on HA candles.
+// That smooths entries but can make backtest results look better than reality —
+// for honest fills test with it OFF, or keep it ON only for discretionary use.
+strategy(title="Scalping PullBack Tool R1.1 Strategy", shorttitle="SCALPTOOL R1.1 ST",
+     overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity,
+     default_qty_value=100, commission_type=strategy.commission.percent,
+     commission_value=0.04, slippage=1, pyramiding=0, calc_on_every_tick=false)
+
+// === INPUTS ===
+HiLoLen         = input.int(34, minval=2, title="High Low PAC channel Length")
+fastEMAlength   = input.int(89, minval=2, title="Fast EMA Length")
+mediumEMAlength = input.int(200, minval=2, title="Medium EMA Length")
+slowEMAlength   = input.int(600, minval=2, title="Slow EMA Length")
+ShowFastEMA     = input.bool(true, "Show Fast EMA")
+ShowMediumEMA   = input.bool(true, "Show Medium EMA")
+ShowSlowEMA     = input.bool(false, "Show Slow EMA")
+ShowHHLL        = input.bool(false, "Show HH/LH/HL/LL")
+ShowFractals    = input.bool(true, "Show Fractals")
+filterBW        = input.bool(false, title="Show Ideal Fractals Only")
+ShowBarColor    = input.bool(true, title="Show coloured Bars around PAC")
+ShowBuySell     = input.bool(true, title="Show Buy/Sell Alert Arrows")
+Lookback        = input.int(3, minval=1, title="Pullback Lookback for PAC Cross Check")
+DelayArrow      = input.bool(false, title="Show Alert Arrows Only on Closed Candles")
+Delay           = DelayArrow ? 1 : 0
+ShowTrendBGcolor= input.bool(true, "Show Trend Background")
+UseHAcandles    = input.bool(true, title="Use Heikin Ashi Candles in Algo Calculations")
+
+// --- Strategy options ---
+grpS   = "Strategy"
+i_dir      = input.string("all", "Trade Direction", options=["long", "short", "all"], group=grpS)
+i_natExit  = input.bool(true, "Exit on PAC centre re-cross (native)", group=grpS)
+i_useSLTP  = input.bool(false, "Use ATR Stop / Target", group=grpS)
+i_atrLen   = input.int(14, "ATR Length", minval=1, group=grpS)
+i_slMult   = input.float(1.5, "Stop-Loss (x ATR)", step=0.1, minval=0.1, group=grpS)
+i_tpMult   = input.float(2.0, "Take-Profit (x ATR)", step=0.1, minval=0.1, group=grpS)
+// === /INPUTS ===
+
+strategy.risk.allow_entry_in(i_dir == "long" ? strategy.direction.long :
+     i_dir == "short" ? strategy.direction.short : strategy.direction.all)
+
+// === BASE FUNCTIONS ===
+haTicker = ticker.heikinashi(syminfo.tickerid)
+haClose = UseHAcandles ? request.security(haTicker, timeframe.period, close) : close
+haOpen  = UseHAcandles ? request.security(haTicker, timeframe.period, open)  : open
+haHigh  = UseHAcandles ? request.security(haTicker, timeframe.period, high)  : high
+haLow   = UseHAcandles ? request.security(haTicker, timeframe.period, low)   : low
+
+// Fractal recognition
+isRegularFractal(mode) =>
+    mode == 1 ? high[4] < high[3] and high[3] < high[2] and high[2] > high[1] and high[1] > high[0] :
+      mode == -1 ? low[4] > low[3] and low[3] > low[2] and low[2] < low[1] and low[1] < low[0] : false
+
+isBWFractal(mode) =>
+    mode == 1 ? high[4] < high[2] and high[3] <= high[2] and high[2] >= high[1] and high[2] > high[0] :
+      mode == -1 ? low[4] > low[2] and low[3] >= low[2] and low[2] <= low[1] and low[2] < low[0] : false
+// === /BASE FUNCTIONS ===
+
+// === SERIES SETUP ===
+fastEMA   = ta.ema(haClose, fastEMAlength)
+mediumEMA = ta.ema(haClose, mediumEMAlength)
+slowEMA   = ta.ema(haClose, slowEMAlength)
+pacC      = ta.ema(haClose, HiLoLen)
+pacL      = ta.ema(haLow, HiLoLen)
+pacU      = ta.ema(haHigh, HiLoLen)
+TrendDirection = fastEMA > mediumEMA and pacL > mediumEMA ? 1 :
+     fastEMA < mediumEMA and pacU < mediumEMA ? -1 : 0
+
+// Fractals
+filteredtopf = filterBW ? isRegularFractal(1) : isBWFractal(1)
+filteredbotf = filterBW ? isRegularFractal(-1) : isBWFractal(-1)
+
+// Higher Highs / Lower Highs / Higher Lows / Lower Lows
+valuewhen_H0 = ta.valuewhen(filteredtopf, high[2], 0)
+valuewhen_H1 = ta.valuewhen(filteredtopf, high[2], 1)
+valuewhen_H2 = ta.valuewhen(filteredtopf, high[2], 2)
+higherhigh = not filteredtopf ? false : valuewhen_H1 < valuewhen_H0 and valuewhen_H2 < valuewhen_H0
+lowerhigh  = not filteredtopf ? false : valuewhen_H1 > valuewhen_H0 and valuewhen_H2 > valuewhen_H0
+valuewhen_L0 = ta.valuewhen(filteredbotf, low[2], 0)
+valuewhen_L1 = ta.valuewhen(filteredbotf, low[2], 1)
+valuewhen_L2 = ta.valuewhen(filteredbotf, low[2], 2)
+higherlow = not filteredbotf ? false : valuewhen_L1 < valuewhen_L0 and valuewhen_L2 < valuewhen_L0
+lowerlow  = not filteredbotf ? false : valuewhen_L1 > valuewhen_L0 and valuewhen_L2 > valuewhen_L0
+// === /SERIES ===
+
+// === PLOTTING ===
+L = plot(pacL, color=color.new(color.gray, 50), linewidth=1, title="High PAC EMA")
+U = plot(pacU, color=color.new(color.gray, 50), linewidth=1, title="Low PAC EMA")
+C = plot(pacC, color=color.new(color.red, 0), linewidth=2, title="Close PAC EMA")
+fill(L, U, color=color.new(color.gray, 90), title="Fill HiLo PAC")
+
+BARcolor = haClose > pacU ? color.blue : haClose < pacL ? color.red : color.gray
+barcolor(ShowBarColor ? BARcolor : na, title="Bar Colours")
+
+BGcolor = TrendDirection == 1 ? color.green : TrendDirection == -1 ? color.red : color.yellow
+bgcolor(ShowTrendBGcolor ? color.new(BGcolor, 90) : na, title="Trend BG Color")
+
+plot(ShowFastEMA ? fastEMA : na, color=color.new(color.green, 20), linewidth=2, title="fastEMA")
+plot(ShowMediumEMA ? mediumEMA : na, color=color.new(color.blue, 20), linewidth=3, title="mediumEMA")
+plot(ShowSlowEMA ? slowEMA : na, color=color.new(color.black, 20), linewidth=4, title="slowEMA")
+
+plotshape(ShowFractals ? filteredtopf : na, title='Filtered Top Fractals', style=shape.triangledown, location=location.abovebar, color=color.red, offset=-2)
+plotshape(ShowFractals ? filteredbotf : na, title='Filtered Bottom Fractals', style=shape.triangleup, location=location.belowbar, color=color.lime, offset=-2)
+
+plotshape(ShowHHLL ? higherhigh : na, title='Higher High', style=shape.square, location=location.abovebar, color=color.maroon, text="[HH]", offset=-2)
+plotshape(ShowHHLL ? lowerhigh : na, title='Lower High', style=shape.square, location=location.abovebar, color=color.maroon, text="[LH]", offset=-2)
+plotshape(ShowHHLL ? higherlow : na, title='Higher Low', style=shape.square, location=location.belowbar, color=color.green, text="[HL]", offset=-2)
+plotshape(ShowHHLL ? lowerlow : na, title='Lower Low', style=shape.square, location=location.belowbar, color=color.green, text="[LL]", offset=-2)
+// === /PLOTTING ===
+
+// === SIGNALS ===
+var int TradeDirection = 0
+TradeDirection := nz(TradeDirection[1])
+
+pacExitU = haOpen < pacU and haClose > pacU and ta.barssince(haClose < pacC) <= Lookback
+pacExitL = haOpen > pacL and haClose < pacL and ta.barssince(haClose > pacC) <= Lookback
+
+Buy  = TrendDirection == 1 and pacExitU
+Sell = TrendDirection == -1 and pacExitL
+
+// Keep current trade state until pullback closes it or a new recovery starts.
+TradeDirection := TradeDirection == 1 and haClose < pacC ? 0 :
+     TradeDirection == -1 and haClose > pacC ? 0 :
+     TradeDirection == 0 and Buy ? 1 :
+     TradeDirection == 0 and Sell ? -1 : TradeDirection
+
+// Buy/Sell arrows (unchanged visual)
+plotarrow(ShowBuySell and nz(TradeDirection[1 + Delay]) == 0 and TradeDirection[Delay] != 0 ? TradeDirection[Delay] : na,
+     offset=-Delay, colorup=color.new(color.green, 20), colordown=color.new(color.maroon, 20),
+     minheight=20, maxheight=50, title="Buy/Sell Arrow")
+
+Long  = nz(TradeDirection[1]) == 0 and TradeDirection == 1
+Short = nz(TradeDirection[1]) == 0 and TradeDirection == -1
+alertcondition(Long, title="Buy Condition", message="BUY")
+alertcondition(Short, title="Sell Condition", message="SELL")
+// === /SIGNALS ===
+
+// === STRATEGY ENTRIES / EXITS ===
+atr = ta.atr(i_atrLen)
+var float entryAtr = na
+if Long or Short
+    entryAtr := atr
+
+if Long
+    strategy.entry("Long", strategy.long)
+if Short
+    strategy.entry("Short", strategy.short)
+
+// Native exit: trade state falls back to flat when price closes back through PAC.
+exitLong  = nz(TradeDirection[1]) == 1 and TradeDirection == 0
+exitShort = nz(TradeDirection[1]) == -1 and TradeDirection == 0
+
+if strategy.position_size > 0
+    if i_useSLTP and not na(entryAtr)
+        strategy.exit("XL", from_entry="Long",
+             stop=strategy.position_avg_price - entryAtr * i_slMult,
+             limit=strategy.position_avg_price + entryAtr * i_tpMult)
+    if i_natExit and exitLong
+        strategy.close("Long", comment="PAC exit")
+
+if strategy.position_size < 0
+    if i_useSLTP and not na(entryAtr)
+        strategy.exit("XS", from_entry="Short",
+             stop=strategy.position_avg_price + entryAtr * i_slMult,
+             limit=strategy.position_avg_price - entryAtr * i_tpMult)
+    if i_natExit and exitShort
+        strategy.close("Short", comment="PAC exit")
+// === /STRATEGY ===
+// === eof.
