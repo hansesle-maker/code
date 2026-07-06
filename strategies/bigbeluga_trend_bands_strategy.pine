@@ -1,0 +1,264 @@
+// This work is licensed under Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+// https://creativecommons.org/licenses/by-nc-sa/4.0/
+// © BigBeluga — converted from indicator to STRATEGY
+
+//@version=6
+strategy("Dynamic Trend Bands & Anchored VWAP Signals [BigBeluga] Strategy", "Dynamic Trend Bands & Signals [BigBeluga] ST", overlay = true, max_bars_back = 5000, max_labels_count = 500, max_polylines_count = 100, calc_bars_count = 5000, initial_capital = 10000, default_qty_type = strategy.percent_of_equity, default_qty_value = 100, commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 1, pyramiding = 0, calc_on_every_tick = false)
+
+// ＩＮＰＵＴＳ ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――{
+
+int lrLength    = input.int(50, minval=1, title="Baseline Length", tooltip="Sets the period for the central moving average baseline calculation.")
+int atrLength   = input.int(100, minval=1, title="ATR Volatility Length", tooltip="Determines the number of bars used to measure market volatility for band spacing.")
+float atrMult   = input.float(3.0, minval=0.1, step=0.1, title="ATR Band Multiplier", tooltip="Multiplies the volatility value to widen or narrow the outer support/resistance bands.")
+int pivotLength = input.int(10, minval=1, title="Pivot Point Detection Length", tooltip="The number of bars required on each side to confirm a valid market structural high or low pivot.")
+
+// Style & Color Inputs
+color bullColor = input.color(color.lime, title="Bullish / Up Color", group="Color Settings")
+color bearColor = input.color(color.rgb(158, 55, 255), title="Bearish / Down Color", group="Color Settings")
+
+// Dashboard Settings
+bool showDash    = input.bool(true, title="Show Information Dashboard", group="Dashboard Settings")
+string dashPos   = input.string(position.top_right, title="Dashboard Position", options=[position.top_right, position.top_left, position.bottom_right, position.bottom_left], group="Dashboard Settings")
+
+// Strategy Execution
+string grpStrat  = "Strategy"
+bool stratEnable = input.bool(true, "Enable Strategy Orders", group=grpStrat)
+string stratDir  = input.string("all", "Trade Direction", options=["long", "short", "all"], group=grpStrat)
+bool useBandStop = input.bool(true, "Stop at Band Boundary (per BigBeluga rules)", group=grpStrat,
+     tooltip="Long stop below the lower dotted band; short stop above the upper dotted band. Off = ATR stop.")
+float stopBufAtr = input.float(0.5, "Stop Buffer (xATR)", minval=0.0, step=0.1, group=grpStrat)
+bool useRR       = input.bool(true, "Use R:R Take-Profit", group=grpStrat)
+float rrMult     = input.float(2.0, "R:R Multiplier", minval=0.1, step=0.1, group=grpStrat)
+bool exitOnFlip  = input.bool(false, "Exit on Trend Regime Flip", group=grpStrat)
+
+// }
+// ＣＡＬＣＵＬＡＴＩＯＮＳ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――{
+
+// ── Volatility Band Calculations ──
+float atrValue   = ta.atr(atrLength)
+float lrCenter   = ta.ema(ta.ema(close, lrLength), lrLength)
+
+float upperBand  = lrCenter + (atrValue * atrMult)
+float lowerBand  = lrCenter - (atrValue * atrMult)
+
+// ── State Tracking Logic ──
+var int trendState = 0
+
+if ta.crossover(close, upperBand)
+    trendState := 1
+if ta.crossunder(close, lowerBand)
+    trendState := -1
+
+float plotUpper = trendState == -1 ? upperBand : na
+float plotLower = trendState == 1 ? lowerBand : na
+
+// ── Signal & Tracking Variables ──
+bool breakUp = false
+bool breakDn = false
+
+var float finalDeltaVolLow  = 0.0
+var float finalDeltaVolHigh = 0.0
+var label lbl               = na
+
+// Clear the real-time tracking label on every new bar tick before rewriting
+lbl.delete()
+
+// ── Pivot & VWAP Logic (Low / Bearish Regime) ──
+float pl      = ta.pivotlow(pivotLength, pivotLength)
+float l       = ta.lowest(pivotLength)
+bool lowPivot = low[1] == l and low > l
+
+var int lowIndx  = 0
+var int lowIndex = 0
+
+if trendState == -1
+    if lowPivot
+        lowIndx := bar_index - 1
+    if not na(pl)
+        lowIndex := lowIndx
+
+float vwap = ta.vwap(low[1], lowPivot)
+
+var polyline poly = na
+chart.point[] cp  = array.new<chart.point>()
+
+
+if trendState == -1
+    if not na(pl) and trendState[pivotLength] == -1
+        cp.clear()
+        poly.delete()
+        poly := polyline.new(cp)
+    else if not na(poly)
+        poly.delete()
+        float loopDeltaVolLow = 0.0
+
+        for i = 0 to bar_index - lowIndex - 1
+            cp.push(chart.point.from_index(bar_index - i, vwap[i]))
+            loopDeltaVolLow := loopDeltaVolLow + (close[i] > open[i] ? volume[i] : -volume[i])
+
+        lbl  := label.new(bar_index, vwap, str.tostring(loopDeltaVolLow, format.volume), textcolor = bearColor, color = color.new(bearColor, 100), style = label.style_label_left)
+        poly := polyline.new(cp, line_color = bearColor, line_style = line.style_dotted, line_width = 2)
+
+        if close <= vwap and na(pl)
+            poly             := na
+            breakDn          := true
+            finalDeltaVolLow := loopDeltaVolLow
+
+// ── Pivot & VWAP Logic (High / Bullish Regime) ──
+float ph       = ta.pivothigh(pivotLength, pivotLength)
+float h        = ta.highest(pivotLength)
+bool highPivot = high[1] == h and high < h
+
+var polyline poly1 = na
+chart.point[] cp1  = array.new<chart.point>()
+
+var int highIndx  = 0
+var int highIndex = 0
+
+if trendState == 1
+    if highPivot
+        highIndx := bar_index - 1
+    if not na(ph)
+        highIndex := highIndx
+
+float vwap1 = ta.vwap(high[1], highPivot)
+
+if trendState == 1
+    if not na(ph) and trendState[pivotLength] == 1
+        cp1.clear()
+        poly1.delete()
+        poly1 := polyline.new(cp1)
+    else if not na(poly1)
+        poly1.delete()
+        float loopDeltaVolHigh = 0.0
+
+        for i = 0 to bar_index - highIndex - 1
+            cp1.push(chart.point.from_index(bar_index - i, vwap1[i]))
+            loopDeltaVolHigh := loopDeltaVolHigh + (close[i] > open[i] ? volume[i] : -volume[i])
+
+        poly1 := polyline.new(cp1, line_color = bullColor, line_style = line.style_dotted, line_width = 2)
+        lbl   := label.new(bar_index, vwap1, str.tostring(loopDeltaVolHigh, format.volume), textcolor = bullColor, color = color.new(bearColor, 100), style = label.style_label_left)
+
+        if close >= vwap1 and na(ph)
+            poly1             := na
+            breakUp           := true
+            finalDeltaVolHigh := loopDeltaVolHigh
+
+// ── State Reset Cleanup ──
+if trendState != trendState[1]
+    poly.delete()
+    poly1.delete()
+    poly1 := na
+    poly  := na
+
+// ── Dashboard Persistent History Tracking ──
+var string lastBreakType = "None"
+var float lastBreakVol   = 0.0
+
+if breakUp
+    lastBreakType := "Bullish"
+    lastBreakVol   := finalDeltaVolHigh
+if breakDn
+    lastBreakType := "Bearish"
+    lastBreakVol   := finalDeltaVolLow
+
+// ── STRATEGY EXECUTION ──────────────────────────────────────────────────────
+// Enter on the VWAP-baseline break signals; stop at the band boundary the
+// author uses as the invalidation level; optional R:R target and flip exit.
+var float sStop = na
+var float sTgt  = na
+
+if stratEnable
+    bool dirOkL = stratDir != "short"
+    bool dirOkS = stratDir != "long"
+
+    if breakUp and dirOkL
+        float bandStop = (lowerBand + atrValue) - stopBufAtr * atrValue     // just below lower dotted line
+        sStop := useBandStop ? bandStop : close - atrValue * atrMult
+        float risk = math.abs(close - sStop)
+        sTgt  := useRR ? close + risk * rrMult : na
+        strategy.entry("Long", strategy.long)
+
+    if breakDn and dirOkS
+        float bandStop = (upperBand - atrValue) + stopBufAtr * atrValue     // just above upper dotted line
+        sStop := useBandStop ? bandStop : close + atrValue * atrMult
+        float risk = math.abs(sStop - close)
+        sTgt  := useRR ? close - risk * rrMult : na
+        strategy.entry("Short", strategy.short)
+
+    if exitOnFlip and strategy.position_size > 0 and trendState == -1
+        strategy.close("Long", comment="Regime Flip")
+    if exitOnFlip and strategy.position_size < 0 and trendState == 1
+        strategy.close("Short", comment="Regime Flip")
+
+    if strategy.position_size > 0
+        strategy.exit("XL", from_entry="Long", stop = not na(sStop) ? sStop : na, limit = useRR and not na(sTgt) ? sTgt : na)
+    if strategy.position_size < 0
+        strategy.exit("XS", from_entry="Short", stop = not na(sStop) ? sStop : na, limit = useRR and not na(sTgt) ? sTgt : na)
+
+// }
+// ＰＬＯＴ ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――{
+
+// ── Volatility Bands Plots ──
+pup = plot(plotUpper, color=bearColor, linewidth=1, style=plot.style_linebr, title="Upper Resistance Band")
+plo = plot(plotLower, color=bullColor, linewidth=1, style=plot.style_linebr, title="Lower Support Band")
+
+pp   = plot(close, "Price", editable = false, display = display.none)
+pup1 = plot(plotUpper-atrValue, color=bearColor, linewidth=1, style=plot.style_linebr, title="Upper Resistance Band", linestyle = plot.linestyle_dotted)
+plo1 = plot(plotLower+atrValue, color=bullColor, linewidth=1, style=plot.style_linebr, title="Lower Support Band", linestyle = plot.linestyle_dotted)
+
+fill(pup, pup1, plotUpper, plotUpper-atrValue, color.new(bearColor, 70), color.new(bearColor, 100), title = "Upper Fill")
+fill(plo, plo1, plotLower+atrValue, plotLower, color.new(bullColor, 100), color.new(bullColor, 70), title = "Lower Fill")
+
+// ── Breakout/Breakdown Shapes ──
+plotshape(breakUp, "Break Up Triangle", shape.triangleup, location.belowbar, color=bullColor, size = size.tiny)
+plotshape(breakDn, "Break Dn Triangle", shape.triangledown, location.abovebar, bearColor, size = size.tiny)
+
+// ── Dynamic Breakout Label Instantiation ──
+if breakUp
+    label.new(
+         x=bar_index,
+         y=low,
+         text="Δ: " + str.tostring(finalDeltaVolHigh, "#,###"),
+         yloc=yloc.belowbar,
+         color=color.new(bullColor, 100),
+         textcolor=chart.fg_color,
+         style=label.style_label_up,
+         size=size.small
+     )
+
+if breakDn
+    label.new(
+         x=bar_index,
+         y=high,
+         text= "Δ: " + str.tostring(finalDeltaVolLow, "#,###"),
+         yloc=yloc.abovebar,
+         color=color.new(bearColor, 100),
+         textcolor=chart.fg_color,
+         style=label.style_label_down,
+         size=size.small
+     )
+
+// ── Dashboard Display Implementation ──
+var table dashTable = table.new(dashPos, 2, 3, bgcolor=color.new(color.black, 20), border_color=chart.bg_color, border_width=1)
+
+if showDash and barstate.islast
+    // Header Style Setup
+    color headerBg = color.new(color.black, 30)
+
+    // Row 0: Headers
+    table.cell(dashTable, 0, 0, "Metric", text_color=color.white, bgcolor=headerBg, text_size=size.small)
+    table.cell(dashTable, 1, 0, "Current Value", text_color=color.white, bgcolor=headerBg, text_size=size.small)
+
+    // Row 1: Trend State
+    string trendText = trendState == 1 ? "BULLISH" : trendState == -1 ? "BEARISH" : "NEUTRAL"
+    color trendBg    = trendState == 1 ? color.new(bullColor, 30) : trendState == -1 ? color.new(bearColor, 30) : color.new(color.gray, 50)
+    table.cell(dashTable, 0, 1, "Current Trend", text_color=color.white, bgcolor=color.new(color.gray, 15), text_size=size.small)
+    table.cell(dashTable, 1, 1, trendText, text_color=color.white, bgcolor=trendBg, text_size=size.small)
+
+    // Row 2: Last Breakout Status
+    color breakBg   = lastBreakType == "Bullish" ? color.new(bullColor, 40) : lastBreakType == "Bearish" ? color.new(bearColor, 40) : color.new(color.gray, 50)
+    string breakVal = lastBreakType == "None" ? "No Breakouts" : lastBreakType + " (Delta Vol: " + str.tostring(lastBreakVol, format.volume) + ")"
+    table.cell(dashTable, 0, 2, "Last Breakout", text_color=color.white, bgcolor=color.new(color.gray, 15), text_size=size.small)
+    table.cell(dashTable, 1, 2, breakVal, text_color=color.white, bgcolor=breakBg, text_size=size.small)
+// }
