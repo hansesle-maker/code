@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "ana
 from corr_beta import KST, make_row, parse_start, sort_rows  # noqa: E402
 import bithumb_btc_corr_beta as bithumb  # noqa: E402
 import binance_futures_btc_corr_beta as binance  # noqa: E402
+import tv_scripts as tvs  # noqa: E402
 
 app = Flask(__name__)
 
@@ -169,7 +170,7 @@ tbody tr:hover{background:#141e30}
  form{background:#fff;border-color:#dce3ee}h1{color:#b8860b}
  input,select,th{background:#fff;color:#1a2233}th{background:#f5f7fa}}
 </style></head><body>
-<h1>📊 BTC 상관계수 · 베타 스캐너</h1>
+<h1>📊 BTC 상관계수 · 베타 스캐너 &nbsp;·&nbsp; <a href="/tv" style="font-size:14px;color:#448aff">📜 TV 스크립트 랭킹 →</a></h1>
 <form id="f">
  <label>거래소<select name="exchange" id="exchange">
   <option value="binance">Binance USDT-M Futures</option>
@@ -249,6 +250,99 @@ def index():
             .replace("%BINANCE_IV%", json.dumps(EXCHANGES["binance"]["intervals"]))
             .replace("%BITHUMB_IV%", json.dumps(EXCHANGES["bithumb"]["intervals"])))
     return render_template_string(html)
+
+
+TV_PAGE = """<!doctype html><html lang="ko"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TV 스크립트 랭킹</title>
+<style>
+:root{color-scheme:dark light}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+ background:#0e1726;color:#e8eaed;padding:16px;max-width:1000px;margin:0 auto}
+h1{font-size:18px;margin:0 0 12px;color:#f0b90b}
+a{color:#448aff}
+form{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;
+ background:#141e30;border:1px solid #1e3a5f;border-radius:10px;padding:14px}
+label{display:flex;flex-direction:column;font-size:12px;color:#8a919e;gap:4px}
+input,select{background:#0e1726;color:#e8eaed;border:1px solid #1e3a5f;border-radius:6px;padding:8px;font-size:14px}
+button{background:#448aff;color:#fff;border:0;border-radius:6px;padding:10px 18px;font-size:14px;font-weight:600;cursor:pointer}
+button:disabled{opacity:.5}
+#status{margin:14px 0;font-size:13px;color:#8a919e}
+.warn{color:#ff9800}
+table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}
+th,td{padding:6px 8px;text-align:left;border-bottom:1px solid #1e3a5f}
+th{color:#8a919e;cursor:pointer;user-select:none}
+td.n,th.n{text-align:right}
+tbody tr:hover{background:#141e30}
+.wrap{overflow-x:auto}
+@media (prefers-color-scheme:light){body{background:#f5f7fa;color:#1a2233}
+ form{background:#fff;border-color:#dce3ee}h1{color:#b8860b}input,select,th{background:#fff;color:#1a2233}}
+</style></head><body>
+<h1>📜 TradingView 스크립트 랭킹 &nbsp;·&nbsp; <a href="/" style="font-size:14px">← 상관·베타로</a></h1>
+<form id="f">
+ <label>페이지 수<input type="number" name="pages" id="pages" value="3" min="1" max="20"></label>
+ <label>정렬<select name="sort" id="sort">
+  <option value="boosts">부스트 많은순</option>
+  <option value="date">최신순</option>
+  <option value="title">제목순</option>
+ </select></label>
+ <button type="submit" id="go">불러오기</button>
+</form>
+<div id="status">대기 중…</div>
+<div class="wrap"><table id="tbl"><thead><tr>
+ <th data-k="boosts" class="n">부스트</th><th data-k="author">작성자</th>
+ <th data-k="published">게시일</th><th data-k="title">제목</th>
+</tr></thead><tbody></tbody></table></div>
+<script>
+const $=s=>document.querySelector(s);let rows=[],sortK='boosts',sortAsc=false;
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function render(){const r=[...rows].sort((a,b)=>{let x=a[sortK],y=b[sortK];
+ if(typeof x==='number')return sortAsc?x-y:y-x;
+ return sortAsc?String(x).localeCompare(y):String(y).localeCompare(x);});
+ $('#tbl tbody').innerHTML=r.map(o=>`<tr><td class="n">${o.boosts||0}</td>
+  <td>${esc(o.author)}</td><td>${esc(o.published)}</td>
+  <td>${o.url?`<a href="${o.url}" target="_blank">${esc(o.title)}</a>`:esc(o.title)}</td></tr>`).join('');}
+document.querySelectorAll('th').forEach(th=>th.onclick=()=>{const k=th.dataset.k;
+ if(k===sortK)sortAsc=!sortAsc;else{sortK=k;sortAsc=(k==='title');}render();});
+$('#f').onsubmit=async e=>{e.preventDefault();$('#go').disabled=true;$('#status').textContent='불러오는 중…';
+ try{const res=await fetch('/tv/run',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({pages:+$('#pages').value,sort:$('#sort').value})});
+  const d=await res.json();
+  if(d.error){$('#status').innerHTML='<span class="warn">'+esc(d.error)+'</span>';}
+  else{rows=d.rows||[];sortK=$('#sort').value;sortAsc=(sortK==='title');
+   $('#status').innerHTML=`${rows.length}개 스크립트`+(d.note?` <span class="warn">· ${esc(d.note)} (raw: <a href="/tv/raw?page=1" target="_blank">page1 확인</a>)</span>`:'');
+   render();}
+ }catch(err){$('#status').innerHTML='<span class="warn">'+esc(String(err))+'</span>';}
+ $('#go').disabled=false;};
+</script></body></html>"""
+
+
+@app.route("/tv")
+def tv_index():
+    return render_template_string(TV_PAGE)
+
+
+@app.route("/tv/run", methods=["POST"])
+def tv_run():
+    p = request.get_json(force=True) or {}
+    pages = max(1, min(int(p.get("pages", 3)), 20))
+    try:
+        res = tvs.get_scripts(pages, delay=1.0)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"가져오기 실패: {exc}"}), 502
+    rows = tvs.sort_rows(res["rows"], p.get("sort", "boosts"))
+    return jsonify({"rows": rows, "note": res.get("note")})
+
+
+@app.route("/tv/raw")
+def tv_raw():
+    from flask import Response
+    page = max(1, min(int(request.args.get("page", 1)), 20))
+    try:
+        return Response(tvs.fetch_page(page), mimetype="text/plain")
+    except Exception as exc:  # noqa: BLE001
+        return Response(f"error: {exc}", mimetype="text/plain", status=502)
 
 
 @app.route("/run", methods=["POST"])

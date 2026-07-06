@@ -26,6 +26,18 @@ python web_corr_beta.py            # http://0.0.0.0:5000
 > ```
 > 그리고 VCN Security List(또는 NSG)에 TCP 5000 Ingress 규칙을 추가하세요.
 
+## TradingView 스크립트 랭킹 (`tv_scripts.py` / 웹 탭)
+
+트레이딩뷰 공개 스크립트 목록(`/scripts/`)을 받아 **부스트 많은순 / 최신순 / 제목순**으로 정렬해 봅니다. 웹앱 상단 "📜 TV 스크립트 랭킹" 링크(`/tv`) 또는 CLI:
+
+```bash
+python analysis/tv_scripts.py --pages 3 --sort boosts
+python analysis/tv_scripts.py --pages 5 --sort date --csv scripts.csv
+python analysis/tv_scripts.py --dump 1 > page1.html   # 파서 교정용 원본 HTML
+```
+
+> ⚠️ 트레이딩뷰 ToS상 자동 수집은 제한될 수 있어 **개인용·소량·저빈도**로만 쓰세요. 또 사이트가 Cloudflare 봇 차단 + 클라이언트 렌더링이라, 단순 요청으로 카드가 안 잡히면 결과가 0개로 나올 수 있습니다. 그럴 땐 `--dump 1`(또는 웹의 `raw: page1 확인` 링크)로 실제 응답을 확인해 파서를 맞추면 됩니다.
+
 ## 지표 정의
 
 - **CORR** — 코인 수익률과 BTC 수익률의 피어슨 상관계수 (−1 ~ +1)
