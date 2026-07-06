@@ -1,0 +1,717 @@
+//@version=6
+// OrderFlow Absorption Matrix — converted to a STRATEGY (Approach 2: order-flow
+// momentum / continuation). The absorption-zone → POC reversion (Approach 1) is
+// NOT mechanized: that engine (zones, POC, VAH/VAL, score) computes only on the
+// last bar for display, so it has no per-bar history to backtest. Per the author,
+// the score is a descriptive framework, NOT a backtested signal. This strategy
+// trades the per-bar cluster prints filtered by CVD bias and MTF flow alignment.
+strategy("OrderFlow Absorption Matrix Strategy", overlay = true, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500,
+     initial_capital = 10000, default_qty_type = strategy.percent_of_equity, default_qty_value = 100,
+     commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 1, pyramiding = 0, calc_on_every_tick = false)
+
+string g1 = "①  Order-Flow Detection"
+string detectMethod = input.string("Volume OR Delta", "Cluster Trigger", options = ["Volume Only", "Delta Only", "Volume + Delta", "Volume OR Delta"], group = g1, tooltip = "What drives the order-flow print read shown in the dashboard.\n\nVolume Only — raw bar volume (always available).\nDelta Only — net buy/sell pressure from the LTF scan.\nVolume + Delta — both must spike (high-conviction).\nVolume OR Delta — either spikes (most inclusive).")
+string classifyMode = input.string("Both", "Side Classification", options = ["Candle Direction", "Delta Direction", "Both"], group = g1, tooltip = "How each print is tagged BUY / SELL / MIXED.\n\nCandle — candle colour.\nDelta — sign of net LTF delta.\nBoth — must agree, else MIXED (highest confidence).")
+
+string g2 = "②  Cluster Sensitivity"
+float smallPct  = input.float(75, "Small Print Percentile",  minval = 1, maxval = 99.9, step = 1, group = g2, tooltip = "A bar must exceed this percentile of recent activity to qualify as a SMALL print (top 25% at 75).")
+float mediumPct = input.float(90, "Medium Print Percentile", minval = 1, maxval = 99.9, step = 1, group = g2, tooltip = "Threshold for MEDIUM prints (top 10% at 90) — significant flow.")
+float bigPct    = input.float(97, "Big Print Percentile",    minval = 1, maxval = 99.9, step = 1, group = g2, tooltip = "Threshold for WHALE prints (top 3% at 97) — climax & block trades.")
+string consensusMode = input.string("Majority (2 of 3)", "Window Consensus", options = ["Any Window", "Majority (2 of 3)", "All Windows (strict)"], group = g2, tooltip = "How many lookback windows must agree volume is elevated before a print is confirmed.")
+int shortLen = input.int(20,  "Short Window",  minval = 5,  maxval = 200, group = g2)
+int midLen   = input.int(50,  "Medium Window", minval = 10, maxval = 300, group = g2)
+int longLen  = input.int(100, "Long Window",   minval = 20, maxval = 500, group = g2)
+
+string g3 = "③  LTF Delta / Absorption"
+int  ltfGran      = input.int(12, "Intrabar Granularity", minval = 1, maxval = 100, group = g3, tooltip = "Requests roughly chart-TF ÷ this value as the intrabar timeframe. Higher = finer delta, heavier load.")
+bool allowSeconds = input.bool(false, "Allow Seconds Data", group = g3, tooltip = "Permit seconds-based intrabars when granularity demands them. Disable on symbols where seconds data errors.")
+
+string g4 = "④  Liquidity Profile"
+bool showVolProfile = input.bool(true, "Show Volume Profile", group = g4)
+bool showDeltaCol   = input.bool(true, "Show Delta Column",   group = g4)
+bool showAbsorbCol  = input.bool(true, "Show Absorption Column", group = g4)
+int  lookbackBars   = input.int(220, "Profile Lookback", minval = 40, maxval = 500, group = g4, tooltip = "Bars used to build the profile, delta and absorption columns and to score zones.")
+int  profileBins    = input.int(30,  "Profile Resolution", minval = 8, maxval = 45, group = g4, tooltip = "Vertical price bins. Higher = finer, heavier object load.")
+int  profileWidth   = input.int(90,  "Profile Width (bars)", minval = 20, maxval = 300, group = g4)
+int  profileOffset  = input.int(12,  "Profile Offset (bars)", minval = 0, maxval = 200, group = g4, tooltip = "Gap (in bars) between the latest candle and the profile. In Right-of-Price mode this is the clearance before the profile begins.")
+string profilePlace = input.string("Right of Price (no overlap)", "Profile Placement", options = ["Right of Price (no overlap)", "Overlay on Candles"], group = g4, tooltip = "Right of Price floats the entire profile (liquidity, delta, absorption) into the empty space to the right of the latest candle so it never hides price action. Overlay anchors it over the recent candles (classic profile look). Reduce Profile Width to trim how far it extends.")
+float strengthPct   = input.float(85, "Strong-Volume Filter %", minval = 50, maxval = 99.9, step = 0.5, group = g4, tooltip = "Bars above this volume percentile are 'strong' and shaded brighter inside the profile.")
+bool  showValueArea = input.bool(true, "Show Value Area (POC/VAH/VAL)", group = g4)
+int   vaPercent     = input.int(70, "Value Area %", minval = 30, maxval = 95, group = g4)
+
+string g5 = "⑤  Strength Zones"
+bool   showLevels    = input.bool(true, "Show Strength Zones", group = g5, tooltip = "Draw 0–10 strength-ranked support/resistance zones extending left from the profile. Each zone is scored on volume, absorption, touch count, rejection wicks and recency.")
+string zoneSource    = input.string("Volume + Absorption", "Zone Source", options = ["Volume + Absorption", "Volume Node", "Absorption"], group = g5, tooltip = "What defines a zone candidate before scoring.\n\nVolume + Absorption — peaks in the blend of both (default).\nVolume Node — high-volume nodes (HVN/POC-like).\nAbsorption — local absorption peaks.")
+float  minStrength   = input.float(4.0, "Min Zone Strength (0–10)", minval = 0, maxval = 10, step = 0.5, group = g5, tooltip = "Only zones scoring at or above this are drawn.")
+int    maxZones      = input.int(6, "Max Zones Shown", minval = 1, maxval = 20, group = g5, tooltip = "Keep only the strongest N zones to avoid chart overload.")
+float  touchNorm     = input.float(14, "Touches For Full Score", minval = 1, maxval = 200, step = 1, group = g5, tooltip = "Number of touches that earns the full touch component of the score.")
+bool   showZoneStats = input.bool(true, "Show Zone Stats Inside", group = g5, tooltip = "Render the strength score, tier and detailed stats (Volume / Absorption / Touches / Rejections) inside each zone.")
+string zoneLabSize   = input.string("Small", "Zone Label Size", options = ["Tiny", "Small", "Normal"], group = g5)
+string zoneStatsPlace= input.string("Follow Profile", "Zone Stats Position", options = ["Follow Profile", "On Price Action"], group = g5, tooltip = "Follow Profile moves the in-zone stat labels to the right alongside the profile so they don't cover candles (when the profile is placed Right of Price). On Price Action keeps the labels centered over the zone on the chart.")
+
+float wVol   = input.float(0.28, "  Weight · Volume",     minval = 0, maxval = 1, step = 0.02, group = g5)
+float wAbs   = input.float(0.24, "  Weight · Absorption", minval = 0, maxval = 1, step = 0.02, group = g5)
+float wTouch = input.float(0.22, "  Weight · Touches",    minval = 0, maxval = 1, step = 0.02, group = g5)
+float wRej   = input.float(0.14, "  Weight · Rejections", minval = 0, maxval = 1, step = 0.02, group = g5)
+float wRec   = input.float(0.12, "  Weight · Recency",    minval = 0, maxval = 1, step = 0.02, group = g5)
+
+string g6 = "⑥  MTF Flow Bias"
+bool   showMTF = input.bool(true, "Show MTF Flow Rows", group = g6)
+string mtfTF1  = input.timeframe("15",  "MTF #1", group = g6)
+string mtfTF2  = input.timeframe("60",  "MTF #2", group = g6)
+string mtfTF3  = input.timeframe("240", "MTF #3", group = g6)
+int    flowLen = input.int(14, "Flow EMA Length", minval = 3, maxval = 100, group = g6)
+
+string g7 = "⑦  Visuals & Theme"
+string theme = input.string("Plasma", "Color Theme", options = ["Plasma", "Cyber", "Ice & Fire", "Phosphor", "Mono"], group = g7, tooltip = "High-contrast palettes tuned for a black background.\n\nPlasma — aqua / rose / gold (default).\nCyber — cyan / violet / mint.\nIce & Fire — ice-blue / orange.\nPhosphor — green / red terminal.\nMono — greyscale.")
+bool   tintCandles = input.bool(true, "Tint Candles by Flow", group = g7)
+
+color buyCol   = switch theme
+    "Plasma"     => color.rgb(0, 229, 200)
+    "Cyber"      => color.rgb(0, 206, 209)
+    "Ice & Fire" => color.rgb(56, 189, 248)
+    "Phosphor"   => color.rgb(0, 230, 118)
+    => color.rgb(224, 224, 224)
+color sellCol  = switch theme
+    "Plasma"     => color.rgb(255, 46, 99)
+    "Cyber"      => color.rgb(157, 78, 221)
+    "Ice & Fire" => color.rgb(255, 120, 73)
+    "Phosphor"   => color.rgb(255, 82, 82)
+    => color.rgb(138, 138, 138)
+color accent   = switch theme
+    "Plasma"     => color.rgb(255, 200, 87)
+    "Cyber"      => color.rgb(77, 255, 181)
+    "Ice & Fire" => color.rgb(250, 204, 21)
+    "Phosphor"   => color.rgb(255, 215, 64)
+    => color.rgb(255, 255, 255)
+color absorbCol = switch theme
+    "Plasma"     => color.rgb(170, 80, 95)
+    "Cyber"      => color.rgb(120, 130, 165)
+    "Ice & Fire" => color.rgb(110, 130, 160)
+    "Phosphor"   => color.rgb(150, 125, 70)
+    => color.rgb(140, 140, 140)
+color mixCol = color.rgb(150, 158, 170)
+
+color panelBg  = #08090c
+color panelAlt = #11141c
+color panelHdr = #161b26
+color panelEdge= #2a2f3a
+color txtHi    = #e8ebf2
+color txtLo    = #79828f
+color neutral  = #5a6270
+
+string g8 = "⑧  Dashboard"
+bool   showDash = input.bool(true, "Show Dashboard", group = g8)
+string dashPosOpt = input.string("Top Right", "Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], group = g8)
+string dashSizeOpt= input.string("Normal", "Text Size", options = ["Tiny", "Small", "Normal"], group = g8)
+
+string g9 = "⑨  Strategy Execution"
+bool   stratEnable = input.bool(true, "Enable Strategy Orders", group = g9, tooltip = "Approach 2 (momentum/continuation): trade cluster prints in the direction of order flow. NOT the absorption→POC reversion (that engine is last-bar-only and cannot be backtested).")
+string stratDir    = input.string("all", "Trade Direction", options = ["long", "short", "all"], group = g9)
+string minTier     = input.string("Medium+", "Min Print Tier", options = ["Any", "Medium+", "Whale only"], group = g9, tooltip = "Only enter on prints of at least this size.")
+bool   reqCVD      = input.bool(true, "Require CVD Bias Alignment", group = g9, tooltip = "Longs need cumulative-delta bias > 0, shorts < 0.")
+bool   reqMTF      = input.bool(true, "Require MTF Flow Alignment (2 of 3)", group = g9, tooltip = "At least two of the three MTF flow reads must agree with the trade direction.")
+bool   reverseOpp  = input.bool(true, "Reverse on Opposite Print", group = g9, tooltip = "Off = only enter when flat (no reversals).")
+int    atrLenS     = input.int(14, "ATR Length (SL/TP)", minval = 1, group = g9)
+float  slMultS     = input.float(2.0, "Stop-Loss (xATR)", minval = 0.1, step = 0.1, group = g9)
+bool   useTPs      = input.bool(true, "Use ATR Take-Profit", group = g9)
+float  tpMultS     = input.float(3.0, "Take-Profit (xATR)", minval = 0.1, step = 0.1, group = g9)
+
+f_clamp(float v, float lo, float hi) => math.max(lo, math.min(hi, v))
+f_safeDiv(float a, float b) => b == 0.0 ? 0.0 : a / b
+
+f_fmtNum(float v) =>
+    float av = math.abs(v)
+    string sg = v < 0 ? "-" : ""
+    av >= 1e9 ? sg + str.tostring(av / 1e9, "#.##") + "B" : av >= 1e6 ? sg + str.tostring(av / 1e6, "#.##") + "M" : av >= 1e3 ? sg + str.tostring(av / 1e3, "#.##") + "K" : sg + str.tostring(av, "#")
+
+f_size(string s) =>
+    switch s
+        "Tiny"   => size.tiny
+        "Small"  => size.small
+        "Normal" => size.normal
+        => size.small
+
+f_dashPos(string p) =>
+    switch p
+        "Top Right"     => position.top_right
+        "Top Left"      => position.top_left
+        "Bottom Right"  => position.bottom_right
+        "Bottom Left"   => position.bottom_left
+        "Middle Right"  => position.middle_right
+        => position.top_right
+
+f_stars(float sc) => sc >= 8 ? "★★★★★" : sc >= 6.5 ? "★★★★" : sc >= 5 ? "★★★" : sc >= 3.5 ? "★★" : sc >= 2 ? "★" : "·"
+f_tier(float sc)  => sc >= 8 ? "ELITE" : sc >= 6.5 ? "STRONG" : sc >= 5 ? "MODERATE" : sc >= 3.5 ? "WEAK" : "FORMING"
+
+int   chartSec   = timeframe.in_seconds()
+int   targetSec  = math.max(1, int(chartSec / ltfGran))
+bool  useChartTf = not allowSeconds and timeframe.isseconds
+int   ltfSec     = useChartTf ? chartSec : allowSeconds ? targetSec : math.max(60, targetSec)
+string ltfTF     = useChartTf ? timeframe.period : timeframe.from_seconds(ltfSec)
+
+[ltfVol, ltfOpen, ltfClose, ltfHigh, ltfLow] = request.security_lower_tf(syminfo.tickerid, ltfTF, [volume, open, close, high, low])
+
+float upperWickBase = math.max(open, close)
+float lowerWickBase = math.min(open, close)
+bool  hasUpperWick  = high > upperWickBase
+bool  hasLowerWick  = low  < lowerWickBase
+
+float barDelta      = 0.0
+float barAbsorption = 0.0
+int   ltfN          = array.size(ltfVol)
+if ltfN > 0
+    for i = 0 to ltfN - 1
+        float v = array.get(ltfVol, i)
+        float c = array.get(ltfClose, i)
+        float o = array.get(ltfOpen, i)
+        int   d = c > o ? 1 : c < o ? -1 : 0
+        barDelta += v * d
+        if d > 0 and hasUpperWick and c >= upperWickBase and c <= high
+            barAbsorption += v
+        else if d < 0 and hasLowerWick and c <= lowerWickBase and c >= low
+            barAbsorption += v
+
+bool  deltaAvailable = ltfN > 0
+float netDelta = barDelta
+float absDelta = math.abs(netDelta)
+
+float vS_s = ta.percentile_linear_interpolation(volume, shortLen, smallPct)
+float vS_m = ta.percentile_linear_interpolation(volume, midLen,   smallPct)
+float vS_l = ta.percentile_linear_interpolation(volume, longLen,  smallPct)
+float vM_s = ta.percentile_linear_interpolation(volume, shortLen, mediumPct)
+float vM_m = ta.percentile_linear_interpolation(volume, midLen,   mediumPct)
+float vM_l = ta.percentile_linear_interpolation(volume, longLen,  mediumPct)
+float vB_s = ta.percentile_linear_interpolation(volume, shortLen, bigPct)
+float vB_m = ta.percentile_linear_interpolation(volume, midLen,   bigPct)
+float vB_l = ta.percentile_linear_interpolation(volume, longLen,  bigPct)
+
+float dS_s = ta.percentile_linear_interpolation(absDelta, shortLen, smallPct)
+float dS_m = ta.percentile_linear_interpolation(absDelta, midLen,   smallPct)
+float dS_l = ta.percentile_linear_interpolation(absDelta, longLen,  smallPct)
+float dM_s = ta.percentile_linear_interpolation(absDelta, shortLen, mediumPct)
+float dM_m = ta.percentile_linear_interpolation(absDelta, midLen,   mediumPct)
+float dM_l = ta.percentile_linear_interpolation(absDelta, longLen,  mediumPct)
+float dB_s = ta.percentile_linear_interpolation(absDelta, shortLen, bigPct)
+float dB_m = ta.percentile_linear_interpolation(absDelta, midLen,   bigPct)
+float dB_l = ta.percentile_linear_interpolation(absDelta, longLen,  bigPct)
+
+f_consensus(bool ps, bool pm, bool pl) =>
+    int hits = (ps ? 1 : 0) + (pm ? 1 : 0) + (pl ? 1 : 0)
+    switch consensusMode
+        "Any Window"          => hits >= 1
+        "Majority (2 of 3)"   => hits >= 2
+        "All Windows (strict)"=> hits >= 3
+        => hits >= 2
+
+bool volBig   = f_consensus(volume >= vB_s, volume >= vB_m, volume >= vB_l)
+bool volMed   = not volBig and f_consensus(volume >= vM_s, volume >= vM_m, volume >= vM_l)
+bool volSmall = not volBig and not volMed and f_consensus(volume >= vS_s, volume >= vS_m, volume >= vS_l)
+
+bool dBig   = f_consensus(absDelta >= dB_s, absDelta >= dB_m, absDelta >= dB_l)
+bool dMed   = not dBig and f_consensus(absDelta >= dM_s, absDelta >= dM_m, absDelta >= dM_l)
+bool dSmall = not dBig and not dMed and f_consensus(absDelta >= dS_s, absDelta >= dS_m, absDelta >= dS_l)
+
+f_detect(bool vHit, bool dHit) =>
+    switch (deltaAvailable ? detectMethod : "Volume Only")
+        "Volume Only"     => vHit
+        "Delta Only"      => dHit
+        "Volume + Delta"  => vHit and dHit
+        "Volume OR Delta" => vHit or dHit
+        => vHit
+
+bool isBig   = f_detect(volBig, dBig)
+bool isMed   = not isBig and f_detect(volMed or volBig, dMed or dBig)
+bool isSmall = not isBig and not isMed and f_detect(volSmall or volMed or volBig, dSmall or dMed or dBig)
+bool anyCluster = isSmall or isMed or isBig
+
+bool candleBuy  = close >= open
+bool candleSell = close < open
+bool isBuy = switch classifyMode
+    "Candle Direction" => candleBuy
+    "Delta Direction"  => deltaAvailable ? netDelta > 0 : candleBuy
+    "Both"             => deltaAvailable ? (candleBuy and netDelta > 0) : candleBuy
+    => candleBuy
+bool isSell = switch classifyMode
+    "Candle Direction" => candleSell
+    "Delta Direction"  => deltaAvailable ? netDelta < 0 : candleSell
+    "Both"             => deltaAvailable ? (candleSell and netDelta < 0) : candleSell
+    => candleSell
+
+float avgVol   = ta.sma(volume, midLen)
+float volRatio = avgVol > 0 ? volume / avgVol : 0.0
+
+var int lastClusterDir = 0
+if anyCluster
+    lastClusterDir := isBuy ? 1 : isSell ? -1 : 0
+
+var array<box> sbBoxes = array.new<box>()
+var array<box> wbBoxes = array.new<box>()
+var array<box> wsBoxes = array.new<box>()
+var array<box> ssBoxes = array.new<box>()
+var array<box> dBoxes  = array.new<box>()
+var array<box> aBoxes  = array.new<box>()
+var array<box> zBoxes  = array.new<box>()
+var array<label> zLabels = array.new<label>()
+var line  pocLine = na
+var line  vahLine = na
+var line  valLine = na
+var label pocLab  = na
+var label vahLab  = na
+var label valLab  = na
+var label volTtl  = na
+var label dTtl    = na
+var label aTtl    = na
+
+if array.size(sbBoxes) == 0
+    for i = 0 to profileBins - 1
+        array.push(sbBoxes, box.new(bar_index, close, bar_index, close, border_color = na, bgcolor = na))
+        array.push(wbBoxes, box.new(bar_index, close, bar_index, close, border_color = na, bgcolor = na))
+        array.push(wsBoxes, box.new(bar_index, close, bar_index, close, border_color = na, bgcolor = na))
+        array.push(ssBoxes, box.new(bar_index, close, bar_index, close, border_color = na, bgcolor = na))
+        array.push(dBoxes,  box.new(bar_index, close, bar_index, close, border_color = na, bgcolor = na))
+        array.push(aBoxes,  box.new(bar_index, close, bar_index, close, border_color = na, bgcolor = na))
+        array.push(zBoxes,  box.new(bar_index, close, bar_index, close, border_color = na, bgcolor = na))
+        array.push(zLabels, label.new(bar_index, close, "", style = label.style_label_right, color = na, textcolor = na, size = size.small))
+
+float hiWin = ta.highest(high, lookbackBars)
+float loWin = ta.lowest(low, lookbackBars)
+float rngWin= hiWin - loWin
+float binSz = rngWin / profileBins
+bool  validWindow = rngWin > 0 and binSz > 0
+float strengthThr = ta.percentile_linear_interpolation(volume, lookbackBars, strengthPct)
+int   lbEff = math.min(lookbackBars, bar_index + 1)
+float atr100 = ta.atr(100)
+
+float cdBias = f_safeDiv(math.sum(netDelta, lookbackBars), math.max(math.sum(absDelta, lookbackBars), 1.0))
+
+var float vPoc = na
+var float vVah = na
+var float vVal = na
+var float vBuyShare = na
+var float vSellShare = na
+var float vImb = na
+var float vAbsPeak = na
+var float vAbsTotal = na
+var float vAbsBias = na
+var float vScore = na
+var float vTopZonePx = na
+var float vTopZoneStr = na
+var int   vTopZoneSide = 0
+
+if barstate.islast and validWindow and array.size(sbBoxes) == profileBins
+    array<float> sbBin = array.new<float>(profileBins, 0.0)
+    array<float> wbBin = array.new<float>(profileBins, 0.0)
+    array<float> wsBin = array.new<float>(profileBins, 0.0)
+    array<float> ssBin = array.new<float>(profileBins, 0.0)
+    array<float> dBin  = array.new<float>(profileBins, 0.0)
+    array<float> aBin  = array.new<float>(profileBins, 0.0)
+    array<float> totBin= array.new<float>(profileBins, 0.0)
+    array<float> touchBin = array.new<float>(profileBins, 0.0)
+    array<float> rejBin   = array.new<float>(profileBins, 0.0)
+    array<float> recBin   = array.new<float>(profileBins, lbEff)
+
+    for off = 0 to lbEff - 1
+        float price = hlc3[off]
+        int   bi    = int(f_clamp(math.floor((price - loWin) / binSz), 0, profileBins - 1))
+        float v     = nz(volume[off])
+        float bd    = nz(barDelta[off])
+        float ab    = nz(barAbsorption[off])
+        bool  strong= v >= strengthThr
+        bool  buy   = close[off] >= open[off]
+        if buy and strong
+            array.set(sbBin, bi, array.get(sbBin, bi) + v)
+        else if buy
+            array.set(wbBin, bi, array.get(wbBin, bi) + v)
+        else if strong
+            array.set(ssBin, bi, array.get(ssBin, bi) + v)
+        else
+            array.set(wsBin, bi, array.get(wsBin, bi) + v)
+        array.set(dBin,  bi, array.get(dBin,  bi) + bd)
+        array.set(aBin,  bi, array.get(aBin,  bi) + ab)
+        array.set(totBin, bi, array.get(totBin, bi) + v)
+
+        int loI = int(f_clamp(math.floor((low[off]  - loWin) / binSz), 0, profileBins - 1))
+        int hiI = int(f_clamp(math.floor((high[off] - loWin) / binSz), 0, profileBins - 1))
+        for b = loI to hiI
+            array.set(touchBin, b, array.get(touchBin, b) + 1.0)
+            if off < array.get(recBin, b)
+                array.set(recBin, b, off)
+
+        float rng = high[off] - low[off]
+        if rng > 0
+            float uw = high[off] - math.max(open[off], close[off])
+            float lw = math.min(open[off], close[off]) - low[off]
+            if uw > rng * 0.5
+                array.set(rejBin, hiI, array.get(rejBin, hiI) + 1.0)
+            if lw > rng * 0.5
+                array.set(rejBin, loI, array.get(rejBin, loI) + 1.0)
+
+    float maxBinVol = totBin.max()
+    float maxAbsVol = aBin.max()
+    float maxRej    = rejBin.max()
+    float maxAbsD   = 0.0
+    float totVol    = totBin.sum()
+    float totBuy    = sbBin.sum() + wbBin.sum()
+    float totSell   = ssBin.sum() + wsBin.sum()
+    float totAbs    = aBin.sum()
+    for i = 0 to profileBins - 1
+        maxAbsD := math.max(maxAbsD, math.abs(array.get(dBin, i)))
+
+    int   pocIdx = array.indexof(totBin, maxBinVol)
+    float pocPx  = loWin + binSz * pocIdx + binSz * 0.5
+
+    array<bool> vaBin = array.new<bool>(profileBins, false)
+    if totVol > 0
+        float target = totVol * vaPercent / 100.0
+        float acc = array.get(totBin, pocIdx)
+        int loIx = pocIdx
+        int hiIx = pocIdx
+        array.set(vaBin, pocIdx, true)
+        while acc < target and (loIx > 0 or hiIx < profileBins - 1)
+            float upC = hiIx < profileBins - 1 ? array.get(totBin, hiIx + 1) : -1.0
+            float dnC = loIx > 0 ? array.get(totBin, loIx - 1) : -1.0
+            if upC >= dnC
+                hiIx += 1
+                acc += upC
+                array.set(vaBin, hiIx, true)
+            else
+                loIx -= 1
+                acc += dnC
+                array.set(vaBin, loIx, true)
+    int vahIx = pocIdx
+    int valIx = pocIdx
+    for i = 0 to profileBins - 1
+        if array.get(vaBin, i)
+            vahIx := math.max(vahIx, i)
+            valIx := math.min(valIx, i)
+    float vahPx = loWin + binSz * (vahIx + 1)
+    float valPx = loWin + binSz * valIx
+
+    float wSum = math.max(wVol + wAbs + wTouch + wRej + wRec, 0.0001)
+    array<float> sigArr = array.new<float>(profileBins, 0.0)
+    array<float> strArr = array.new<float>(profileBins, 0.0)
+    array<bool>  pkArr  = array.new<bool>(profileBins, false)
+    for i = 0 to profileBins - 1
+        float volF   = maxBinVol > 0 ? array.get(totBin, i) / maxBinVol : 0.0
+        float absF   = maxAbsVol > 0 ? array.get(aBin, i) / maxAbsVol : 0.0
+        float touchF = math.min(array.get(touchBin, i) / math.max(touchNorm, 1.0), 1.0)
+        float rejF   = maxRej > 0 ? array.get(rejBin, i) / maxRej : 0.0
+        float recF   = 1.0 - math.min(array.get(recBin, i) / math.max(lbEff, 1), 1.0)
+        float st     = (volF * wVol + absF * wAbs + touchF * wTouch + rejF * wRej + recF * wRec) / wSum * 10.0
+        array.set(strArr, i, f_clamp(st, 0.0, 10.0))
+        float sg = zoneSource == "Volume Node" ? volF : zoneSource == "Absorption" ? absF : (volF * 0.5 + absF * 0.5)
+        array.set(sigArr, i, sg)
+
+    array<float> peakStr = array.new<float>()
+    for i = 1 to profileBins - 2
+        if array.get(sigArr, i) > array.get(sigArr, i - 1) and array.get(sigArr, i) >= array.get(sigArr, i + 1) and array.get(sigArr, i) > 0
+            array.set(pkArr, i, true)
+            if array.get(strArr, i) >= minStrength
+                array.push(peakStr, array.get(strArr, i))
+    float effThr = minStrength
+    if array.size(peakStr) > maxZones
+        array<float> sorted = array.copy(peakStr)
+        array.sort(sorted, order.descending)
+        effThr := math.max(minStrength, array.get(sorted, maxZones - 1))
+
+    int volRight = profilePlace == "Overlay on Candles" ? bar_index + profileOffset : bar_index + profileOffset + profileWidth
+    int dWidth   = math.max(2, int(math.round(profileWidth / 9.0)))
+    int dLeft    = volRight + 2
+    int dRight   = dLeft + dWidth
+    int aLeft    = dRight + 3
+    int histLeft = bar_index - lbEff + 1
+
+    float absBelow = 0.0
+    float absAbove = 0.0
+    float bestStr  = 0.0
+    float bestPx   = na
+    int   bestSide = 0
+
+    for i = 0 to profileBins - 1
+        float lo  = loWin + binSz * i
+        float hi  = lo + binSz
+        float mid = math.avg(lo, hi)
+        float sbV = array.get(sbBin, i)
+        float wbV = array.get(wbBin, i)
+        float wsV = array.get(wsBin, i)
+        float ssV = array.get(ssBin, i)
+        float aV  = array.get(aBin, i)
+        float dV  = array.get(dBin, i)
+        float tV  = array.get(totBin, i)
+        bool  inVA = array.get(vaBin, i)
+
+        int totLen = maxBinVol > 0 ? int(math.round((tV / maxBinVol) * profileWidth)) : 0
+        int sbLen  = tV > 0 ? int(math.round(totLen * sbV / tV)) : 0
+        int wbLen  = tV > 0 ? int(math.round(totLen * wbV / tV)) : 0
+        int wsLen  = tV > 0 ? int(math.round(totLen * wsV / tV)) : 0
+        int ssLen  = math.max(0, totLen - sbLen - wbLen - wsLen)
+
+        int strongT = showValueArea and inVA ? 16 : showValueArea ? 46 : 28
+        int weakT   = showValueArea and inVA ? 50 : showValueArea ? 72 : 62
+
+        int sbR = volRight,         sbL = sbR - sbLen
+        int wbR = sbL,              wbL = wbR - wbLen
+        int wsR = wbL,              wsL = wsR - wsLen
+        int ssR = wsL,              ssL = ssR - ssLen
+
+        box sb = array.get(sbBoxes, i)
+        box.set_lefttop(sb, sbL, hi)
+        box.set_rightbottom(sb, sbR, lo)
+        box.set_bgcolor(sb, showVolProfile and sbLen > 0 ? color.new(buyCol, strongT) : na)
+
+        box wb = array.get(wbBoxes, i)
+        box.set_lefttop(wb, wbL, hi)
+        box.set_rightbottom(wb, wbR, lo)
+        box.set_bgcolor(wb, showVolProfile and wbLen > 0 ? color.new(buyCol, weakT) : na)
+
+        box ws = array.get(wsBoxes, i)
+        box.set_lefttop(ws, wsL, hi)
+        box.set_rightbottom(ws, wsR, lo)
+        box.set_bgcolor(ws, showVolProfile and wsLen > 0 ? color.new(sellCol, weakT) : na)
+
+        box ssb = array.get(ssBoxes, i)
+        box.set_lefttop(ssb, ssL, hi)
+        box.set_rightbottom(ssb, ssR, lo)
+        box.set_bgcolor(ssb, showVolProfile and ssLen > 0 ? color.new(sellCol, strongT) : na)
+
+        float dAbs = math.abs(dV)
+        int   dTr  = maxAbsD > 0 ? 86 - int(math.round((dAbs / maxAbsD) * 78.0)) : 86
+        color dCol = dV >= 0 ? buyCol : sellCol
+        box db = array.get(dBoxes, i)
+        box.set_lefttop(db, dLeft, hi)
+        box.set_rightbottom(db, dRight, lo)
+        box.set_bgcolor(db, showDeltaCol and dAbs > 0 ? color.new(dCol, dTr) : na)
+        box.set_text(db, showDeltaCol and dAbs > 0 ? (dV >= 0 ? "+" : "") + f_fmtNum(dV) : "")
+        box.set_text_color(db, showDeltaCol and dAbs > 0 ? txtHi : na)
+        box.set_text_size(db, size.tiny)
+        box.set_text_halign(db, text.align_center)
+        box.set_text_valign(db, text.align_center)
+
+        int aLen = maxAbsVol > 0 ? int(math.round((aV / maxAbsVol) * (profileWidth * 0.7))) : 0
+        box ab2 = array.get(aBoxes, i)
+        box.set_lefttop(ab2, aLeft, hi)
+        box.set_rightbottom(ab2, aLeft + aLen, lo)
+        box.set_bgcolor(ab2, showAbsorbCol and aLen > 0 ? color.new(absorbCol, 42) : na)
+        box.set_border_color(ab2, showAbsorbCol and aLen > 0 ? color.new(absorbCol, 72) : na)
+
+        float zStr = array.get(strArr, i)
+        bool  drawZone = showLevels and array.get(pkArr, i) and zStr >= effThr and zStr >= minStrength
+        bool  isSupport = mid < close
+        color zCol = isSupport ? buyCol : sellCol
+        int   zTr  = int(f_clamp(88 - (zStr / 10.0) * 34.0, 50, 92))
+
+        box zb = array.get(zBoxes, i)
+        box.set_lefttop(zb, histLeft, hi)
+        box.set_rightbottom(zb, bar_index, lo)
+        box.set_bgcolor(zb, drawZone ? color.new(zCol, zTr) : na)
+        box.set_border_color(zb, drawZone ? color.new(zCol, math.max(0, zTr - 38)) : na)
+
+        label zl = array.get(zLabels, i)
+        if drawZone
+            string stars = f_stars(zStr)
+            string sideTag = isSupport ? "SUPPORT" : "RESIST"
+            string l1 = stars + "  " + str.tostring(math.round(zStr * 10) / 10, "#.0") + "/10 · " + f_tier(zStr) + " · " + sideTag
+            string l2 = showZoneStats ? "V:" + f_fmtNum(tV) + "  A:" + f_fmtNum(aV) + "  T:" + str.tostring(int(array.get(touchBin, i))) + "  R:" + str.tostring(int(array.get(rejBin, i))) : ""
+            bool statsRight = zoneStatsPlace == "Follow Profile" and profilePlace != "Overlay on Candles"
+            label.set_xy(zl, statsRight ? bar_index + 1 : bar_index, mid)
+            label.set_text(zl, l2 == "" ? l1 : l1 + "\n" + l2)
+            label.set_textcolor(zl, txtHi)
+            label.set_color(zl, color.new(panelBg, 18))
+            label.set_size(zl, f_size(zoneLabSize))
+            label.set_style(zl, statsRight ? label.style_label_left : label.style_label_right)
+            if zStr > bestStr
+                bestStr := zStr
+                bestPx  := mid
+                bestSide := isSupport ? 1 : -1
+        else
+            label.set_text(zl, "")
+            label.set_color(zl, na)
+            label.set_textcolor(zl, na)
+
+        if mid < close
+            absBelow += aV
+        else
+            absAbove += aV
+
+    int lineRight = volRight + dWidth + 14
+    if not na(pocLine)
+        line.delete(pocLine)
+        line.delete(vahLine)
+        line.delete(valLine)
+        label.delete(pocLab)
+        label.delete(vahLab)
+        label.delete(valLab)
+    if showValueArea
+        pocLine := line.new(histLeft, pocPx, lineRight, pocPx, color = accent, width = 2)
+        vahLine := line.new(histLeft, vahPx, lineRight, vahPx, color = color.new(neutral, 20), style = line.style_dashed)
+        valLine := line.new(histLeft, valPx, lineRight, valPx, color = color.new(neutral, 20), style = line.style_dashed)
+        pocLab  := label.new(lineRight, pocPx, "POC " + str.tostring(pocPx, format.mintick), style = label.style_label_left, color = color.new(panelBg, 0), textcolor = accent, size = size.small)
+        vahLab  := label.new(lineRight, vahPx, "VAH", style = label.style_label_left, color = color.new(panelBg, 0), textcolor = txtLo, size = size.tiny)
+        valLab  := label.new(lineRight, valPx, "VAL", style = label.style_label_left, color = color.new(panelBg, 0), textcolor = txtLo, size = size.tiny)
+
+    float titleY = hiWin + rngWin * 0.04
+    if not na(volTtl)
+        label.delete(volTtl)
+        label.delete(dTtl)
+        label.delete(aTtl)
+    volTtl := label.new(volRight - int(profileWidth * 0.5), titleY, showVolProfile ? "LIQUIDITY" : "", style = label.style_label_down, color = color.new(panelBg, 100), textcolor = showVolProfile ? txtLo : na, size = size.tiny)
+    dTtl   := label.new(int(math.avg(dLeft, dRight)), titleY, showDeltaCol ? "Δ" : "", style = label.style_label_down, color = color.new(panelBg, 100), textcolor = showDeltaCol ? txtLo : na, size = size.tiny)
+    aTtl   := label.new(aLeft + int(profileWidth * 0.3), titleY, showAbsorbCol ? "ABSORB" : "", style = label.style_label_down, color = color.new(panelBg, 100), textcolor = showAbsorbCol ? txtLo : na, size = size.tiny)
+
+    float imb       = f_safeDiv(totBuy - totSell, totVol)
+    float buyShare  = f_safeDiv(totBuy, totVol)
+    float sellShare = f_safeDiv(totSell, totVol)
+    float absBias   = f_safeDiv(absBelow - absAbove, math.max(absBelow + absAbove, 1.0))
+    float compClust = lastClusterDir
+    float score = (imb * 0.32 + f_clamp(cdBias, -1, 1) * 0.30 + absBias * 0.23 + compClust * 0.15) * 100.0
+
+    vPoc := pocPx
+    vVah := vahPx
+    vVal := valPx
+    vBuyShare := buyShare
+    vSellShare := sellShare
+    vImb := imb
+    vAbsPeak := maxAbsVol > 0 ? (loWin + binSz * array.indexof(aBin, maxAbsVol) + binSz * 0.5) : na
+    vAbsTotal := totAbs
+    vAbsBias := absBias
+    vScore := score
+    vTopZonePx := bestPx
+    vTopZoneStr := bestStr
+    vTopZoneSide := bestSide
+
+float flowRaw  = ta.ema(volume * (close >= open ? 1.0 : -1.0), flowLen)
+float flowNorm = f_safeDiv(flowRaw, math.max(ta.ema(volume, flowLen), 1.0))
+float mtf1 = request.security(syminfo.tickerid, mtfTF1, flowNorm[1], lookahead = barmerge.lookahead_on)
+float mtf2 = request.security(syminfo.tickerid, mtfTF2, flowNorm[1], lookahead = barmerge.lookahead_on)
+float mtf3 = request.security(syminfo.tickerid, mtfTF3, flowNorm[1], lookahead = barmerge.lookahead_on)
+
+// ════════════════════════════════════════════════════════════════════════════
+//  STRATEGY EXECUTION (Approach 2: order-flow momentum / continuation)
+//  Per-bar signals only — cluster print + CVD bias + MTF flow alignment.
+// ════════════════════════════════════════════════════════════════════════════
+float atrStrat = ta.atr(atrLenS)
+int mtfBullCnt = (mtf1 > 0 ? 1 : 0) + (mtf2 > 0 ? 1 : 0) + (mtf3 > 0 ? 1 : 0)
+int mtfBearCnt = (mtf1 < 0 ? 1 : 0) + (mtf2 < 0 ? 1 : 0) + (mtf3 < 0 ? 1 : 0)
+bool tierOk = minTier == "Whale only" ? isBig : minTier == "Medium+" ? (isBig or isMed) : anyCluster
+bool longSig  = stratEnable and tierOk and isBuy  and (not reqCVD or cdBias > 0) and (not reqMTF or mtfBullCnt >= 2) and stratDir != "short"
+bool shortSig = stratEnable and tierOk and isSell and (not reqCVD or cdBias < 0) and (not reqMTF or mtfBearCnt >= 2) and stratDir != "long"
+
+var float sSL = na
+var float sTP = na
+bool flatPos = strategy.position_size == 0
+
+if longSig and (reverseOpp or flatPos)
+    sSL := close - atrStrat * slMultS
+    sTP := close + atrStrat * tpMultS
+    strategy.entry("Long", strategy.long)
+if shortSig and (reverseOpp or flatPos)
+    sSL := close + atrStrat * slMultS
+    sTP := close - atrStrat * tpMultS
+    strategy.entry("Short", strategy.short)
+
+if strategy.position_size > 0
+    strategy.exit("XL", from_entry="Long", stop = not na(sSL) ? sSL : na, limit = useTPs and not na(sTP) ? sTP : na)
+if strategy.position_size < 0
+    strategy.exit("XS", from_entry="Short", stop = not na(sSL) ? sSL : na, limit = useTPs and not na(sTP) ? sTP : na)
+
+color flowTint = na
+if tintCandles
+    flowTint := isBuy ? color.new(buyCol, 28) : isSell ? color.new(sellCol, 28) : color.new(mixCol, 45)
+barcolor(tintCandles ? flowTint : na, title = "Flow Tint")
+
+var table dash = table.new(f_dashPos(dashPosOpt), 2, 23, bgcolor = panelBg, frame_color = panelEdge, frame_width = 1, border_color = color.new(panelEdge, 40), border_width = 1)
+
+f_cell(int col, int row, string txt, color tc, color bg) =>
+    table.cell(dash, col, row, txt, text_color = tc, bgcolor = bg, text_size = f_size(dashSizeOpt), text_halign = text.align_left)
+
+f_biasTag(float b) =>
+    string t = b > 0.15 ? "▲ BULL" : b < -0.15 ? "▼ BEAR" : "● FLAT"
+    color  c = b > 0.15 ? buyCol : b < -0.15 ? sellCol : neutral
+    [t, c]
+
+if showDash and barstate.islast
+    string tierTxt = isBig ? "WHALE" : isMed ? "MEDIUM" : isSmall ? "SMALL" : "—"
+    string sideTxt = anyCluster ? (isBuy ? "BUY" : isSell ? "SELL" : "MIXED") : "—"
+    color  sideCol = isBuy ? buyCol : isSell ? sellCol : mixCol
+    float  scoreV  = nz(vScore)
+    string scoreTx = (scoreV >= 0 ? "+" : "") + str.tostring(scoreV, "#") + (scoreV > 20 ? "  ACCUM" : scoreV < -20 ? "  DISTRIB" : "  BALANCED")
+    color  scoreCol= scoreV > 20 ? buyCol : scoreV < -20 ? sellCol : neutral
+    float  pvp     = nz(vPoc) > 0 ? f_safeDiv(close - vPoc, atr100) : 0.0
+
+    [t1, c1] = f_biasTag(mtf1)
+    [t2, c2] = f_biasTag(mtf2)
+    [t3, c3] = f_biasTag(mtf3)
+
+    f_cell(0, 0, "◢ ORDERFLOW MATRIX", accent, panelHdr)
+    f_cell(1, 0, timeframe.period + " · " + syminfo.ticker, txtLo, panelHdr)
+
+    f_cell(0, 1, "── ORDER FLOW ──", txtLo, panelAlt)
+    f_cell(1, 1, "", txtLo, panelAlt)
+    f_cell(0, 2, "Last Print", txtLo, panelBg)
+    f_cell(1, 2, tierTxt + " · " + sideTxt, sideCol, panelBg)
+    f_cell(0, 3, "Bar Delta", txtLo, panelBg)
+    f_cell(1, 3, deltaAvailable ? (netDelta >= 0 ? "+" : "") + f_fmtNum(netDelta) : "n/a", netDelta >= 0 ? buyCol : sellCol, panelBg)
+    f_cell(0, 4, "Bar Volume", txtLo, panelBg)
+    f_cell(1, 4, f_fmtNum(volume) + "  (" + str.tostring(volRatio, "#.#") + "x)", txtHi, panelBg)
+    f_cell(0, 5, "CVD Bias", txtLo, panelBg)
+    f_cell(1, 5, str.tostring(cdBias * 100, "#") + "%", cdBias >= 0 ? buyCol : sellCol, panelBg)
+
+    f_cell(0, 6, "── LIQUIDITY PROFILE ──", txtLo, panelAlt)
+    f_cell(1, 6, "", txtLo, panelAlt)
+    f_cell(0, 7, "POC", txtLo, panelBg)
+    f_cell(1, 7, na(vPoc) ? "—" : str.tostring(vPoc, format.mintick), accent, panelBg)
+    f_cell(0, 8, "VAH", txtLo, panelBg)
+    f_cell(1, 8, na(vVah) ? "—" : str.tostring(vVah, format.mintick), txtHi, panelBg)
+    f_cell(0, 9, "VAL", txtLo, panelBg)
+    f_cell(1, 9, na(vVal) ? "—" : str.tostring(vVal, format.mintick), txtHi, panelBg)
+    f_cell(0, 10, "Buy / Sell Share", txtLo, panelBg)
+    f_cell(1, 10, str.tostring(nz(vBuyShare) * 100, "#") + "% / " + str.tostring(nz(vSellShare) * 100, "#") + "%", nz(vImb) >= 0 ? buyCol : sellCol, panelBg)
+    f_cell(0, 11, "Net Imbalance", txtLo, panelBg)
+    f_cell(1, 11, (nz(vImb) >= 0 ? "+" : "") + str.tostring(nz(vImb) * 100, "#") + "%", nz(vImb) >= 0 ? buyCol : sellCol, panelBg)
+    f_cell(0, 12, "Price vs POC", txtLo, panelBg)
+    f_cell(1, 12, (pvp >= 0 ? "+" : "") + str.tostring(pvp, "#.0") + " ATR", pvp >= 0 ? buyCol : sellCol, panelBg)
+
+    f_cell(0, 13, "── KEY ZONES ──", txtLo, panelAlt)
+    f_cell(1, 13, "", txtLo, panelAlt)
+    f_cell(0, 14, "Top Zone", txtLo, panelBg)
+    f_cell(1, 14, na(vTopZonePx) ? "—" : str.tostring(vTopZonePx, format.mintick) + " · " + (vTopZoneSide > 0 ? "SUP" : "RES"), vTopZoneSide > 0 ? buyCol : vTopZoneSide < 0 ? sellCol : neutral, panelBg)
+    f_cell(0, 15, "Top Zone Strength", txtLo, panelBg)
+    f_cell(1, 15, na(vTopZonePx) ? "—" : f_stars(nz(vTopZoneStr)) + " " + str.tostring(math.round(nz(vTopZoneStr) * 10) / 10, "#.0") + "/10", accent, panelBg)
+    f_cell(0, 16, "Absorption Peak", txtLo, panelBg)
+    f_cell(1, 16, na(vAbsPeak) ? "—" : str.tostring(vAbsPeak, format.mintick), absorbCol, panelBg)
+    f_cell(0, 17, "Absorption Side", txtLo, panelBg)
+    f_cell(1, 17, nz(vAbsBias) > 0.1 ? "SUPPORT" : nz(vAbsBias) < -0.1 ? "RESISTANCE" : "BALANCED", nz(vAbsBias) > 0.1 ? buyCol : nz(vAbsBias) < -0.1 ? sellCol : neutral, panelBg)
+
+    if showMTF
+        f_cell(0, 18, "── MTF FLOW ──", txtLo, panelAlt)
+        f_cell(1, 18, mtfTF1 + "/" + mtfTF2 + "/" + mtfTF3, txtLo, panelAlt)
+        f_cell(0, 19, "Flow Bias", txtLo, panelBg)
+        f_cell(1, 19, t1 + "  " + t2 + "  " + t3, c2, panelBg)
+    else
+        f_cell(0, 18, "", txtLo, panelBg)
+        f_cell(1, 18, "", txtLo, panelBg)
+        f_cell(0, 19, "", txtLo, panelBg)
+        f_cell(1, 19, "", txtLo, panelBg)
+
+    f_cell(0, 20, "── FLOW PRESSURE ──", txtLo, panelAlt)
+    f_cell(1, 20, "", txtLo, panelAlt)
+    f_cell(0, 21, "Score", txtLo, panelBg)
+    f_cell(1, 21, scoreTx, scoreCol, panelBg)
+    f_cell(0, 22, "Engine", neutral, panelBg)
+    f_cell(1, 22, deltaAvailable ? "LTF " + ltfTF : "Vol-only", neutral, panelBg)
+
+var float cumVol = 0.0
+cumVol += nz(volume)
+var table warnBox = table.new(position.middle_center, 1, 1, bgcolor = color.new(color.black, 100))
+if barstate.islast
+    if cumVol == 0
+        table.cell(warnBox, 0, 0, "\n  ⚠  NO VOLUME DATA  ⚠  \n\n  OrderFlow Matrix requires volume to operate.  \n\n  Switch to a volume-bearing symbol.  \n", text_color = color.white, text_size = size.large, bgcolor = color.rgb(255, 46, 99))
+    else
+        table.cell(warnBox, 0, 0, "", text_color = color.new(color.black, 100), bgcolor = color.new(color.black, 100))
+
+alertcondition(isBig, "Whale Print", "OrderFlow Matrix: Whale print detected.")
+alertcondition(isBig or isMed, "Medium+ Print", "OrderFlow Matrix: Medium or whale print detected.")
+alertcondition(anyCluster, "Any Print", "OrderFlow Matrix: New order-flow cluster detected.")
+alertcondition(anyCluster and isBuy, "Buy Print", "OrderFlow Matrix: Buy-side cluster detected.")
+alertcondition(anyCluster and isSell, "Sell Print", "OrderFlow Matrix: Sell-side cluster detected.")
