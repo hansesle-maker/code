@@ -1,0 +1,467 @@
+// This work is licensed under an Attribution-ShareAlike 4.0 International License (CC BY-SA 4.0)
+// https://creativecommons.org/licenses/by-sa/4.0/
+// © Uptrick — converted from indicator to STRATEGY
+//@version=6
+
+//    Uptrick: Trend Pressure Line — Strategy conversion
+//    Signal & pressure logic unchanged; adds strategy entries on the Up/Down
+//    signals, an ATR take-profit (TP ATR Multiplier) and an optional ATR
+//    stop-loss, plus a long/short/all direction filter. Opposite signals
+//    reverse the position.
+
+strategy("Uptrick: Trend Pressure Line Strategy", shorttitle="TPL ST", overlay=true,
+     max_labels_count=500, initial_capital=10000, default_qty_type=strategy.percent_of_equity,
+     default_qty_value=100, commission_type=strategy.commission.percent, commission_value=0.04,
+     slippage=1, pyramiding=0, calc_on_every_tick=false)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Inputs
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+grpEngine = "01. Core Trend Engine"
+
+src             = input.source(close, "Source", group=grpEngine)
+trendLen        = input.int(34, "Trend Length", minval=1, group=grpEngine)
+atrLen          = input.int(14, "ATR Length", minval=1, group=grpEngine)
+pressureSmooth  = input.int(8, "Pressure Smoothness", minval=1, group=grpEngine)
+lineSmoothLen   = input.int(7, "Line Smoothness", minval=1, group=grpEngine)
+
+grpMix = "02. Pressure Formula"
+
+priceWeight     = input.float(0.50, "Price Position Weight", step=0.05, group=grpMix)
+bodyWeight      = input.float(0.30, "Candle Body Weight", step=0.05, group=grpMix)
+momentumWeight  = input.float(0.20, "Momentum Weight", step=0.05, group=grpMix)
+
+grpSignals = "03. Up / Down Signals"
+
+enableSignals = input.bool(true, "Show Up / Down Signals", group=grpSignals)
+threshold     = input.float(0.15, "Trend Threshold", step=0.01, group=grpSignals)
+cooldownBars  = input.int(0, "Signal Cooldown", minval=0, group=grpSignals)
+
+signalAnchor = input.string("Default", "Signal Anchor", options=[
+     "Default",
+     "High/Low",
+     "Close",
+     "Trend Line"
+ ], group=grpSignals)
+
+grpTp = "04. Take Profit Signals"
+
+showTpSignals = input.bool(false, "Show TP Signals", group=grpTp)
+tpAtrMult     = input.float(2.0, "TP ATR Multiplier", minval=0.1, step=0.1, group=grpTp)
+
+grpStrat = "04b. Strategy Execution"
+
+i_tradeDir = input.string("all", "Trade Direction", options=["long", "short", "all"], group=grpStrat)
+i_useSL    = input.bool(true, "Use ATR Stop-Loss", group=grpStrat)
+i_slMult   = input.float(1.5, "SL ATR Multiplier", minval=0.1, step=0.1, group=grpStrat)
+i_useTP    = input.bool(true, "Use ATR Take-Profit (uses TP ATR Multiplier)", group=grpStrat)
+
+grpVisual = "05. Visuals"
+
+lineWidth = input.int(5, "Line Width", minval=1, maxval=8, group=grpVisual)
+
+gradientSensitivity = input.float(1.20, "Gradient Sensitivity", minval=0.1, step=0.05, group=grpVisual)
+gradientSmoothLen   = input.int(5, "Gradient Smoothness", minval=1, group=grpVisual)
+
+barColorMode = input.string("Current Default", "Bar Coloring Mode", options=[
+     "Reversal Probability",
+     "Latest Signal",
+     "Current Default"
+ ], group=grpVisual)
+
+grpReversal = "06. Reversal Probability"
+
+reversalLookback    = input.int(50, "Reversal Lookback", minval=10, group=grpReversal)
+reversalSensitivity = input.float(1.30, "Reversal Sensitivity", minval=0.1, step=0.05, group=grpReversal)
+highReversalLevel   = input.float(70.0, "High Reversal Alert Level %", minval=1, maxval=100, step=1, group=grpReversal)
+
+grpAlerts = "07. Extra Alert Levels"
+
+strongPressureLevel  = input.float(0.75, "Strong Pressure Level", minval=0.1, step=0.05, group=grpAlerts)
+extremePressureLevel = input.float(1.25, "Extreme Pressure Level", minval=0.1, step=0.05, group=grpAlerts)
+
+grpTable = "08. Dashboard Table"
+
+showTable = input.bool(true, "Show Table", group=grpTable)
+
+tablePos = input.string("Top Right", "Table Position", options=[
+     "Top Right",
+     "Top Left",
+     "Bottom Right",
+     "Bottom Left"
+ ], group=grpTable)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Colors
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+bullMain    = color.new(#5CF0D7, 0)
+bearMain    = color.new(#B32AC3, 0)
+neutralMain = color.new(#FFD84D, 0)
+
+darkBg      = color.new(#000104, 12)
+headBg      = color.new(#111827, 0)
+subHeadBg   = color.new(#1F2937, 0)
+softBorder  = color.new(color.white, 55)
+
+blackText   = color.new(#000000, 0)
+whiteText   = color.white
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Functions
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+f_clamp(_x, _min, _max) =>
+    math.max(_min, math.min(_x, _max))
+
+f_colorGradient(_ratio, _colA, _colB) =>
+    rA = color.r(_colA)
+    gA = color.g(_colA)
+    bA = color.b(_colA)
+    rB = color.r(_colB)
+    gB = color.g(_colB)
+    bB = color.b(_colB)
+    rr = rA + int((rB - rA) * _ratio)
+    rg = gA + int((gB - gA) * _ratio)
+    rb = bA + int((bB - bA) * _ratio)
+    color.rgb(rr, rg, rb, 0)
+
+f_threeColorGradient(_ratio, _bear, _neutral, _bull) =>
+    _ratio <= 0.5 ? f_colorGradient(_ratio * 2.0, _bear, _neutral) : f_colorGradient((_ratio - 0.5) * 2.0, _neutral, _bull)
+
+f_tablePosition(_pos) =>
+    _pos == "Top Left" ? position.top_left : _pos == "Bottom Right" ? position.bottom_right : _pos == "Bottom Left" ? position.bottom_left : position.top_right
+
+f_stateText(_bull, _bear) =>
+    _bull ? "𝓑𝓾𝓵𝓵𝓲𝓼𝓱" : _bear ? "𝓑𝓮𝓪𝓻𝓲𝓼𝓱" : "𝓝𝓮𝓾𝓽𝓻𝓪𝓵"
+
+f_signalText(_sig) =>
+    _sig == "bull" ? "𝓤𝓹" : _sig == "bear" ? "𝓓𝓸𝔀𝓷" : "𝓝𝓸𝓷𝓮"
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Trend Pressure Engine
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+basis = ta.ema(src, trendLen)
+
+atrValue = ta.atr(atrLen)
+safeAtr = atrValue != 0.0 ? atrValue : syminfo.mintick
+
+body = close - open
+momentum = src - src[1]
+
+pricePressure = (src - basis) / safeAtr
+bodyPressure = body / safeAtr
+momentumPressure = momentum / safeAtr
+
+totalWeight = priceWeight + bodyWeight + momentumWeight
+safeWeight = totalWeight != 0.0 ? totalWeight : 1.0
+
+rawPressure = (pricePressure * priceWeight + bodyPressure * bodyWeight + momentumPressure * momentumWeight) / safeWeight
+pressure = ta.ema(rawPressure, pressureSmooth)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Trend State
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+bullTrend = pressure > threshold
+bearTrend = pressure < -threshold
+neutralTrend = not bullTrend and not bearTrend
+
+trendFlipBull = bullTrend and bearTrend[1]
+trendFlipBear = bearTrend and bullTrend[1]
+
+neutralToBull = bullTrend and neutralTrend[1]
+neutralToBear = bearTrend and neutralTrend[1]
+
+bullToNeutral = neutralTrend and bullTrend[1]
+bearToNeutral = neutralTrend and bearTrend[1]
+
+var string lastSignal = ""
+var int lastSignalBar = na
+
+barsOk = na(lastSignalBar) or bar_index - lastSignalBar >= cooldownBars
+
+rawLong = bullTrend and not bullTrend[1]
+rawShort = bearTrend and not bearTrend[1]
+
+canLong = lastSignal != "bull"
+canShort = lastSignal != "bear"
+
+finalLong = enableSignals and rawLong and barsOk and canLong
+finalShort = enableSignals and rawShort and barsOk and canShort
+
+if finalLong
+    lastSignalBar := bar_index
+    lastSignal := "bull"
+
+if finalShort
+    lastSignalBar := bar_index
+    lastSignal := "bear"
+
+barsSinceSignal = na(lastSignalBar) ? na : bar_index - lastSignalBar
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Smooth Gradient Line
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+rawTrendLine = basis + pressure * safeAtr
+trendLine = ta.ema(rawTrendLine, lineSmoothLen)
+
+smoothGradientPressure = ta.ema(pressure, gradientSmoothLen)
+
+gradientRaw = 0.5 + smoothGradientPressure / (2.0 * gradientSensitivity)
+gradientRatio = f_clamp(gradientRaw, 0.0, 1.0)
+
+lineColor = f_threeColorGradient(gradientRatio, bearMain, neutralMain, bullMain)
+
+a= plot(trendLine, "Trend Pressure Line", color=lineColor, linewidth=lineWidth)
+fill(a, plot(close, color = color.new(color.black,100)), trendLine, close, color.new(lineColor,50), color.new(color.black,100))
+
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Reversal Probability
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+pressureAbs = math.abs(pressure)
+
+pressureExtreme = ta.highest(pressureAbs, reversalLookback)
+pressureExtremeSafe = pressureExtreme != 0.0 ? pressureExtreme : 1.0
+
+distanceFromLine = math.abs(close - trendLine) / safeAtr
+pressureStretch = pressureAbs / pressureExtremeSafe
+
+trendExhaustion = pressureStretch * 0.65 + distanceFromLine * 0.35
+
+reversalProbabilityRaw = trendExhaustion / reversalSensitivity
+reversalProbability = f_clamp(reversalProbabilityRaw, 0.0, 1.0)
+
+reversalPercent = reversalProbability * 100.0
+
+oppositeColor = bullTrend ? bearMain : bearTrend ? bullMain : neutralMain
+reversalColor = f_colorGradient(reversalProbability, lineColor, oppositeColor)
+
+highReversal = reversalPercent >= highReversalLevel
+newHighReversal = highReversal and not highReversal[1]
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Bar Coloring
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+latestSignalColor = lastSignal == "bull" ? bullMain : lastSignal == "bear" ? bearMain : neutralMain
+currentDefaultColor = lineColor
+
+barColor = barColorMode == "Reversal Probability" ? reversalColor : barColorMode == "Latest Signal" ? latestSignalColor : currentDefaultColor
+
+plotcandle(
+     open,
+     high,
+     low,
+     close,
+     title="Trend Pressure Candles",
+     color=barColor,
+     wickcolor=barColor,
+     bordercolor=barColor
+)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Take Profit Logic
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+var float entryPrice = na
+var bool tpHit = false
+
+if finalLong
+    entryPrice := close
+    tpHit := false
+
+if finalShort
+    entryPrice := close
+    tpHit := false
+
+longTpLevel = entryPrice + safeAtr * tpAtrMult
+shortTpLevel = entryPrice - safeAtr * tpAtrMult
+
+longTpSignal = showTpSignals and lastSignal == "bull" and not tpHit and not na(entryPrice) and high >= longTpLevel
+shortTpSignal = showTpSignals and lastSignal == "bear" and not tpHit and not na(entryPrice) and low <= shortTpLevel
+
+if longTpSignal or shortTpSignal
+    tpHit := true
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Strategy Execution
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+strategy.risk.allow_entry_in(i_tradeDir == "long" ? strategy.direction.long :
+     i_tradeDir == "short" ? strategy.direction.short : strategy.direction.all)
+
+// Freeze SL/TP at the entry bar. Opposite signals reverse the position.
+var float stratSL = na
+var float stratTP = na
+
+if finalLong
+    stratSL := close - safeAtr * i_slMult
+    stratTP := close + safeAtr * tpAtrMult
+    strategy.entry("Long", strategy.long)
+
+if finalShort
+    stratSL := close + safeAtr * i_slMult
+    stratTP := close - safeAtr * tpAtrMult
+    strategy.entry("Short", strategy.short)
+
+if strategy.position_size > 0
+    strategy.exit("Long Exit", from_entry="Long",
+         stop  = i_useSL and not na(stratSL) ? stratSL : na,
+         limit = i_useTP and not na(stratTP) ? stratTP : na)
+
+if strategy.position_size < 0
+    strategy.exit("Short Exit", from_entry="Short",
+         stop  = i_useSL and not na(stratSL) ? stratSL : na,
+         limit = i_useTP and not na(stratTP) ? stratTP : na)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Signal Anchors
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+longAnchorY = signalAnchor == "Close" ? close : signalAnchor == "Trend Line" ? trendLine : signalAnchor == "High/Low" ? low : na
+shortAnchorY = signalAnchor == "Close" ? close : signalAnchor == "Trend Line" ? trendLine : signalAnchor == "High/Low" ? high : na
+
+tpLongAnchorY = signalAnchor == "Close" ? close : signalAnchor == "Trend Line" ? trendLine : signalAnchor == "High/Low" ? high : na
+tpShortAnchorY = signalAnchor == "Close" ? close : signalAnchor == "Trend Line" ? trendLine : signalAnchor == "High/Low" ? low : na
+
+useAbsoluteAnchor = signalAnchor == "Close" or signalAnchor == "Trend Line" or signalAnchor == "High/Low"
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Signal Plots
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+plotshape(finalLong and not useAbsoluteAnchor, title="Long Default", location=location.belowbar, style=shape.labelup, text="𝓤𝓹", color=bullMain, textcolor=blackText, size=size.normal)
+plotshape(finalShort and not useAbsoluteAnchor, title="Short Default", location=location.abovebar, style=shape.labeldown, text="𝓓𝓸𝔀𝓷", color=bearMain, textcolor=whiteText, size=size.normal)
+
+plotshape(finalLong and useAbsoluteAnchor ? longAnchorY : na, title="Long Anchored", location=location.absolute, style=shape.labelup, text="𝓤𝓹", color=bullMain, textcolor=blackText, size=size.normal)
+plotshape(finalShort and useAbsoluteAnchor ? shortAnchorY : na, title="Short Anchored", location=location.absolute, style=shape.labeldown, text="𝓓𝓸𝔀𝓷", color=bearMain, textcolor=whiteText, size=size.normal)
+
+plotshape(longTpSignal and not useAbsoluteAnchor, title="Long TP Default", location=location.abovebar, style=shape.labeldown, text="𝓣𝓟", color=bullMain, textcolor=blackText, size=size.tiny)
+plotshape(shortTpSignal and not useAbsoluteAnchor, title="Short TP Default", location=location.belowbar, style=shape.labelup, text="𝓣𝓟", color=bearMain, textcolor=whiteText, size=size.tiny)
+
+plotshape(longTpSignal and useAbsoluteAnchor ? tpLongAnchorY : na, title="Long TP Anchored", location=location.absolute, style=shape.labeldown, text="𝓣𝓟", color=bullMain, textcolor=blackText, size=size.tiny)
+plotshape(shortTpSignal and useAbsoluteAnchor ? tpShortAnchorY : na, title="Short TP Anchored", location=location.absolute, style=shape.labelup, text="𝓣𝓟", color=bearMain, textcolor=whiteText, size=size.tiny)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Pressure Strength Alerts
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+strongBullPressure = pressure >= strongPressureLevel
+strongBearPressure = pressure <= -strongPressureLevel
+
+extremeBullPressure = pressure >= extremePressureLevel
+extremeBearPressure = pressure <= -extremePressureLevel
+
+newStrongBullPressure = strongBullPressure and not strongBullPressure[1]
+newStrongBearPressure = strongBearPressure and not strongBearPressure[1]
+
+newExtremeBullPressure = extremeBullPressure and not extremeBullPressure[1]
+newExtremeBearPressure = extremeBearPressure and not extremeBearPressure[1]
+
+lineCrossUp = ta.crossover(close, trendLine)
+lineCrossDown = ta.crossunder(close, trendLine)
+
+pressureCrossZeroUp = ta.crossover(pressure, 0)
+pressureCrossZeroDown = ta.crossunder(pressure, 0)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Dashboard Table
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+trendText = f_stateText(bullTrend, bearTrend)
+signalText = f_signalText(lastSignal)
+barsText = na(barsSinceSignal) ? "𝓝/𝓐" : str.tostring(barsSinceSignal)
+pressureText = str.tostring(pressure, "#.##")
+atrText = str.tostring(atrValue, "#.####")
+reversalText = str.tostring(reversalPercent, "#") + "%"
+lineText = str.tostring(trendLine, format.mintick)
+tpText = tpHit ? "𝓗𝓲𝓽" : showTpSignals ? "𝓐𝓬𝓽𝓲𝓿𝓮" : "𝓞𝓯𝓯"
+barModeText = barColorMode == "Reversal Probability" ? "𝓡𝓮𝓿𝓮𝓻𝓼𝓪𝓵" : barColorMode == "Latest Signal" ? "𝓢𝓲𝓰𝓷𝓪𝓵" : "𝓓𝓮𝓯𝓪𝓾𝓵𝓽"
+
+var table infoTable = table.new(
+     f_tablePosition(tablePos),
+     2,
+     11,
+     frame_color=color.new(color.white, 35),
+     frame_width=1,
+     border_color=softBorder,
+     border_width=1
+)
+
+if barstate.isfirst
+    table.merge_cells(infoTable, 0, 0, 1, 0)
+
+if showTable and barstate.islast
+    table.cell(infoTable, 0, 0, "𝓣𝓟𝓛", text_color=whiteText, bgcolor=headBg, text_halign=text.align_center)
+
+    table.cell(infoTable, 0, 1, "𝓜𝓮𝓽𝓻𝓲𝓬", text_color=whiteText, bgcolor=subHeadBg)
+    table.cell(infoTable, 1, 1, "𝓥𝓪𝓵𝓾𝓮", text_color=whiteText, bgcolor=subHeadBg)
+
+    table.cell(infoTable, 0, 2, "𝓣𝓻𝓮𝓷𝓭", text_color=whiteText, bgcolor=darkBg)
+    table.cell(infoTable, 1, 2, trendText, text_color=whiteText, bgcolor=lineColor)
+
+    table.cell(infoTable, 0, 3, "𝓢𝓲𝓰𝓷𝓪𝓵", text_color=whiteText, bgcolor=darkBg)
+    table.cell(infoTable, 1, 3, signalText, text_color=whiteText, bgcolor=latestSignalColor)
+
+    table.cell(infoTable, 0, 4, "𝓑𝓪𝓻𝓼", text_color=whiteText, bgcolor=darkBg)
+    table.cell(infoTable, 1, 4, barsText, text_color=whiteText, bgcolor=darkBg)
+
+    table.cell(infoTable, 0, 5, "𝓟𝓻𝓮𝓼𝓼𝓾𝓻𝓮", text_color=whiteText, bgcolor=darkBg)
+    table.cell(infoTable, 1, 5, pressureText, text_color=whiteText, bgcolor=lineColor)
+
+    table.cell(infoTable, 0, 6, "𝓡𝓮𝓿𝓮𝓻𝓼𝓪𝓵", text_color=whiteText, bgcolor=darkBg)
+    table.cell(infoTable, 1, 6, reversalText, text_color=whiteText, bgcolor=reversalColor)
+
+    table.cell(infoTable, 0, 7, "𝓑𝓪𝓻 𝓜𝓸𝓭𝓮", text_color=whiteText, bgcolor=darkBg)
+    table.cell(infoTable, 1, 7, barModeText, text_color=whiteText, bgcolor=barColor)
+
+    table.cell(infoTable, 0, 8, "𝓣𝓟", text_color=whiteText, bgcolor=darkBg)
+    table.cell(infoTable, 1, 8, tpText, text_color=whiteText, bgcolor=tpHit ? neutralMain : darkBg)
+
+    table.cell(infoTable, 0, 9, "𝓐𝓣𝓡", text_color=whiteText, bgcolor=darkBg)
+    table.cell(infoTable, 1, 9, atrText, text_color=whiteText, bgcolor=darkBg)
+
+    table.cell(infoTable, 0, 10, "𝓛𝓲𝓷𝓮", text_color=whiteText, bgcolor=darkBg)
+    table.cell(infoTable, 1, 10, lineText, text_color=whiteText, bgcolor=darkBg)
+
+if not showTable and barstate.islast
+    table.clear(infoTable, 0, 0, 1, 10)
+
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Alerts
+//━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+alertcondition(finalLong, title="Up Signal", message="Uptrick TPL: Up signal printed")
+alertcondition(finalShort, title="Down Signal", message="Uptrick TPL: Down signal printed")
+
+alertcondition(longTpSignal, title="Long TP Signal", message="Uptrick TPL: Long TP reached")
+alertcondition(shortTpSignal, title="Short TP Signal", message="Uptrick TPL: Short TP reached")
+
+alertcondition(trendFlipBull, title="Bearish To Bullish Flip", message="Uptrick TPL: Trend flipped from bearish to bullish")
+alertcondition(trendFlipBear, title="Bullish To Bearish Flip", message="Uptrick TPL: Trend flipped from bullish to bearish")
+
+alertcondition(neutralToBull, title="Neutral To Bullish", message="Uptrick TPL: Trend moved from neutral to bullish")
+alertcondition(neutralToBear, title="Neutral To Bearish", message="Uptrick TPL: Trend moved from neutral to bearish")
+
+alertcondition(bullToNeutral, title="Bullish To Neutral", message="Uptrick TPL: Bullish trend cooled into neutral")
+alertcondition(bearToNeutral, title="Bearish To Neutral", message="Uptrick TPL: Bearish trend cooled into neutral")
+
+alertcondition(newHighReversal, title="High Reversal Probability", message="Uptrick TPL: Reversal probability reached alert level")
+
+alertcondition(newStrongBullPressure, title="Strong Bull Pressure", message="Uptrick TPL: Strong bullish pressure detected")
+alertcondition(newStrongBearPressure, title="Strong Bear Pressure", message="Uptrick TPL: Strong bearish pressure detected")
+
+alertcondition(newExtremeBullPressure, title="Extreme Bull Pressure", message="Uptrick TPL: Extreme bullish pressure detected")
+alertcondition(newExtremeBearPressure, title="Extreme Bear Pressure", message="Uptrick TPL: Extreme bearish pressure detected")
+
+alertcondition(lineCrossUp, title="Price Crossed Above TPL", message="Uptrick TPL: Price crossed above the trend pressure line")
+alertcondition(lineCrossDown, title="Price Crossed Below TPL", message="Uptrick TPL: Price crossed below the trend pressure line")
+
+alertcondition(pressureCrossZeroUp, title="Pressure Crossed Above Zero", message="Uptrick TPL: Pressure crossed above zero")
+alertcondition(pressureCrossZeroDown, title="Pressure Crossed Below Zero", message="Uptrick TPL: Pressure crossed below zero")
