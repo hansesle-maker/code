@@ -1,0 +1,101 @@
+//@version=6
+// Squeeze Momentum Indicator [LazyBear] — converted from study to STRATEGY, v6.
+// Original indicator © LazyBear: https://www.tradingview.com/v/nqQ1DT5a/
+//
+// The oscillator is unchanged: Bollinger Bands inside Keltner Channels detect a
+// "squeeze" (low volatility, black dots), and a linreg momentum histogram shows
+// direction/strength. Added: strategy entries when the squeeze fires or momentum
+// crosses zero, an optional momentum-flip exit, and an optional ATR stop/target.
+strategy(shorttitle="SQZMOM_LB ST", title="Squeeze Momentum Strategy [LazyBear]",
+     overlay=false, initial_capital=10000, default_qty_type=strategy.percent_of_equity,
+     default_qty_value=100, commission_type=strategy.commission.percent,
+     commission_value=0.04, slippage=1, pyramiding=0, calc_on_every_tick=false)
+
+length  = input.int(20, title="BB Length")
+mult    = input.float(2.0, title="BB MultFactor")
+lengthKC= input.int(20, title="KC Length")
+multKC  = input.float(1.5, title="KC MultFactor")
+useTrueRange = input.bool(true, title="Use TrueRange (KC)")
+
+// --- Strategy options ---
+grpS = "Strategy"
+i_mode     = input.string("Squeeze Release", "Entry Mode",
+     options=["Squeeze Release", "Momentum Zero-Cross"], group=grpS)
+i_dir      = input.string("all", "Trade Direction", options=["long", "short", "all"], group=grpS)
+i_exitFlip = input.bool(true, "Exit on momentum flip (val crosses 0)", group=grpS)
+i_useSLTP  = input.bool(false, "Use ATR Stop / Target", group=grpS)
+i_atrLen   = input.int(14, "ATR Length", minval=1, group=grpS)
+i_slMult   = input.float(2.0, "Stop-Loss (x ATR)", step=0.1, minval=0.1, group=grpS)
+i_tpMult   = input.float(3.0, "Take-Profit (x ATR)", step=0.1, minval=0.1, group=grpS)
+
+strategy.risk.allow_entry_in(i_dir == "long" ? strategy.direction.long :
+     i_dir == "short" ? strategy.direction.short : strategy.direction.all)
+
+// Calculate BB
+source = close
+basis = ta.sma(source, length)
+dev = multKC * ta.stdev(source, length)
+upperBB = basis + dev
+lowerBB = basis - dev
+
+// Calculate KC
+ma = ta.sma(source, lengthKC)
+rng = useTrueRange ? ta.tr : (high - low)
+rangema = ta.sma(rng, lengthKC)
+upperKC = ma + rangema * multKC
+lowerKC = ma - rangema * multKC
+
+sqzOn  = (lowerBB > lowerKC) and (upperBB < upperKC)
+sqzOff = (lowerBB < lowerKC) and (upperBB > upperKC)
+noSqz  = (sqzOn == false) and (sqzOff == false)
+
+val = ta.linreg(source - math.avg(math.avg(ta.highest(high, lengthKC), ta.lowest(low, lengthKC)),
+     ta.sma(close, lengthKC)), lengthKC, 0)
+
+bcolor = val > 0 ? (val > nz(val[1]) ? color.lime : color.green) :
+     (val < nz(val[1]) ? color.red : color.maroon)
+scolor = noSqz ? color.blue : sqzOn ? color.black : color.gray
+plot(val, color=bcolor, style=plot.style_histogram, linewidth=4)
+plot(0, color=scolor, style=plot.style_cross, linewidth=2)
+
+// === SIGNALS / STRATEGY ===
+// Squeeze "fires" the bar it releases; trade in the momentum direction.
+released  = (not sqzOn) and sqzOn[1]
+longFire  = released and val > 0
+shortFire = released and val < 0
+
+longX  = i_mode == "Squeeze Release" ? longFire  : ta.crossover(val, 0)
+shortX = i_mode == "Squeeze Release" ? shortFire : ta.crossunder(val, 0)
+
+atr = ta.atr(i_atrLen)
+var float entryAtr = na
+if longX or shortX
+    entryAtr := atr
+
+if longX
+    strategy.entry("Long", strategy.long)
+if shortX
+    strategy.entry("Short", strategy.short)
+
+exitLong  = ta.crossunder(val, 0)
+exitShort = ta.crossover(val, 0)
+
+if strategy.position_size > 0
+    if i_useSLTP and not na(entryAtr)
+        strategy.exit("XL", from_entry="Long",
+             stop=strategy.position_avg_price - entryAtr * i_slMult,
+             limit=strategy.position_avg_price + entryAtr * i_tpMult)
+    if i_exitFlip and exitLong
+        strategy.close("Long", comment="Mom flip")
+
+if strategy.position_size < 0
+    if i_useSLTP and not na(entryAtr)
+        strategy.exit("XS", from_entry="Short",
+             stop=strategy.position_avg_price + entryAtr * i_slMult,
+             limit=strategy.position_avg_price - entryAtr * i_tpMult)
+    if i_exitFlip and exitShort
+        strategy.close("Short", comment="Mom flip")
+
+alertcondition(longX, title="Buy", message="SQZMOM BUY")
+alertcondition(shortX, title="Sell", message="SQZMOM SELL")
+// === /STRATEGY ===
