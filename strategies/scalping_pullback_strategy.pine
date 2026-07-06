@@ -121,8 +121,12 @@ plotshape(ShowHHLL ? lowerlow : na, title='Lower Low', style=shape.square, locat
 var int TradeDirection = 0
 TradeDirection := nz(TradeDirection[1])
 
-pacExitU = haOpen < pacU and haClose > pacU and ta.barssince(haClose < pacC) <= Lookback
-pacExitL = haOpen > pacL and haClose < pacL and ta.barssince(haClose > pacC) <= Lookback
+// Hoisted so ta.barssince() runs every bar (CW10002): a stateful call must not
+// sit behind a short-circuiting `and`, or its history becomes inconsistent.
+barsSinceBelowC = ta.barssince(haClose < pacC)
+barsSinceAboveC = ta.barssince(haClose > pacC)
+pacExitU = haOpen < pacU and haClose > pacU and barsSinceBelowC <= Lookback
+pacExitL = haOpen > pacL and haClose < pacL and barsSinceAboveC <= Lookback
 
 Buy  = TrendDirection == 1 and pacExitU
 Sell = TrendDirection == -1 and pacExitL
