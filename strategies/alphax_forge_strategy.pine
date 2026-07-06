@@ -1,0 +1,998 @@
+// © AlphaX — FORGE v1.0 — converted from indicator to STRATEGY
+// Pattern Forge Engine — auto chart-pattern detection with measured targets.
+// Evolved from classical pivot-pattern logic: HTF bias, confluence scoring, chop gate,
+// quality-ranked pattern selection. AlphaX branded — styled after ANCHOR / PIVOT.
+//
+// Strategy layer: on each new confirmed, quality-passed pattern it enters in the
+// pattern's direction and manages the exit with the pattern's own computed levels —
+// a partial take-profit at TP1, the full measured move at TP2, and the stop at SL.
+// Detection, confluence scoring, drawings, dashboard and alerts are unchanged.
+
+//@version=6
+strategy("[ A L P H A X ] FORGE Strategy - Automatic Multi Pattern Detection", shorttitle="AlphaX FORGE ST",
+  overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=1000,
+  initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+  commission_type=strategy.commission.percent, commission_value=0.04, slippage=1, pyramiding=0,
+  calc_on_every_tick=false)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  PATTERN ENGINE
+// ═══════════════════════════════════════════════════════════════════════════════
+grpGen = "Pattern Engine"
+cooldown       = input.int(5, "Pattern Cooldown (bars)", minval=1, group=grpGen)
+symTol         = input.float(10.0, "Symmetry Tolerance (%)", minval=1.0, step=0.5, group=grpGen) / 100
+lvlTol         = input.float(3.0, "Level Tolerance (%)", minval=0.1, step=0.1, group=grpGen) / 100
+minSizePct     = input.float(0.5, "Min Pattern Size (% of Price)", minval=0.1, group=grpGen) / 100
+minAtrMult     = input.float(1.0, "Min Pattern Size (xATR)", minval=0.1, step=0.1, group=grpGen)
+atrLen         = input.int(14, "ATR Length", minval=2, maxval=100, group=grpGen)
+
+grpPat = "Pattern Types"
+showDtTop      = input.bool(true, "Double Top", group=grpPat)
+showDtBot      = input.bool(true, "Double Bottom", group=grpPat)
+showTtTop      = input.bool(true, "Triple Top", group=grpPat)
+showTtBot      = input.bool(true, "Triple Bottom", group=grpPat)
+showHsStd      = input.bool(true, "Head & Shoulders", group=grpPat)
+showHsInv      = input.bool(true, "Inverted H&S", group=grpPat)
+showFlagBull   = input.bool(true, "Bullish Flag", group=grpPat)
+showFlagBear   = input.bool(true, "Bearish Flag", group=grpPat)
+showPennantBull= input.bool(true, "Bullish Pennant", group=grpPat)
+showPennantBear= input.bool(true, "Bearish Pennant", group=grpPat)
+showWedgeRise  = input.bool(true, "Rising Wedge", group=grpPat)
+showWedgeFall  = input.bool(true, "Falling Wedge", group=grpPat)
+showTriGen     = input.bool(true, "Triangles", group=grpPat)
+showRectGen    = input.bool(true, "Rectangle", group=grpPat)
+showCupStd     = input.bool(true, "Cup & Handle", group=grpPat)
+showCupInv     = input.bool(true, "Inverted Cup & Handle", group=grpPat)
+
+grpPiv = "Pivot Engine"
+lbLeft         = input.int(10, "Pivot Lookback Left", minval=1, group=grpPiv)
+lbRight        = input.int(10, "Pivot Lookback Right", minval=1, group=grpPiv)
+maxPivHist     = input.int(500, "Max Pivots Stored", minval=5, maxval=1000, group=grpPiv)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  BREAKOUT & QUALITY FILTERS
+// ═══════════════════════════════════════════════════════════════════════════════
+grpFlt = "Breakout Filters"
+reqCloseBrk    = input.bool(false, "Require Close Outside Neckline", group=grpFlt)
+reqBodyBrk     = input.bool(false, "Require Full Body Breakout", group=grpFlt)
+useAtrBrk      = input.bool(true, "Use ATR Breakout Threshold", group=grpFlt)
+breakAtr       = input.float(1.0, "Breakout Threshold (xATR)", minval=0.1, step=0.1, group=grpFlt)
+breakPct       = input.float(0.3, "Breakout Threshold (%)", minval=0.0, step=0.1, group=grpFlt) / 100
+brkConfirmBars = input.int(1, "Confirmation Bars", minval=1, group=grpFlt)
+showIgnoreConf = input.bool(false, "Show Unconfirmed Patterns", group=grpFlt)
+minBrkBar      = input.int(1, "Scan Lookback Bars", minval=1, group=grpFlt)
+reqVol         = input.bool(false, "Require Volume Spike", group=grpFlt)
+volMult        = input.float(1.2, "Volume Multiplier", minval=1.0, step=0.1, group=grpFlt)
+volLen         = input.int(20, "Volume SMA Length", group=grpFlt)
+minRR          = input.float(1.5, "Min Risk:Reward", minval=0.1, step=0.1, group=grpFlt)
+slippageTicks  = input.float(1.0, "Slippage (Ticks)", minval=0.0, step=0.1, group=grpFlt)
+commissionPct  = input.float(0.0001, "Commission (%)", minval=0.0, step=0.0001, group=grpFlt)
+
+grpAlpha = "AlphaX Quality Layer"
+minConf        = input.int(5, "Min Confluence Score (of 10)", minval=3, maxval=10, group=grpAlpha,
+  tooltip="Patterns below this score are hidden. Score blends R:R, HTF, volume, chop, pivot depth.")
+useHtf         = input.bool(true, "HTF Bias Layer", group=grpAlpha)
+htfTf          = input.timeframe("60", "HTF Timeframe", group=grpAlpha)
+htfFast        = input.int(21, "HTF Fast EMA", minval=5, maxval=100, group=grpAlpha)
+htfSlow        = input.int(55, "HTF Slow EMA", minval=10, maxval=200, group=grpAlpha)
+requireHtf     = input.bool(false, "Hard Block Counter-HTF Patterns", group=grpAlpha)
+useChop        = input.bool(true, "Block Extreme Chop", group=grpAlpha)
+chopLen        = input.int(14, "Choppiness Length", minval=5, maxval=50, group=grpAlpha)
+chopMax        = input.float(62.0, "Chop Block Above", minval=50, maxval=80, step=0.5, group=grpAlpha)
+useSession     = input.bool(false, "Session Filter", group=grpAlpha)
+sessStart      = input.session("0700-2000", "Active Session", group=grpAlpha)
+rankByQuality  = input.bool(true, "Pick Highest-Score Pattern", group=grpAlpha,
+  tooltip="When multiple patterns fire, show the best confluence setup — not just first in list.")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  STRATEGY EXECUTION
+// ═══════════════════════════════════════════════════════════════════════════════
+grpStrat = "Strategy Execution"
+stratEnable   = input.bool(true, "Enable Strategy Orders", group=grpStrat)
+stratDir      = input.string("all", "Trade Direction", options=["long", "short", "all"], group=grpStrat)
+stratUseSL    = input.bool(true, "Use Stop Loss", group=grpStrat)
+stratTp1Close = input.float(50.0, "TP1 Close % of Position", minval=0.0, maxval=100.0, step=5.0, group=grpStrat,
+  tooltip="How much of the position to close at TP1 (partial). The rest runs to TP2. SL applies to all.")
+
+var float exSL  = na
+var float exTP1 = na
+var float exTP2 = na
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TARGETS & DISPLAY
+// ═══════════════════════════════════════════════════════════════════════════════
+grpVis = "Targets & Display"
+showTgt        = input.bool(true, "Show Entry / SL / TP1 / TP2", group=grpVis)
+tp1Pct         = input.float(50.0, "TP1 (% of Entry → TP2)", minval=10.0, maxval=90.0, step=5.0, group=grpVis,
+  tooltip="Easy partial target — default 50% of the full measured move (TP2).") / 100
+stopBuffer     = input.float(0.5, "Stop Loss ATR Buffer", minval=0.0, step=0.1, group=grpVis)
+useSlPctTgt    = input.bool(true, "SL as % of Target Distance", group=grpVis)
+slPctTgt       = input.float(25.0, "SL % of Target Dist", minval=1.0, maxval=100.0, step=0.5, group=grpVis) / 100
+extendLines    = input.bool(false, "Extend Pattern Lines", group=grpVis)
+fillTransp     = input.int(88, "Pattern Fill Transparency", minval=50, maxval=99, group=grpVis)
+showGrade      = input.bool(true, "Show Grade on Label (A/B/C)", group=grpVis)
+rrDynEn        = input.bool(false, "Dynamic R:R Target", group=grpVis)
+rrDynMult      = input.float(2.0, "Dynamic R:R Multiplier", minval=0.1, step=0.1, group=grpVis)
+showDash       = input.bool(true, "Show Dashboard", group=grpVis)
+dashPos        = input.string("Top Right", "Dashboard Position",
+  options=["Top Left", "Top Right", "Bottom Left", "Bottom Right"], group=grpVis)
+
+grpColors = "Colors (AlphaX Palette)"
+colBull        = input.color(#c8e624, "Bull / Pattern", group=grpColors)
+colBullBr      = input.color(#d4f03a, "Bull Bright / Entry", group=grpColors)
+colBear        = input.color(#ff1744, "Bear / Pattern", group=grpColors)
+colBearBr      = input.color(#ff5252, "Bear Bright", group=grpColors)
+colNeutral     = input.color(#555555, "Neutral", group=grpColors)
+colPending     = input.color(#ff9800, "Pending / Alert", group=grpColors)
+colSlLine      = input.color(#ff1744, "Stop Line", group=grpColors)
+colTp1Line     = input.color(#9ccc65, "TP1 Line (partial)", group=grpColors)
+colTpLine      = input.color(#c8e624, "TP2 Line (full target)", group=grpColors)
+colTextLt      = input.color(#cccccc, "Dash Text", group=grpColors)
+colDashBg      = input.color(#1a1a1a, "Dash BG", group=grpColors)
+colDashHeader  = input.color(#111111, "Dash Header BG", group=grpColors)
+colDashSec     = input.color(#222222, "Dash Section BG", group=grpColors)
+colDashFrame   = input.color(#c8e624, "Dash Frame", group=grpColors)
+
+grpAlrt = "Alerts"
+alertEn        = input.bool(true, "Enable JSON Alerts", group=grpAlrt)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TYPES & STATE
+// ═══════════════════════════════════════════════════════════════════════════════
+type Pivot
+    float p
+    int   i
+
+type PatternResult
+    bool   detected
+    string name
+    bool   isBullish
+    float  entryPrice
+    float  stopPrice
+    float  targetPrice
+    int    start_idx
+    int    breakout_idx
+    int    fux1
+    float  fuy1
+    int    fux2
+    float  fuy2
+    int    flx1
+    float  fly1
+    int    flx2
+    float  fly2
+    int    lux1
+    float  luy1
+    int    lux2
+    float  luy2
+    int    llx1
+    float  lly1
+    int    llx2
+    float  lly2
+
+type PatternDrawings
+    line[]  lns
+    label[] lbls
+
+var PatternResult EMPTY_RES = PatternResult.new(false, "", false, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na)
+var array<Pivot> pivotHighs = array.new<Pivot>()
+var array<Pivot> pivotLows  = array.new<Pivot>()
+var array<PatternDrawings> patHistory = array.new<PatternDrawings>()
+
+var string dashPatName  = "—"
+var bool   dashPatBull  = false
+var int    dashLastBar  = 0
+var float  dashEntry    = na
+var float  dashStop     = na
+var float  dashTarget1  = na
+var float  dashTarget   = na
+var int    dashConf     = 0
+var string dashGrade    = "—"
+
+var float SLIP_COST_ABS = slippageTicks * syminfo.mintick
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CORE CALCULATIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+atrVal  = ta.atr(atrLen)
+volSma  = ta.sma(volume, math.max(1, math.min(volLen, bar_index + 1)))
+
+float ciSum = math.sum(ta.atr(1), chopLen)
+float ciHl  = ta.highest(high, chopLen) - ta.lowest(low, chopLen)
+float chopIdx = ciHl > 0 ? 100.0 * math.log10(ciSum / ciHl) / math.log10(chopLen) : 50.0
+bool chopOk = not useChop or chopIdx < chopMax
+
+htfClose = request.security(syminfo.tickerid, htfTf, close, barmerge.gaps_off, barmerge.lookahead_off)
+htfFastE = request.security(syminfo.tickerid, htfTf, ta.ema(close, htfFast), barmerge.gaps_off, barmerge.lookahead_off)
+htfSlowE = request.security(syminfo.tickerid, htfTf, ta.ema(close, htfSlow), barmerge.gaps_off, barmerge.lookahead_off)
+htfBull  = htfFastE > htfSlowE and htfClose > htfFastE
+htfBear  = htfFastE < htfSlowE and htfClose < htfFastE
+
+bool inSession = not useSession or not na(time(timeframe.period, sessStart))
+
+getDashPos(p) =>
+    switch p
+        "Top Left"     => position.top_left
+        "Top Right"    => position.top_right
+        "Bottom Left"  => position.bottom_left
+        => position.bottom_right
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+f_pivotHigh(series float src, simple int len) =>
+    float candidate = src[len]
+    bool isValid = true
+    for i = 1 to len * 2
+        if i != len and src[i] >= candidate
+            isValid := false
+    isValid ? candidate : na
+
+f_pivotLow(series float src, simple int len) =>
+    float candidate = src[len]
+    bool isValid = true
+    for i = 1 to len * 2
+        if i != len and src[i] <= candidate
+            isValid := false
+    isValid ? candidate : na
+
+f_project(float x1, float y1, float x2, float y2, float target_x) =>
+    x2 == x1 ? y1 : y1 + ((y2 - y1) / (x2 - x1)) * (target_x - x1)
+
+f_isNear(float v1, float v2, float tol_pct) =>
+    math.abs(v1 - v2) <= ((v1 + v2) / 2) * tol_pct
+
+f_neckAtBreak(int nl_i, float nl_p, int nr_i, float nr_p, int b_idx) =>
+    na(nl_i) and na(nr_i) ? na :
+     na(nl_i) ? nr_p :
+     na(nr_i) ? nl_p :
+     nl_i == nr_i ? nl_p : f_project(nl_i, nl_p, nr_i, nr_p, b_idx)
+
+f_isValidSize(float height, float price) =>
+    height > math.max(price * minSizePct, atrVal * minAtrMult)
+
+f_applyBuffer(float price, bool isBullish) =>
+    isBullish ? price - (atrVal * stopBuffer) : price + (atrVal * stopBuffer)
+
+f_slPat(float anchor, bool isBull, float entry_p, float target_p) =>
+    if useSlPctTgt and not na(entry_p) and not na(target_p)
+        float dist = math.abs(target_p - entry_p)
+        isBull ? entry_p - dist * slPctTgt : entry_p + dist * slPctTgt
+    else
+        f_applyBuffer(anchor, isBull)
+
+f_getEntryPrice(int b_idx) =>
+    int offs = bar_index - b_idx
+    offs >= 1 ? open[offs] : na
+
+f_getBreakIdx(float x1, float y1, float x2, float y2, bool isUp) =>
+    int b_idx = na
+    int scan_limit = math.max(minBrkBar, lbRight) + 10
+    float m = x2 == x1 ? 0.0 : (y2 - y1) / (x2 - x1)
+    for i = scan_limit to 1
+        if bar_index - i < 0
+            continue
+        float proj = x2 == x1 ? y1 : y1 + m * ((bar_index - i) - x1)
+        float margin = useAtrBrk ? atrVal[i] * breakAtr : proj * breakPct
+        float upTh = proj + margin
+        float dnTh = proj - margin
+        float checkVal = reqCloseBrk ? close[i] : isUp ? high[i] : low[i]
+        bool broken = isUp ? checkVal > upTh : checkVal < dnTh
+        if reqBodyBrk and broken and not showIgnoreConf
+            broken := isUp ? open[i] > upTh and close[i] > upTh : open[i] < dnTh and close[i] < dnTh
+        if broken
+            bool confirmed = true
+            if brkConfirmBars > 1 and not showIgnoreConf
+                for k = 1 to brkConfirmBars - 1
+                    int cidx = i - k
+                    if cidx < 0
+                        confirmed := false
+                        break
+                    float projK = x2 == x1 ? y1 : y1 + m * ((bar_index - cidx) - x1)
+                    float marginK = useAtrBrk ? atrVal[cidx] * breakAtr : projK * breakPct
+                    if isUp and close[cidx] <= projK + marginK
+                        confirmed := false
+                        break
+                    else if not isUp and close[cidx] >= projK - marginK
+                        confirmed := false
+                        break
+            if confirmed
+                b_idx := bar_index - i
+                break
+    b_idx
+
+f_validatePattern(int b_idx, float entry_p, float stop_p, float target_p) =>
+    if showIgnoreConf
+        true
+    else
+        bool valid = true
+        if reqVol and not na(b_idx)
+            int offs = bar_index - b_idx
+            if offs >= 0 and offs < bar_index
+                float smaAt = volSma[offs]
+                if not na(smaAt) and volume[offs] <= smaAt * volMult
+                    valid := false
+        if valid and not na(entry_p)
+            float totalCost = SLIP_COST_ABS + entry_p * (commissionPct / 100) * 2
+            float risk = math.abs(entry_p - stop_p)
+            float rewardAdj = math.max(0, math.abs(target_p - entry_p) - totalCost)
+            if risk == 0 or rewardAdj / risk < minRR
+                valid := false
+        valid
+
+f_fillSliced(int ux1, float uy1, int ux2, float uy2, int lx1, float ly1, int lx2, float ly2, color fillCol, array<line> lnsArr) =>
+    line lnTop = line.new(ux1, uy1, ux2, uy2, color=color.new(fillCol, 100), width=1)
+    line lnBot = line.new(lx1, ly1, lx2, ly2, color=color.new(fillCol, 100), width=1)
+    linefill.new(lnTop, lnBot, color.new(fillCol, fillTransp))
+    array.push(lnsArr, lnTop)
+    array.push(lnsArr, lnBot)
+
+f_clearAllDrawings() =>
+    for pat in patHistory
+        for _ln in pat.lns
+            if not na(_ln)
+                line.delete(_ln)
+        for _lb in pat.lbls
+            if not na(_lb)
+                label.delete(_lb)
+    array.clear(patHistory)
+
+f_rrRaw(float entry_p, float stop_p, float target_p) =>
+    not na(entry_p) and not na(stop_p) and not na(target_p) and math.abs(entry_p - stop_p) > 0 ?
+         math.abs(target_p - entry_p) / math.abs(entry_p - stop_p) : 0.0
+
+f_tp1(float entry_p, float tp2_p, bool isBull) =>
+    float dist = math.abs(tp2_p - entry_p)
+    isBull ? entry_p + dist * tp1Pct : entry_p - dist * tp1Pct
+
+f_confluence(PatternResult r) =>
+    if not r.detected or na(r.entryPrice) or na(r.stopPrice) or na(r.targetPrice)
+        0
+    else
+        int score = 0
+        float rr = f_rrRaw(r.entryPrice, r.stopPrice, r.targetPrice)
+        score += rr >= minRR ? 2 : rr >= 1.0 ? 1 : 0
+        score += r.isBullish and htfBull and useHtf ? 2 : not r.isBullish and htfBear and useHtf ? 2 : useHtf ? 0 : 1
+        score += chopOk ? 1 : 0
+        int pivTotal = array.size(pivotHighs) + array.size(pivotLows)
+        score += pivTotal >= 12 ? 2 : pivTotal >= 6 ? 1 : 0
+        if not na(r.breakout_idx)
+            int offs = bar_index - r.breakout_idx
+            if offs >= 0 and offs < bar_index and volSma[offs] > 0
+                score += volume[offs] >= volSma[offs] * volMult ? 1 : 0
+        score += f_isValidSize(math.abs(r.targetPrice - r.entryPrice), close) ? 1 : 0
+        math.min(score, 10)
+
+f_grade(int score) =>
+    score >= 8 ? "A" : score >= 6 ? "B" : score >= minConf ? "C" : "—"
+
+f_htfOk(PatternResult r) =>
+    not requireHtf or (r.isBullish and htfBull) or (not r.isBullish and htfBear)
+
+f_pickBest(PatternResult current, PatternResult candidate, bool enabled) =>
+    if not enabled or not candidate.detected
+        current
+    else if not current.detected
+        candidate
+    else if rankByQuality
+        f_confluence(candidate) > f_confluence(current) ? candidate : current
+    else
+        current
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  DETECTORS (core geometry — unchanged logic)
+// ═══════════════════════════════════════════════════════════════════════════════
+detectHS() =>
+    res = EMPTY_RES
+    bool hasHs = pivotHighs.size() >= 3 and pivotLows.size() >= 2
+    bool hasIhs = pivotLows.size() >= 3 and pivotHighs.size() >= 2
+    Pivot rs = hasHs ? pivotHighs.get(0) : Pivot.new(na, na)
+    Pivot head = hasHs ? pivotHighs.get(1) : Pivot.new(na, na)
+    Pivot ls = hasHs ? pivotHighs.get(2) : Pivot.new(na, na)
+    Pivot lNeckR = hasHs ? pivotLows.get(0) : Pivot.new(na, na)
+    Pivot lNeckL = hasHs ? pivotLows.get(1) : Pivot.new(na, na)
+    Pivot rsInv = hasIhs ? pivotLows.get(0) : Pivot.new(na, na)
+    Pivot headInv = hasIhs ? pivotLows.get(1) : Pivot.new(na, na)
+    Pivot lsInv = hasIhs ? pivotLows.get(2) : Pivot.new(na, na)
+    Pivot hNeckR = hasIhs ? pivotHighs.get(0) : Pivot.new(na, na)
+    Pivot hNeckL = hasIhs ? pivotHighs.get(1) : Pivot.new(na, na)
+    int bHs = f_getBreakIdx(lNeckL.i, lNeckL.p, lNeckR.i, lNeckR.p, false)
+    int bIhs = f_getBreakIdx(hNeckL.i, hNeckL.p, hNeckR.i, hNeckR.p, true)
+    float epHs = f_getEntryPrice(bHs)
+    float naHs = f_neckAtBreak(lNeckL.i, lNeckL.p, lNeckR.i, lNeckR.p, nz(bHs))
+    float neckAvg = (nz(lNeckR.p) + nz(lNeckL.p)) / 2
+    float htHs = nz(head.p) - neckAvg
+    float tpHs = naHs - htHs
+    float spHs = f_slPat(rs.p, false, epHs, tpHs)
+    bool valHs = f_validatePattern(bHs, epHs, spHs, tpHs)
+    float epIhs = f_getEntryPrice(bIhs)
+    float naIhs = f_neckAtBreak(hNeckL.i, hNeckL.p, hNeckR.i, hNeckR.p, nz(bIhs))
+    float neckAvgInv = (nz(hNeckR.p) + nz(hNeckL.p)) / 2
+    float htIhs = neckAvgInv - nz(headInv.p)
+    float tpIhs = naIhs + htIhs
+    float spIhs = f_slPat(rsInv.p, true, epIhs, tpIhs)
+    bool valIhs = f_validatePattern(bIhs, epIhs, spIhs, tpIhs)
+    if hasHs and rs.i > lNeckR.i and lNeckR.i > head.i and head.i > lNeckL.i and lNeckL.i > ls.i
+        if head.p > rs.p and head.p > ls.p and f_isNear(ls.p, rs.p, symTol) and f_isValidSize(htHs, close)
+            if not na(bHs) and not na(epHs) and valHs and showHsStd
+                res := PatternResult.new(true, "Head & Shoulders", false, epHs, spHs, tpHs, ls.i, bHs, ls.i, head.p, bHs, naHs, lNeckL.i, lNeckL.p, bHs, naHs, na, na, na, na, lNeckL.i, lNeckL.p, bHs, naHs)
+    if not res.detected and hasIhs and rsInv.i > hNeckR.i and hNeckR.i > headInv.i and headInv.i > hNeckL.i and hNeckL.i > lsInv.i
+        if headInv.p < rsInv.p and headInv.p < lsInv.p and f_isNear(lsInv.p, rsInv.p, symTol) and f_isValidSize(htIhs, close)
+            if not na(bIhs) and not na(epIhs) and valIhs and showHsInv
+                res := PatternResult.new(true, "Inv Head & Shoulders", true, epIhs, spIhs, tpIhs, lsInv.i, bIhs, hNeckL.i, hNeckL.p, bIhs, naIhs, lsInv.i, headInv.p, bIhs, naIhs, hNeckL.i, hNeckL.p, bIhs, naIhs, na, na, na, na)
+    res
+
+detectDouble() =>
+    res = EMPTY_RES
+    bool hasDt = pivotHighs.size() >= 2 and pivotLows.size() >= 1
+    bool hasDb = pivotLows.size() >= 2 and pivotHighs.size() >= 1
+    Pivot p1 = hasDt ? pivotHighs.get(0) : Pivot.new(na, na)
+    Pivot p2 = hasDt ? pivotHighs.get(1) : Pivot.new(na, na)
+    Pivot mid = hasDt ? pivotLows.get(0) : Pivot.new(na, na)
+    Pivot p1b = hasDb ? pivotLows.get(0) : Pivot.new(na, na)
+    Pivot p2b = hasDb ? pivotLows.get(1) : Pivot.new(na, na)
+    Pivot midB = hasDb ? pivotHighs.get(0) : Pivot.new(na, na)
+    int bDt = f_getBreakIdx(mid.i, mid.p, bar_index, mid.p, false)
+    int bDb = f_getBreakIdx(midB.i, midB.p, bar_index, midB.p, true)
+    float epDt = f_getEntryPrice(bDt)
+    float avgTop = (nz(p1.p) + nz(p2.p)) / 2
+    float htDt = avgTop - nz(mid.p)
+    float tpDt = nz(mid.p) - htDt
+    float spDt = f_slPat(math.max(nz(p1.p), nz(p2.p)), false, epDt, tpDt)
+    bool valDt = f_validatePattern(bDt, epDt, spDt, tpDt)
+    float epDb = f_getEntryPrice(bDb)
+    float avgBot = (nz(p1b.p) + nz(p2b.p)) / 2
+    float htDb = nz(midB.p) - avgBot
+    float tpDb = nz(midB.p) + htDb
+    float spDb = f_slPat(math.min(nz(p1b.p), nz(p2b.p)), true, epDb, tpDb)
+    bool valDb = f_validatePattern(bDb, epDb, spDb, tpDb)
+    if hasDt and p1.i > mid.i and mid.i > p2.i and f_isNear(p1.p, p2.p, lvlTol) and f_isValidSize(htDt, close)
+        if not na(bDt) and not na(epDt) and valDt and showDtTop
+            res := PatternResult.new(true, "Double Top", false, epDt, spDt, tpDt, p2.i, bDt, p2.i, avgTop, bDt, avgTop, mid.i, mid.p, bDt, mid.p, na, na, na, na, mid.i, mid.p, bDt, mid.p)
+    if not res.detected and hasDb and p1b.i > midB.i and midB.i > p2b.i and f_isNear(p1b.p, p2b.p, lvlTol) and f_isValidSize(htDb, close)
+        if not na(bDb) and not na(epDb) and valDb and showDtBot
+            res := PatternResult.new(true, "Double Bottom", true, epDb, spDb, tpDb, p2b.i, bDb, midB.i, midB.p, bDb, midB.p, p2b.i, avgBot, bDb, avgBot, midB.i, midB.p, bDb, midB.p, na, na, na, na)
+    res
+
+detectTriple() =>
+    res = EMPTY_RES
+    bool hasTt = pivotHighs.size() >= 3 and pivotLows.size() >= 2
+    bool hasTb = pivotLows.size() >= 3 and pivotHighs.size() >= 2
+    Pivot h1 = hasTt ? pivotHighs.get(0) : Pivot.new(na, na)
+    Pivot h2 = hasTt ? pivotHighs.get(1) : Pivot.new(na, na)
+    Pivot h3 = hasTt ? pivotHighs.get(2) : Pivot.new(na, na)
+    Pivot l1t = hasTt ? pivotLows.get(0) : Pivot.new(na, na)
+    Pivot l2t = hasTt ? pivotLows.get(1) : Pivot.new(na, na)
+    Pivot l1b = hasTb ? pivotLows.get(0) : Pivot.new(na, na)
+    Pivot l2b = hasTb ? pivotLows.get(1) : Pivot.new(na, na)
+    Pivot l3b = hasTb ? pivotLows.get(2) : Pivot.new(na, na)
+    Pivot h1b = hasTb ? pivotHighs.get(0) : Pivot.new(na, na)
+    Pivot h2b = hasTb ? pivotHighs.get(1) : Pivot.new(na, na)
+    float neckTt = math.min(nz(l1t.p), nz(l2t.p))
+    float htTt = math.max(nz(h1.p), math.max(nz(h2.p), nz(h3.p))) - neckTt
+    float neckTb = math.max(nz(h1b.p), nz(h2b.p))
+    float htTb = neckTb - math.min(nz(l1b.p), math.min(nz(l2b.p), nz(l3b.p)))
+    int bTt = f_getBreakIdx(l2t.i, l2t.p, l1t.i, l1t.p, false)
+    int bTb = f_getBreakIdx(h2b.i, neckTb, h1b.i, neckTb, true)
+    float naTt = f_neckAtBreak(l2t.i, l2t.p, l1t.i, l1t.p, nz(bTt))
+    float naTb = f_neckAtBreak(h2b.i, neckTb, h1b.i, neckTb, nz(bTb))
+    float epTt = f_getEntryPrice(bTt)
+    float epTb = f_getEntryPrice(bTb)
+    float tpTt = naTt - htTt
+    float tpTb = naTb + htTb
+    float spTt = f_slPat(math.max(nz(h1.p), math.max(nz(h2.p), nz(h3.p))), false, epTt, tpTt)
+    float spTb = f_slPat(math.min(nz(l1b.p), math.min(nz(l2b.p), nz(l3b.p))), true, epTb, tpTb)
+    bool valTt = f_validatePattern(bTt, epTt, spTt, tpTt)
+    bool valTb = f_validatePattern(bTb, epTb, spTb, tpTb)
+    if hasTt and h1.i > l1t.i and l1t.i > h2.i and h2.i > l2t.i and l2t.i > h3.i
+        if f_isNear(h1.p, h2.p, lvlTol) and f_isNear(h2.p, h3.p, lvlTol) and f_isValidSize(htTt, close)
+            if not na(bTt) and not na(epTt) and valTt and showTtTop
+                float avgTopTt = math.max(h1.p, math.max(h2.p, h3.p))
+                res := PatternResult.new(true, "Triple Top", false, epTt, spTt, tpTt, h3.i, bTt, h3.i, avgTopTt, bTt, avgTopTt, l2t.i, neckTt, bTt, naTt, na, na, na, na, l2t.i, neckTt, bTt, naTt)
+    if not res.detected and hasTb and l1b.i > h1b.i and h1b.i > l2b.i and l2b.i > h2b.i and h2b.i > l3b.i
+        if f_isNear(l1b.p, l2b.p, lvlTol) and f_isNear(l2b.p, l3b.p, lvlTol) and f_isValidSize(htTb, close)
+            if not na(bTb) and not na(epTb) and valTb and showTtBot
+                float avgBotTt = math.min(l1b.p, math.min(l2b.p, l3b.p))
+                res := PatternResult.new(true, "Triple Bottom", true, epTb, spTb, tpTb, l3b.i, bTb, h2b.i, neckTb, bTb, naTb, l3b.i, avgBotTt, bTb, avgBotTt, h2b.i, neckTb, bTb, naTb, na, na, na, na)
+    res
+
+detectCupHandle() =>
+    res = EMPTY_RES
+    bool hasCup = pivotHighs.size() >= 2 and pivotLows.size() >= 2
+    Pivot hRim = hasCup ? pivotHighs.get(0) : Pivot.new(na, na)
+    Pivot hLeft = hasCup ? pivotHighs.get(1) : Pivot.new(na, na)
+    Pivot lHandle = hasCup ? pivotLows.get(0) : Pivot.new(na, na)
+    Pivot lBot = hasCup ? pivotLows.get(1) : Pivot.new(na, na)
+    Pivot lRim = hasCup ? pivotLows.get(0) : Pivot.new(na, na)
+    Pivot lLeft = hasCup ? pivotLows.get(1) : Pivot.new(na, na)
+    Pivot hHandle = hasCup ? pivotHighs.get(0) : Pivot.new(na, na)
+    Pivot hTop = hasCup ? pivotHighs.get(1) : Pivot.new(na, na)
+    float cupHStd = nz(hRim.p) - nz(lBot.p)
+    float cupHInv = nz(hTop.p) - nz(lRim.p)
+    int bCup = f_getBreakIdx(hRim.i, hRim.p, bar_index, hRim.p, true)
+    int bInv = f_getBreakIdx(lRim.i, lRim.p, bar_index, lRim.p, false)
+    float naCup = f_neckAtBreak(hLeft.i, hLeft.p, hRim.i, hRim.p, nz(bCup))
+    float naInv = f_neckAtBreak(lLeft.i, lLeft.p, lRim.i, lRim.p, nz(bInv))
+    float epCup = f_getEntryPrice(bCup)
+    float epInv = f_getEntryPrice(bInv)
+    float tpCup = naCup + cupHStd
+    float tpInv = naInv - cupHInv
+    float spCup = f_slPat(lHandle.p, true, epCup, tpCup)
+    float spInv = f_slPat(hHandle.p, false, epInv, tpInv)
+    bool valCup = f_validatePattern(bCup, epCup, spCup, tpCup)
+    bool valInv = f_validatePattern(bInv, epInv, spInv, tpInv)
+    if hasCup and lHandle.i > hRim.i and hRim.i > lBot.i and lBot.i > hLeft.i
+        if f_isNear(hRim.p, hLeft.p, symTol) and lHandle.p > lBot.p and lHandle.p < hRim.p and f_isValidSize(cupHStd, close)
+            if not na(bCup) and not na(epCup) and valCup and showCupStd
+                res := PatternResult.new(true, "Cup & Handle", true, epCup, spCup, tpCup, hLeft.i, bCup, hLeft.i, hLeft.p, bCup, naCup, hLeft.i, lBot.p, bCup, lHandle.p, hLeft.i, hRim.p, bCup, naCup, na, na, na, na)
+    if not res.detected and hasCup and hHandle.i > lRim.i and lRim.i > hTop.i and hTop.i > lLeft.i
+        if f_isNear(lRim.p, lLeft.p, symTol) and hHandle.p < hTop.p and hHandle.p > lRim.p and f_isValidSize(cupHInv, close)
+            if not na(bInv) and not na(epInv) and valInv and showCupInv
+                res := PatternResult.new(true, "Inv Cup & Handle", false, epInv, spInv, tpInv, lLeft.i, bInv, lLeft.i, hTop.p, bInv, hHandle.p, lLeft.i, lLeft.p, bInv, naInv, na, na, na, na, lLeft.i, lRim.p, bInv, naInv)
+    res
+
+detectFlagPennant() =>
+    res = EMPTY_RES
+    bool has = pivotHighs.size() >= 2 and pivotLows.size() >= 2
+    Pivot h1 = has ? pivotHighs.get(0) : Pivot.new(na, na)
+    Pivot h2 = has ? pivotHighs.get(1) : Pivot.new(na, na)
+    Pivot l1 = has ? pivotLows.get(0) : Pivot.new(na, na)
+    Pivot l2 = has ? pivotLows.get(1) : Pivot.new(na, na)
+    int startBar = math.min(nz(h2.i), nz(l2.i))
+    int poleLen = math.min(200, bar_index - startBar + 1)
+    float poleMove = ta.highest(high, poleLen) - ta.lowest(low, poleLen)
+    float slopeU = h1.i == h2.i ? 0.0 : (nz(h1.p) - nz(h2.p)) / math.max(1, h1.i - h2.i)
+    float slopeL = l1.i == l2.i ? 0.0 : (nz(l1.p) - nz(l2.p)) / math.max(1, l1.i - l2.i)
+    bool parallel = f_isNear(slopeU, slopeL, 0.2)
+    int bBull = f_getBreakIdx(h2.i, h2.p, h1.i, h1.p, true)
+    int bBear = f_getBreakIdx(l2.i, l2.p, l1.i, l1.p, false)
+    float ubBull = f_project(h2.i, h2.p, h1.i, h1.p, nz(bBull))
+    float lbBull = f_project(l2.i, l2.p, l1.i, l1.p, nz(bBull))
+    float ubBear = f_project(h2.i, h2.p, h1.i, h1.p, nz(bBear))
+    float lbBear = f_project(l2.i, l2.p, l1.i, l1.p, nz(bBear))
+    float epBull = f_getEntryPrice(bBull)
+    float epBear = f_getEntryPrice(bBear)
+    float tpBull = ubBull + poleMove
+    float tpBear = lbBear - poleMove
+    float spBull = f_slPat(lbBull, true, epBull, tpBull)
+    float spBear = f_slPat(ubBear, false, epBear, tpBear)
+    bool valBull = f_validatePattern(bBull, epBull, spBull, tpBull)
+    bool valBear = f_validatePattern(bBear, epBear, spBear, tpBear)
+    if has and poleMove > atrVal * 3
+        if slopeU < 0 and slopeL < 0 and not na(bBull) and not na(epBull) and valBull
+            if (parallel and showFlagBull) or (not parallel and showPennantBull)
+                res := PatternResult.new(true, parallel ? "Bull Flag" : "Bull Pennant", true, epBull, spBull, tpBull, h2.i, bBull, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na)
+        else if slopeU > 0 and slopeL > 0 and not na(bBear) and not na(epBear) and valBear
+            if (parallel and showFlagBear) or (not parallel and showPennantBear)
+                res := PatternResult.new(true, parallel ? "Bear Flag" : "Bear Pennant", false, epBear, spBear, tpBear, h2.i, bBear, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na)
+    if res.detected
+        int sb = math.min(h2.i, l2.i)
+        int bi = res.breakout_idx
+        res.fux1 := sb
+        res.fuy1 := f_project(h2.i, h2.p, h1.i, h1.p, sb)
+        res.fux2 := bi
+        res.fuy2 := f_project(h2.i, h2.p, h1.i, h1.p, bi)
+        res.flx1 := sb
+        res.fly1 := f_project(l2.i, l2.p, l1.i, l1.p, sb)
+        res.flx2 := bi
+        res.fly2 := f_project(l2.i, l2.p, l1.i, l1.p, bi)
+        res.lux1 := sb
+        res.luy1 := res.fuy1
+        res.lux2 := bi
+        res.luy2 := res.fuy2
+        res.llx1 := sb
+        res.lly1 := res.fly1
+        res.llx2 := bi
+        res.lly2 := res.fly2
+    res
+
+detectWedge() =>
+    res = EMPTY_RES
+    bool has = pivotHighs.size() >= 2 and pivotLows.size() >= 2
+    Pivot h1 = has ? pivotHighs.get(0) : Pivot.new(na, na)
+    Pivot h2 = has ? pivotHighs.get(1) : Pivot.new(na, na)
+    Pivot l1 = has ? pivotLows.get(0) : Pivot.new(na, na)
+    Pivot l2 = has ? pivotLows.get(1) : Pivot.new(na, na)
+    float slopeU = h1.i == h2.i ? 0.0 : (nz(h1.p) - nz(h2.p)) / math.max(1, h1.i - h2.i)
+    float slopeL = l1.i == l2.i ? 0.0 : (nz(l1.p) - nz(l2.p)) / math.max(1, l1.i - l2.i)
+    float projUNow = f_project(h2.i, h2.p, h1.i, h1.p, bar_index)
+    float projLNow = f_project(l2.i, l2.p, l1.i, l1.p, bar_index)
+    float heightNow = projUNow - projLNow
+    int bFall = f_getBreakIdx(h2.i, h2.p, h1.i, h1.p, true)
+    int bRise = f_getBreakIdx(l2.i, l2.p, l1.i, l1.p, false)
+    float lbFall = f_project(l2.i, l2.p, l1.i, l1.p, nz(bFall))
+    float ubRise = f_project(h2.i, h2.p, h1.i, h1.p, nz(bRise))
+    float epFall = f_getEntryPrice(bFall)
+    float epRise = f_getEntryPrice(bRise)
+    float tpFall = nz(h2.p)
+    float tpRise = nz(l2.p)
+    float spFall = f_slPat(lbFall, true, epFall, tpFall)
+    float spRise = f_slPat(ubRise, false, epRise, tpRise)
+    bool valFall = f_validatePattern(bFall, epFall, spFall, tpFall)
+    bool valRise = f_validatePattern(bRise, epRise, spRise, tpRise)
+    if has and heightNow > 0
+        if slopeU < 0 and slopeL < 0 and slopeL < slopeU and not na(bFall) and not na(epFall) and valFall and showWedgeFall
+            res := PatternResult.new(true, "Falling Wedge", true, epFall, spFall, tpFall, h2.i, bFall, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na)
+        else if slopeU > 0 and slopeL > 0 and slopeL > slopeU and not na(bRise) and not na(epRise) and valRise and showWedgeRise
+            res := PatternResult.new(true, "Rising Wedge", false, epRise, spRise, tpRise, h2.i, bRise, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na)
+    if res.detected
+        int sb = math.min(h2.i, l2.i)
+        int bi = res.breakout_idx
+        res.fux1 := h2.i
+        res.fuy1 := h2.p
+        res.fux2 := bi
+        res.fuy2 := f_project(h2.i, h2.p, h1.i, h1.p, bi)
+        res.flx1 := l2.i
+        res.fly1 := l2.p
+        res.flx2 := bi
+        res.fly2 := f_project(l2.i, l2.p, l1.i, l1.p, bi)
+        res.lux1 := sb
+        res.luy1 := f_project(h2.i, h2.p, h1.i, h1.p, sb)
+        res.lux2 := bi
+        res.luy2 := res.fuy2
+        res.llx1 := sb
+        res.lly1 := f_project(l2.i, l2.p, l1.i, l1.p, sb)
+        res.llx2 := bi
+        res.lly2 := res.fly2
+    res
+
+detectTriangles() =>
+    res = EMPTY_RES
+    bool has = pivotHighs.size() >= 2 and pivotLows.size() >= 2
+    Pivot h1 = has ? pivotHighs.get(0) : Pivot.new(na, na)
+    Pivot h2 = has ? pivotHighs.get(1) : Pivot.new(na, na)
+    Pivot l1 = has ? pivotLows.get(0) : Pivot.new(na, na)
+    Pivot l2 = has ? pivotLows.get(1) : Pivot.new(na, na)
+    float slopeU = h1.i == h2.i ? 0.0 : (nz(h1.p) - nz(h2.p)) / math.max(1, h1.i - h2.i)
+    float slopeL = l1.i == l2.i ? 0.0 : (nz(l1.p) - nz(l2.p)) / math.max(1, l1.i - l2.i)
+    int startTri = math.min(nz(h2.i), nz(l2.i))
+    float baseHeight = math.abs(f_project(h2.i, h2.p, h1.i, h1.p, startTri) - f_project(l2.i, l2.p, l1.i, l1.p, startTri))
+    float flatTol = close * 0.0005
+    bool converging = f_project(h2.i, h2.p, h1.i, h1.p, bar_index) > f_project(l2.i, l2.p, l1.i, l1.p, bar_index)
+    int bBull = f_getBreakIdx(h2.i, h2.p, h1.i, h1.p, true)
+    int bBear = f_getBreakIdx(l2.i, l2.p, l1.i, l1.p, false)
+    float ubBull = f_project(h2.i, h2.p, h1.i, h1.p, nz(bBull))
+    float lbBull = f_project(l2.i, l2.p, l1.i, l1.p, nz(bBull))
+    float ubBear = f_project(h2.i, h2.p, h1.i, h1.p, nz(bBear))
+    float lbBear = f_project(l2.i, l2.p, l1.i, l1.p, nz(bBear))
+    float epBull = f_getEntryPrice(bBull)
+    float epBear = f_getEntryPrice(bBear)
+    float tpBull = ubBull + baseHeight
+    float tpBear = lbBear - baseHeight
+    float spBull = f_slPat(lbBull, true, epBull, tpBull)
+    float spBear = f_slPat(ubBear, false, epBear, tpBear)
+    bool valBull = f_validatePattern(bBull, epBull, spBull, tpBull)
+    bool valBear = f_validatePattern(bBear, epBear, spBear, tpBear)
+    if has and converging and f_isValidSize(baseHeight, close)
+        if (slopeU < 0 and slopeL > 0) or (math.abs(slopeU) < flatTol and slopeL > 0)
+            if not na(bBull) and not na(epBull) and valBull and showTriGen
+                bool isAsc = math.abs(slopeU) < flatTol
+                res := PatternResult.new(true, isAsc ? "Ascending Triangle" : "Sym Triangle", true, epBull, spBull, tpBull, h2.i, bBull, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na)
+        if not res.detected and ((slopeU < 0 and slopeL > 0) or (slopeU < 0 and math.abs(slopeL) < flatTol))
+            if not na(bBear) and not na(epBear) and valBear and showTriGen
+                bool isDesc = math.abs(slopeL) < flatTol
+                res := PatternResult.new(true, isDesc ? "Descending Triangle" : "Sym Triangle", false, epBear, spBear, tpBear, h2.i, bBear, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na, na)
+    if res.detected
+        int sb = math.min(h2.i, l2.i)
+        int bi = res.breakout_idx
+        res.fux1 := h2.i
+        res.fuy1 := h2.p
+        res.fux2 := bi
+        res.fuy2 := f_project(h2.i, h2.p, h1.i, h1.p, bi)
+        res.flx1 := l2.i
+        res.fly1 := l2.p
+        res.flx2 := bi
+        res.fly2 := f_project(l2.i, l2.p, l1.i, l1.p, bi)
+        res.lux1 := sb
+        res.luy1 := f_project(h2.i, h2.p, h1.i, h1.p, sb)
+        res.lux2 := bi
+        res.luy2 := res.fuy2
+        res.llx1 := sb
+        res.lly1 := f_project(l2.i, l2.p, l1.i, l1.p, sb)
+        res.llx2 := bi
+        res.lly2 := res.fly2
+    res
+
+detectRectangles() =>
+    res = EMPTY_RES
+    bool has = pivotHighs.size() >= 2 and pivotLows.size() >= 2
+    Pivot h1 = has ? pivotHighs.get(0) : Pivot.new(na, na)
+    Pivot h2 = has ? pivotHighs.get(1) : Pivot.new(na, na)
+    Pivot l1 = has ? pivotLows.get(0) : Pivot.new(na, na)
+    Pivot l2 = has ? pivotLows.get(1) : Pivot.new(na, na)
+    float slopeU = h1.i == h2.i ? 0.0 : (nz(h1.p) - nz(h2.p)) / math.max(1, h1.i - h2.i)
+    float slopeL = l1.i == l2.i ? 0.0 : (nz(l1.p) - nz(l2.p)) / math.max(1, l1.i - l2.i)
+    float flatTolR = atrVal * 0.05
+    bool isFlat = math.abs(slopeU) < flatTolR and math.abs(slopeL) < flatTolR
+    int startRect = math.min(nz(h2.i), nz(l2.i))
+    float avgTop = (nz(h1.p) + nz(h2.p)) / 2
+    float avgBot = (nz(l1.p) + nz(l2.p)) / 2
+    float height = avgTop - avgBot
+    int bBull = f_getBreakIdx(startRect, avgTop, bar_index, avgTop, true)
+    int bBear = f_getBreakIdx(startRect, avgBot, bar_index, avgBot, false)
+    float epBull = f_getEntryPrice(bBull)
+    float epBear = f_getEntryPrice(bBear)
+    float tpBull = avgTop + height
+    float tpBear = avgBot - height
+    float spBull = f_slPat(avgBot, true, epBull, tpBull)
+    float spBear = f_slPat(avgTop, false, epBear, tpBear)
+    bool valBull = f_validatePattern(bBull, epBull, spBull, tpBull)
+    bool valBear = f_validatePattern(bBear, epBear, spBear, tpBear)
+    if has and isFlat and f_isNear(slopeU, slopeL, 0.5) and f_isValidSize(height, close)
+        if not na(bBull) and not na(epBull) and valBull and showRectGen
+            res := PatternResult.new(true, "Rectangle", true, epBull, spBull, tpBull, h2.i, bBull, startRect, avgTop, bBull, avgTop, startRect, avgBot, bBull, avgBot, na, na, na, na, na, na, na, na)
+        else if not res.detected and not na(bBear) and not na(epBear) and valBear and showRectGen
+            res := PatternResult.new(true, "Rectangle", false, epBear, spBear, tpBear, h2.i, bBear, startRect, avgTop, bBear, avgTop, startRect, avgBot, bBear, avgBot, na, na, na, na, na, na, na, na)
+    if res.detected
+        int sb = math.min(h2.i, l2.i)
+        int bi = res.breakout_idx
+        res.lux1 := sb
+        res.luy1 := avgTop
+        res.lux2 := bi
+        res.luy2 := avgTop
+        res.llx1 := sb
+        res.lly1 := avgBot
+        res.llx2 := bi
+        res.lly2 := avgBot
+    res
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  PIVOT COLLECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+float ph = f_pivotHigh(high, lbLeft)
+float pl = f_pivotLow(low, lbLeft)
+if not na(ph)
+    pivotHighs.unshift(Pivot.new(ph, bar_index - lbRight))
+    if pivotHighs.size() > maxPivHist
+        pivotHighs.pop()
+if not na(pl)
+    pivotLows.unshift(Pivot.new(pl, bar_index - lbRight))
+    if pivotLows.size() > maxPivHist
+        pivotLows.pop()
+
+bool hasPivots = pivotHighs.size() >= 2 and pivotLows.size() >= 2
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  PATTERN ENGINE — quality-ranked selection
+// ═══════════════════════════════════════════════════════════════════════════════
+var int lastIdx = 0
+var int frozenStartIdx = na
+
+PatternResult rDbl  = detectDouble()
+PatternResult rTri  = detectTriple()
+PatternResult rHs   = detectHS()
+PatternResult rFp   = detectFlagPennant()
+PatternResult rWdg  = detectWedge()
+PatternResult rTrng = detectTriangles()
+PatternResult rRect = detectRectangles()
+PatternResult rCup  = detectCupHandle()
+
+PatternResult res = EMPTY_RES
+bool gate = bar_index > 600 and hasPivots and chopOk and inSession
+
+if gate
+    res := f_pickBest(res, rDbl, showDtTop or showDtBot)
+    res := f_pickBest(res, rTri, showTtTop or showTtBot)
+    res := f_pickBest(res, rHs, showHsStd or showHsInv)
+    res := f_pickBest(res, rFp, showFlagBull or showFlagBear or showPennantBull or showPennantBear)
+    res := f_pickBest(res, rWdg, showWedgeRise or showWedgeFall)
+    res := f_pickBest(res, rTrng, showTriGen)
+    res := f_pickBest(res, rRect, showRectGen)
+    res := f_pickBest(res, rCup, showCupStd or showCupInv)
+
+int resConf = f_confluence(res)
+string resGrade = f_grade(resConf)
+
+if res.detected and (resConf < minConf or not f_htfOk(res))
+    res := EMPTY_RES
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  RENDER
+// ═══════════════════════════════════════════════════════════════════════════════
+bool isNewPattern = res.detected and barstate.isconfirmed and (na(frozenStartIdx) or math.abs(res.start_idx - frozenStartIdx) > cooldown)
+
+if isNewPattern and rrDynEn and not na(res.entryPrice) and not na(res.stopPrice)
+    float rrRisk = math.abs(res.entryPrice - res.stopPrice)
+    res.targetPrice := res.isBullish ? res.entryPrice + rrRisk * rrDynMult : res.entryPrice - rrRisk * rrDynMult
+
+if isNewPattern
+    f_clearAllDrawings()
+    PatternDrawings currentPat = PatternDrawings.new(array.new_line(), array.new_label())
+    lastIdx := bar_index
+    frozenStartIdx := res.start_idx
+    dashPatName := res.name
+    dashPatBull := res.isBullish
+    dashLastBar := lastIdx
+    dashEntry := res.entryPrice
+    dashStop := res.stopPrice
+    float tp2 = res.targetPrice
+    float tp1 = f_tp1(res.entryPrice, tp2, res.isBullish)
+    dashTarget1 := tp1
+    dashTarget := tp2
+    dashConf := resConf
+    dashGrade := resGrade
+
+    // ── Strategy entry: trade the pattern in its direction, using its own levels ──
+    if stratEnable and not na(res.entryPrice) and not na(res.stopPrice) and not na(tp2)
+        bool dirOk = (res.isBullish and stratDir != "short") or (not res.isBullish and stratDir != "long")
+        if dirOk
+            exSL  := res.stopPrice
+            exTP1 := tp1
+            exTP2 := tp2
+            strategy.entry(res.isBullish ? "Long" : "Short", res.isBullish ? strategy.long : strategy.short)
+
+    color col = res.isBullish ? colBull : colBear
+    string txt = showGrade ? res.name + " [" + resGrade + "]" : res.name
+
+    if not na(res.fux1)
+        f_fillSliced(res.fux1, res.fuy1, res.fux2, res.fuy2, res.flx1, res.fly1, res.flx2, res.fly2, col, currentPat.lns)
+    if not na(res.lux1)
+        line lnU = line.new(res.lux1, res.luy1, res.lux2, res.luy2, color=col, width=2)
+        if extendLines
+            line.set_extend(lnU, extend.right)
+        array.push(currentPat.lns, lnU)
+    if not na(res.llx1)
+        line lnL = line.new(res.llx1, res.lly1, res.llx2, res.lly2, color=col, width=2)
+        if extendLines
+            line.set_extend(lnL, extend.right)
+        array.push(currentPat.lns, lnL)
+
+    if not na(res.start_idx) and not na(res.breakout_idx)
+        int cx = (res.start_idx + res.breakout_idx) / 2
+        float uyMid = not na(res.lux1) ? f_project(res.lux1, res.luy1, res.lux2, res.luy2, cx) :
+             not na(res.fux1) ? f_project(res.fux1, res.fuy1, res.fux2, res.fuy2, cx) : na
+        float lyMid = not na(res.llx1) ? f_project(res.llx1, res.lly1, res.llx2, res.lly2, cx) :
+             not na(res.flx1) ? f_project(res.flx1, res.fly1, res.flx2, res.fly2, cx) : na
+        float cy = not na(uyMid) and not na(lyMid) ? (uyMid + lyMid) / 2 : not na(uyMid) ? uyMid : lyMid
+        if not na(cy)
+            label lbl = label.new(cx, cy, txt, color=color.new(colDashBg, 20), textcolor=res.isBullish ? colBullBr : colBearBr,
+              style=label.style_label_center, size=size.small)
+            array.push(currentPat.lbls, lbl)
+
+    if alertEn and not na(res.entryPrice)
+        float tp2Alert = res.targetPrice
+        float tp1Alert = f_tp1(res.entryPrice, tp2Alert, res.isBullish)
+        string alertJson = '{"source":"AlphaX FORGE","ticker":"' + syminfo.tickerid + '","pattern":"' + res.name +
+             '","grade":"' + resGrade + '","bias":"' + (res.isBullish ? "long" : "short") +
+             '","entry":' + str.tostring(res.entryPrice, format.mintick) +
+             ',"tp1":' + str.tostring(tp1Alert, format.mintick) +
+             ',"tp2":' + str.tostring(tp2Alert, format.mintick) +
+             ',"sl":' + str.tostring(res.stopPrice, format.mintick) +
+             ',"confluence":' + str.tostring(resConf) + '}'
+        alert(alertJson, alert.freq_once_per_bar_close)
+
+    if showTgt and not na(res.breakout_idx) and not na(res.entryPrice) and not na(res.stopPrice) and not na(res.targetPrice)
+        int offs = bar_index - res.breakout_idx
+        if offs >= 1
+            int x1 = res.breakout_idx
+            int x2 = res.breakout_idx + 50
+            int lx = x2 + 1
+            float ep = res.entryPrice
+            float tp2 = res.targetPrice
+            float tp1 = f_tp1(ep, tp2, res.isBullish)
+            float totalCost = SLIP_COST_ABS + ep * (commissionPct / 100) * 2
+            float riskVal = math.abs(ep - res.stopPrice)
+            float rewardTp1 = math.max(0, math.abs(tp1 - ep) - totalCost)
+            float rewardTp2 = math.max(0, math.abs(tp2 - ep) - totalCost)
+            float rrTp1 = riskVal == 0 ? 0 : rewardTp1 / riskVal
+            float rrTp2 = riskVal == 0 ? 0 : rewardTp2 / riskVal
+            line lnEntry = line.new(x1, ep, x2, ep, color=colBullBr, style=line.style_dashed, width=1)
+            line lnStop = line.new(x1, res.stopPrice, x2, res.stopPrice, color=colSlLine, style=line.style_dashed, width=1)
+            line lnTp1 = line.new(x1, tp1, x2, tp1, color=colTp1Line, style=line.style_dotted, width=1)
+            line lnTp2 = line.new(x1, tp2, x2, tp2, color=colTpLine, style=line.style_dashed, width=2)
+            label lblEntry = label.new(lx, ep, "ENTRY " + str.tostring(ep, format.mintick),
+              style=label.style_label_left, color=color.new(colDashBg, 30), textcolor=colBullBr, size=size.tiny)
+            label lblStop = label.new(lx, res.stopPrice, "SL " + str.tostring(res.stopPrice, format.mintick),
+              style=label.style_label_left, color=color.new(colDashBg, 30), textcolor=colSlLine, size=size.tiny)
+            label lblTp1 = label.new(lx, tp1, "TP1 " + str.tostring(tp1, format.mintick) + "  R:R " + str.tostring(rrTp1, "#.##"),
+              style=label.style_label_left, color=color.new(colDashBg, 30), textcolor=colTp1Line, size=size.tiny)
+            label lblTp2 = label.new(lx, tp2, "TP2 " + str.tostring(tp2, format.mintick) + "  R:R " + str.tostring(rrTp2, "#.##"),
+              style=label.style_label_left, color=color.new(colDashBg, 30), textcolor=colTpLine, size=size.tiny)
+            array.push(currentPat.lns, lnEntry)
+            array.push(currentPat.lns, lnStop)
+            array.push(currentPat.lns, lnTp1)
+            array.push(currentPat.lns, lnTp2)
+            array.push(currentPat.lbls, lblEntry)
+            array.push(currentPat.lbls, lblStop)
+            array.push(currentPat.lbls, lblTp1)
+            array.push(currentPat.lbls, lblTp2)
+
+    array.push(patHistory, currentPat)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  STRATEGY EXIT MANAGEMENT — partial at TP1, remainder at TP2, shared SL
+// ═══════════════════════════════════════════════════════════════════════════════
+if stratEnable and strategy.position_size > 0
+    strategy.exit("TP1 L", from_entry="Long", qty_percent=stratTp1Close,
+         stop = stratUseSL and not na(exSL) ? exSL : na, limit = not na(exTP1) ? exTP1 : na)
+    strategy.exit("TP2 L", from_entry="Long",
+         stop = stratUseSL and not na(exSL) ? exSL : na, limit = not na(exTP2) ? exTP2 : na)
+if stratEnable and strategy.position_size < 0
+    strategy.exit("TP1 S", from_entry="Short", qty_percent=stratTp1Close,
+         stop = stratUseSL and not na(exSL) ? exSL : na, limit = not na(exTP1) ? exTP1 : na)
+    strategy.exit("TP2 S", from_entry="Short",
+         stop = stratUseSL and not na(exSL) ? exSL : na, limit = not na(exTP2) ? exTP2 : na)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════════════
+var table dash = table.new(getDashPos(dashPos), 2, 15,
+  border_width=1, border_color=color.new(colDashFrame, 60),
+  frame_width=1, frame_color=color.new(colDashFrame, 40))
+
+if showDash and barstate.islast
+    color dbg = color.new(colDashBg, 0)
+    color secBg = color.new(colDashSec, 0)
+    int pivTotal = array.size(pivotHighs) + array.size(pivotLows)
+    int barsSince = bar_index - dashLastBar
+    float rrTp1Live = f_rrRaw(dashEntry, dashStop, dashTarget1)
+    float rrLive = f_rrRaw(dashEntry, dashStop, dashTarget)
+
+    table.cell(dash, 0, 0, "AlphaX FORGE", text_color=colBull, text_size=size.normal,
+      bgcolor=color.new(colDashHeader, 0), text_halign=text.align_center)
+    table.cell(dash, 1, 0, syminfo.ticker + " · " + timeframe.period,
+      text_color=color.new(colBull, 30), text_size=size.tiny,
+      bgcolor=color.new(colDashHeader, 0), text_halign=text.align_center)
+
+    table.cell(dash, 0, 1, "─── PATTERN ───", text_color=color.new(colNeutral, 20),
+      text_size=size.tiny, bgcolor=secBg, text_halign=text.align_center)
+    table.cell(dash, 1, 1, "", bgcolor=secBg)
+
+    table.cell(dash, 0, 2, "ACTIVE", text_color=colTextLt, text_size=size.small, bgcolor=dbg)
+    table.cell(dash, 1, 2, dashPatName + " [" + dashGrade + "]",
+      text_color=dashPatBull ? colBull : colBear, text_size=size.small, bgcolor=dbg)
+
+    table.cell(dash, 0, 3, "BIAS", text_color=colTextLt, text_size=size.small, bgcolor=dbg)
+    table.cell(dash, 1, 3, dashPatBull ? "▲ LONG" : dashPatName != "—" ? "▼ SHORT" : "— FLAT",
+      text_color=dashPatBull ? colBull : dashPatName != "—" ? colBear : colNeutral, text_size=size.small, bgcolor=dbg)
+
+    table.cell(dash, 0, 4, "─── LEVELS ───", text_color=color.new(colNeutral, 20),
+      text_size=size.tiny, bgcolor=secBg, text_halign=text.align_center)
+    table.cell(dash, 1, 4, "", bgcolor=secBg)
+
+    table.cell(dash, 0, 5, "ENTRY", text_color=colTextLt, text_size=size.small, bgcolor=dbg)
+    table.cell(dash, 1, 5, not na(dashEntry) ? str.tostring(dashEntry, format.mintick) : "—",
+      text_color=colBullBr, text_size=size.small, bgcolor=dbg)
+
+    table.cell(dash, 0, 6, "STOP", text_color=colTextLt, text_size=size.small, bgcolor=dbg)
+    table.cell(dash, 1, 6, not na(dashStop) ? str.tostring(dashStop, format.mintick) : "—",
+      text_color=colSlLine, text_size=size.small, bgcolor=dbg)
+
+    table.cell(dash, 0, 7, "TP1", text_color=colTextLt, text_size=size.small, bgcolor=dbg)
+    table.cell(dash, 1, 7, not na(dashTarget1) ? str.tostring(dashTarget1, format.mintick) : "—",
+      text_color=colTp1Line, text_size=size.small, bgcolor=dbg)
+
+    table.cell(dash, 0, 8, "TP2", text_color=colTextLt, text_size=size.small, bgcolor=dbg)
+    table.cell(dash, 1, 8, not na(dashTarget) ? str.tostring(dashTarget, format.mintick) : "—",
+      text_color=colTpLine, text_size=size.small, bgcolor=dbg)
+
+    table.cell(dash, 0, 9, "R:R (TP1 / TP2)", text_color=colTextLt, text_size=size.small, bgcolor=dbg)
+    table.cell(dash, 1, 9, rrTp1Live > 0 ? str.tostring(rrTp1Live, "#.##") + " / " + str.tostring(rrLive, "#.##") : "—",
+      text_color=rrLive >= minRR ? colBull : colPending, text_size=size.small, bgcolor=dbg)
+
+    table.cell(dash, 0, 10, "─── QUALITY ───", text_color=color.new(colNeutral, 20),
+      text_size=size.tiny, bgcolor=secBg, text_halign=text.align_center)
+    table.cell(dash, 1, 10, "", bgcolor=secBg)
+
+    table.cell(dash, 0, 11, "CONFLUENCE", text_color=colTextLt, text_size=size.small, bgcolor=dbg)
+    table.cell(dash, 1, 11, str.tostring(dashConf) + " / 10",
+      text_color=dashConf >= minConf ? colBull : colNeutral, text_size=size.small, bgcolor=dbg)
+
+    table.cell(dash, 0, 12, "HTF BIAS", text_color=colTextLt, text_size=size.small, bgcolor=dbg)
+    table.cell(dash, 1, 12, htfBull ? "▲ BULL" : htfBear ? "▼ BEAR" : "— FLAT",
+      text_color=htfBull ? colBull : htfBear ? colBear : colNeutral, text_size=size.small, bgcolor=dbg)
+
+    table.cell(dash, 0, 13, "CHOP INDEX", text_color=colTextLt, text_size=size.small, bgcolor=dbg)
+    table.cell(dash, 1, 13, str.tostring(chopIdx, "#.#"),
+      text_color=chopOk ? colTextLt : colPending, text_size=size.small, bgcolor=dbg)
+
+    table.cell(dash, 0, 14, "BARS SINCE BRK", text_color=colTextLt, text_size=size.small, bgcolor=dbg)
+    table.cell(dash, 1, 14, str.tostring(barsSince) + "  ·  " + str.tostring(pivTotal) + " pivots",
+      text_color=colTextLt, text_size=size.small, bgcolor=dbg)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ALERTS
+// ═══════════════════════════════════════════════════════════════════════════════
+alertcondition(isNewPattern and res.isBullish, title="FORGE Bullish Pattern",
+  message="[AlphaX FORGE] Bullish pattern on {{ticker}} {{interval}}.")
+alertcondition(isNewPattern and not res.isBullish, title="FORGE Bearish Pattern",
+  message="[AlphaX FORGE] Bearish pattern on {{ticker}} {{interval}}.")
