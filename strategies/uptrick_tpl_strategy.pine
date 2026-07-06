@@ -52,10 +52,14 @@ tpAtrMult     = input.float(2.0, "TP ATR Multiplier", minval=0.1, step=0.1, grou
 
 grpStrat = "04b. Strategy Execution"
 
-i_tradeDir = input.string("all", "Trade Direction", options=["long", "short", "all"], group=grpStrat)
-i_useSL    = input.bool(true, "Use ATR Stop-Loss", group=grpStrat)
-i_slMult   = input.float(1.5, "SL ATR Multiplier", minval=0.1, step=0.1, group=grpStrat)
-i_useTP    = input.bool(true, "Use ATR Take-Profit (uses TP ATR Multiplier)", group=grpStrat)
+i_tradeDir     = input.string("all", "Trade Direction", options=["long", "short", "all"], group=grpStrat)
+i_useSL        = input.bool(true, "Use ATR Stop-Loss", group=grpStrat)
+i_slMult       = input.float(1.5, "SL ATR Multiplier", minval=0.1, step=0.1, group=grpStrat)
+i_useTP        = input.bool(true, "Use ATR Take-Profit (uses TP ATR Multiplier)", group=grpStrat)
+i_exitReversal = input.bool(false, "Exit on High Reversal Probability (exhaustion)", group=grpStrat,
+     tooltip="Close when the reversal-probability gauge reaches the High Reversal Alert Level — uses the indicator's exhaustion metric as an exit.")
+i_exitNeutral  = input.bool(false, "Exit when trend cools to Neutral", group=grpStrat,
+     tooltip="Close when pressure falls back inside the threshold band (bull/bear → neutral), instead of waiting for the opposite signal.")
 
 grpVisual = "05. Visuals"
 
@@ -314,11 +318,15 @@ if strategy.position_size > 0
     strategy.exit("Long Exit", from_entry="Long",
          stop  = i_useSL and not na(stratSL) ? stratSL : na,
          limit = i_useTP and not na(stratTP) ? stratTP : na)
+    if (i_exitReversal and highReversal) or (i_exitNeutral and bullToNeutral)
+        strategy.close("Long", comment=i_exitReversal and highReversal ? "Exhaustion" : "Neutral")
 
 if strategy.position_size < 0
     strategy.exit("Short Exit", from_entry="Short",
          stop  = i_useSL and not na(stratSL) ? stratSL : na,
          limit = i_useTP and not na(stratTP) ? stratTP : na)
+    if (i_exitReversal and highReversal) or (i_exitNeutral and bearToNeutral)
+        strategy.close("Short", comment=i_exitReversal and highReversal ? "Exhaustion" : "Neutral")
 
 //━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Signal Anchors
