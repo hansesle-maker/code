@@ -10,6 +10,22 @@
 
 > 두 Python 스크립트는 상관·베타 계산 로직을 [`corr_beta.py`](corr_beta.py) 공통 모듈로 공유합니다. 거래소 API 호출부만 다릅니다.
 
+## 웹 UI (5000포트)
+
+명령줄 대신 브라우저에서 돌리려면 저장소 루트의 [`../web_corr_beta.py`](../web_corr_beta.py):
+
+```bash
+python web_corr_beta.py            # http://0.0.0.0:5000
+```
+
+거래소(빗썸/바이낸스 선물), 시작·종료 시각(KST, `datetime-local` 입력), 인터벌, 최소 관측치, 상위 N, 종목 제한을 폼에서 고르면 백그라운드로 전 종목을 스캔하며 진행률 바를 보여주고, 상관계수 내림차순 정렬 표(헤더 클릭 시 컬럼별 재정렬)와 CSV 저장을 제공합니다.
+
+> Oracle Cloud VM에서 열려면 방화벽·보안목록에서 포트를 열어야 합니다(스크립트 실행 시 정확한 명령이 출력됩니다):
+> ```bash
+> sudo firewall-cmd --permanent --add-port=5000/tcp && sudo firewall-cmd --reload
+> ```
+> 그리고 VCN Security List(또는 NSG)에 TCP 5000 Ingress 규칙을 추가하세요.
+
 ## 지표 정의
 
 - **CORR** — 코인 수익률과 BTC 수익률의 피어슨 상관계수 (−1 ~ +1)
