@@ -122,6 +122,12 @@ python analysis/binance_futures_btc_corr_beta.py --from 2024-01-01 --symbols ETH
 | `--interval` | `1d` | 바이낸스 klines 간격: `1m 3m 5m 15m 30m 1h 2h 4h 6h 8h 12h 1d 3d 1w 1M` |
 | `--benchmark` | `BTCUSDT` | 기준 심볼 |
 | `--quote` | `USDT` | 스캔할 견적 자산 (예: `USDC`로 바꾸면 USDC-M) |
+| `--asset-class` | `all` | `crypto` / `tradfi` / `all`. `tradfi`는 주식·ETF·상품(SK하이닉스·SOXL·XAU 등) 무기한만 |
+
+> **TradFi(주식/ETF/상품) 무기한 포함:** 바이낸스는 이들을 `contractType = TRADIFI_PERPETUAL`, `underlyingType = KR_EQUITY / US_EQUITY / COMMODITY` 등으로 상장합니다. 스크립트는 `PERPETUAL`로 끝나는 모든 계약을 잡으므로 크립토와 TradFi가 함께 조회됩니다. TradFi만 보려면 `--asset-class tradfi`:
+> ```bash
+> python analysis/binance_futures_btc_corr_beta.py --from 2026-01-01 --asset-class tradfi
+> ```
 
 나머지(`--from --symbols --min-points --top --delay --csv --self-test`)는 빗썸 스크립트와 동일합니다. klines는 1회 최대 1,500개라 장기간·짧은 인터벌은 자동 페이지네이션합니다.
 

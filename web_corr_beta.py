@@ -82,7 +82,8 @@ def _run(params: Dict) -> None:
         if params.get("symbols"):
             symbols = [s.strip().upper() for s in params["symbols"].split(",") if s.strip()]
         elif ex == "binance":
-            symbols = binance.fetch_perp_symbols(params.get("quote", "USDT").upper())
+            symbols = binance.fetch_perp_symbols(params.get("quote", "USDT").upper(),
+                                                 params.get("asset_class", "all"))
         else:
             symbols = bithumb.fetch_krw_symbols()
 
@@ -173,6 +174,11 @@ tbody tr:hover{background:#141e30}
  <label>거래소<select name="exchange" id="exchange">
   <option value="binance">Binance USDT-M Futures</option>
   <option value="bithumb">Bithumb KRW Market</option>
+ </select></label>
+ <label>자산군 (바이낸스)<select name="asset_class" id="asset_class">
+  <option value="all">전체 (크립토+TradFi)</option>
+  <option value="tradfi">TradFi만 (주식·ETF·상품)</option>
+  <option value="crypto">크립토만</option>
  </select></label>
  <label>기준(벤치마크)<input name="benchmark" id="benchmark" value="BTCUSDT"></label>
  <label>인터벌<select name="interval" id="interval"></select></label>

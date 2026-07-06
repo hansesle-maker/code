@@ -61,33 +61,47 @@ def _get(url: str, retries: int = 4, timeout: int = 20):
     raise RuntimeError(f"request failed after {retries} tries: {url} :: {last}")
 
 
+def is_crypto(meta: dict) -> bool:
+    """Crypto contracts are underlyingType 'COIN'; TradFi (equities, commodities,
+    indices) use types like 'KR_EQUITY', 'US_EQUITY', 'COMMODITY', 'INDEX'."""
+    return (meta.get("type") or "").upper() == "COIN"
+
+
 def fetch_symbol_meta(quote: str) -> List[dict]:
     """Return metadata for every TRADING perpetual with the given quote asset.
 
-    No crypto-only restriction is applied: whatever Binance lists as a
-    perpetual (crypto, index, or otherwise) is returned. Binance tags each
-    contract with underlyingType (e.g. 'COIN', 'INDEX') and underlyingSubType
-    (e.g. ['Layer-1'], ['DeFi']), which is how you can spot non-crypto
-    instruments if any exist.
+    Accepts any contractType ending in 'PERPETUAL' — this includes both crypto
+    'PERPETUAL' and Binance's TradFi 'TRADIFI_PERPETUAL' (tokenized stocks,
+    commodities, ETFs like SKHYNIXUSDT, XAUUSDT, SOXLUSDT) — but not dated
+    delivery futures. Binance tags each contract with underlyingType (e.g.
+    'COIN', 'KR_EQUITY', 'COMMODITY') and underlyingSubType (e.g. ['TradFi']).
     """
     info = _get(f"{_BASE}/fapi/v1/exchangeInfo")
     out: List[dict] = []
     for s in info.get("symbols", []):
+        ctype = str(s.get("contractType") or "")
         if (s.get("status") == "TRADING"
-                and s.get("contractType") == "PERPETUAL"
+                and ctype.endswith("PERPETUAL")
                 and s.get("quoteAsset") == quote):
             out.append({
                 "symbol": s["symbol"],
                 "base": s.get("baseAsset", ""),
+                "contract": ctype,
                 "type": s.get("underlyingType", ""),
                 "subtype": ",".join(s.get("underlyingSubType", []) or []),
             })
     return sorted(out, key=lambda r: r["symbol"])
 
 
-def fetch_perp_symbols(quote: str) -> List[str]:
-    """Return every TRADING perpetual symbol with the given quote asset."""
-    return [m["symbol"] for m in fetch_symbol_meta(quote)]
+def fetch_perp_symbols(quote: str, asset_class: str = "all") -> List[str]:
+    """Return TRADING perpetual symbols for the quote asset, optionally limited
+    to 'crypto' or 'tradfi' (default 'all')."""
+    meta = fetch_symbol_meta(quote)
+    if asset_class == "crypto":
+        meta = [m for m in meta if is_crypto(m)]
+    elif asset_class == "tradfi":
+        meta = [m for m in meta if not is_crypto(m)]
+    return [m["symbol"] for m in meta]
 
 
 def list_universe(quote: str) -> None:
@@ -97,12 +111,14 @@ def list_universe(quote: str) -> None:
     by_type: Dict[str, int] = {}
     for m in meta:
         by_type[m["type"] or "(none)"] = by_type.get(m["type"] or "(none)", 0) + 1
-    print(f"# {len(meta)} TRADING perpetuals with quote {quote}")
+    n_crypto = sum(1 for m in meta if is_crypto(m))
+    print(f"# {len(meta)} TRADING perpetuals with quote {quote}  "
+          f"(crypto={n_crypto}, tradfi={len(meta) - n_crypto})")
     print(f"# by underlyingType: " + ", ".join(f"{k}={v}" for k, v in sorted(by_type.items())))
-    print(f"\n{'SYMBOL':<18}{'BASE':<12}{'TYPE':<10}{'SUBTYPE'}")
-    print("-" * 60)
+    print(f"\n{'SYMBOL':<18}{'BASE':<12}{'TYPE':<12}{'SUBTYPE'}")
+    print("-" * 62)
     for m in meta:
-        print(f"{m['symbol']:<18}{m['base']:<12}{m['type']:<10}{m['subtype']}")
+        print(f"{m['symbol']:<18}{m['base']:<12}{m['type']:<12}{m['subtype']}")
 
 
 def fetch_closes(symbol: str, interval: str, start_ms: int,
@@ -144,8 +160,9 @@ def run(args: argparse.Namespace) -> int:
     if args.symbols:
         symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     else:
-        symbols = fetch_perp_symbols(args.quote.upper())
-        print(f"# {len(symbols)} USDT-M perpetual symbols ({args.quote.upper()})", file=sys.stderr)
+        symbols = fetch_perp_symbols(args.quote.upper(), args.asset_class)
+        print(f"# {len(symbols)} USDT-M perpetual symbols "
+              f"({args.quote.upper()}, {args.asset_class})", file=sys.stderr)
 
     benchmark = fetch_closes(bench, args.interval, start_ms, end_ms, args.delay)
     if not benchmark:
@@ -196,6 +213,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="kline interval (default 1d = daily)")
     p.add_argument("--benchmark", default="BTCUSDT", help="benchmark symbol (default BTCUSDT)")
     p.add_argument("--quote", default="USDT", help="quote asset to scan (default USDT)")
+    p.add_argument("--asset-class", default="all", choices=["all", "crypto", "tradfi"],
+                   help="limit to crypto, tradfi (stocks/ETFs/commodities), or all (default all)")
     p.add_argument("--symbols", default="",
                    help="comma-separated symbols to limit to (default: all perpetuals)")
     p.add_argument("--min-points", type=int, default=20,
