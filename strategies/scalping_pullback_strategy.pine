@@ -108,13 +108,13 @@ plot(ShowFastEMA ? fastEMA : na, color=color.new(color.green, 20), linewidth=2, 
 plot(ShowMediumEMA ? mediumEMA : na, color=color.new(color.blue, 20), linewidth=3, title="mediumEMA")
 plot(ShowSlowEMA ? slowEMA : na, color=color.new(color.black, 20), linewidth=4, title="slowEMA")
 
-plotshape(ShowFractals ? filteredtopf : na, title='Filtered Top Fractals', style=shape.triangledown, location=location.abovebar, color=color.red, offset=-2)
-plotshape(ShowFractals ? filteredbotf : na, title='Filtered Bottom Fractals', style=shape.triangleup, location=location.belowbar, color=color.lime, offset=-2)
+plotshape(ShowFractals and filteredtopf, title='Filtered Top Fractals', style=shape.triangledown, location=location.abovebar, color=color.red, offset=-2)
+plotshape(ShowFractals and filteredbotf, title='Filtered Bottom Fractals', style=shape.triangleup, location=location.belowbar, color=color.lime, offset=-2)
 
-plotshape(ShowHHLL ? higherhigh : na, title='Higher High', style=shape.square, location=location.abovebar, color=color.maroon, text="[HH]", offset=-2)
-plotshape(ShowHHLL ? lowerhigh : na, title='Lower High', style=shape.square, location=location.abovebar, color=color.maroon, text="[LH]", offset=-2)
-plotshape(ShowHHLL ? higherlow : na, title='Higher Low', style=shape.square, location=location.belowbar, color=color.green, text="[HL]", offset=-2)
-plotshape(ShowHHLL ? lowerlow : na, title='Lower Low', style=shape.square, location=location.belowbar, color=color.green, text="[LL]", offset=-2)
+plotshape(ShowHHLL and higherhigh, title='Higher High', style=shape.square, location=location.abovebar, color=color.maroon, text="[HH]", offset=-2)
+plotshape(ShowHHLL and lowerhigh, title='Lower High', style=shape.square, location=location.abovebar, color=color.maroon, text="[LH]", offset=-2)
+plotshape(ShowHHLL and higherlow, title='Higher Low', style=shape.square, location=location.belowbar, color=color.green, text="[HL]", offset=-2)
+plotshape(ShowHHLL and lowerlow, title='Lower Low', style=shape.square, location=location.belowbar, color=color.green, text="[LL]", offset=-2)
 // === /PLOTTING ===
 
 // === SIGNALS ===
