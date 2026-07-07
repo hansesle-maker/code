@@ -482,8 +482,8 @@ def _pulse_worker(params: Dict):
                 if _pulse["cancel"]:
                     break
             try:
-                o, h, l, c = binance.fetch_ohlc(sym, interval, 1000)
-                res = pulse.evaluate(o, h, l, c, mode=mode) if len(c) >= 900 else None
+                o, h, l, c = binance.fetch_ohlc(sym, interval, 1500)
+                res = pulse.evaluate(o, h, l, c, mode=mode) if len(c) >= 1000 else None
             except Exception:  # noqa: BLE001
                 res = None
             if res is not None:

@@ -34,7 +34,7 @@ python web_corr_beta.py            # http://0.0.0.0:5000
 - 거리/스트레치, Zero·EMA 리버설 필터, 0–100 리버설 점수, 모드 프리셋(Balanced/Aggressive/Scalping/Swing/Funded), 신호 상태머신, TP/SL 트레이드 차단 게이트까지 **원본 로직 그대로** 포팅.
 - 모드·인터벌·자산군·최소 점수 선택, READY 표시 토글, 60초 자동 refresh 지원. 백그라운드 스캔 + 진행률 바.
 
-> ⚠️ **정확도 주의**: `specialK` 코어는 Pring 표준 공식과 724봉 워밍업으로 검증했지만, TradingView `ta.specialK`의 **시그널선 스무딩(length2)** 내부가 다르면 신호가 차트와 미세하게 어긋날 수 있습니다. 정확히 일치시키려면 `ta` 라이브러리 소스를 주시면 `_signal_line`을 맞추겠습니다. 또 스크리너는 HTF 필터 OFF(원본 기본값), Bar Close 확정 기준입니다.
+> ✅ **정확도**: `ta.specialK` 라이브러리 실소스에 맞춰 정확히 포팅했습니다 — 12개 ROC/SMA 요소의 **1·2·3·4 가중치**와 **이중 SMA 시그널선**(`sma(sma(sk,100),100)`)까지 일치. 시그널선은 이중 SMA라 약 922봉 워밍업이 필요하므로 스크리너는 심볼당 1500봉을 받습니다. HTF 필터는 OFF(원본 기본값), Bar Close 확정 기준입니다.
 
 ## TradingView 스크립트 랭킹 (`tv_scripts.py` / 웹 탭)
 

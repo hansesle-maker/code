@@ -105,11 +105,14 @@ def atr(high: List[float], low: List[float], close: List[float], length: int) ->
 # --------------------------------------------------------------------------- #
 # Pring's Special K — fixed 12-component weighted sum of SMA(ROC).
 # --------------------------------------------------------------------------- #
+# (roc_len, sma_len, weight) — exact weights from TradingView's ta.specialK:
+#   sum group ×1 + group ×2 + group ×3 + group ×4  (NOT classic Pring weights).
 _SK_COMPONENTS = [
-    (10, 10, 10), (15, 10, 10), (20, 10, 10), (30, 15, 15),
-    (40, 50, 50), (65, 65, 65), (75, 75, 75), (100, 100, 100),
-    (195, 130, 130), (265, 130, 130), (390, 130, 130), (530, 195, 195),
-]  # (roc_len, sma_len, weight)
+    (10, 10, 1), (40, 50, 1), (195, 130, 1),
+    (15, 10, 2), (65, 65, 2), (265, 130, 2),
+    (20, 10, 3), (75, 75, 3), (390, 130, 3),
+    (30, 15, 4), (100, 100, 4), (530, 195, 4),
+]
 
 
 def special_k(close: List[float]) -> List[float]:
@@ -133,9 +136,8 @@ def special_k(close: List[float]) -> List[float]:
 
 
 def _signal_line(sk: List[float], length1: int, length2: int) -> List[float]:
-    # Canonical Pring signal = SMA(SpecialK, 100). length2 reserved for an
-    # exact match if ta.specialK adds a second smoothing pass.
-    return sma(sk, length1)
+    # ta.specialK signal = double SMA: sma(sma(sk, sigLen1), sigLen2).
+    return sma(sma(sk, length1), length2)
 
 
 # --------------------------------------------------------------------------- #
@@ -309,8 +311,8 @@ def evaluate(open_: List[float], high: List[float], low: List[float], close: Lis
 def self_test() -> int:
     import random
     random.seed(3)
-    # random-walk price with >900 bars so Special K is valid
-    n = 1000
+    # random-walk price with enough bars for Special K + double-SMA signal (~924)
+    n = 1400
     c = [100.0]
     for _ in range(n - 1):
         c.append(max(1.0, c[-1] * (1 + random.gauss(0, 0.01))))
