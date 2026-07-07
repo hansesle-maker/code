@@ -148,6 +148,19 @@ def fetch_closes(symbol: str, interval: str, start_ms: int,
     return out
 
 
+def fetch_ohlc(symbol: str, interval: str = "15m", limit: int = 1000, timeout: int = 20):
+    """Return (open, high, low, close) lists (oldest first) for one symbol."""
+    url = f"{_BASE}/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    data = _get(url, timeout=timeout)
+    o, h, l, c = [], [], [], []
+    for k in data:
+        try:
+            o.append(float(k[1])); h.append(float(k[2])); l.append(float(k[3])); c.append(float(k[4]))
+        except (ValueError, IndexError, TypeError):
+            continue
+    return o, h, l, c
+
+
 def run(args: argparse.Namespace) -> int:
     start_ms = parse_start(args.start)
     end_ms = parse_start(args.to) if args.to else None

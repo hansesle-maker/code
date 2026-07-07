@@ -32,6 +32,7 @@ from corr_beta import KST, make_row, parse_start, sort_rows  # noqa: E402
 import bithumb_btc_corr_beta as bithumb  # noqa: E402
 import binance_futures_btc_corr_beta as binance  # noqa: E402
 import tv_scripts as tvs  # noqa: E402
+import pulse_entry as pulse  # noqa: E402
 
 app = Flask(__name__)
 
@@ -170,7 +171,7 @@ tbody tr:hover{background:#141e30}
  form{background:#fff;border-color:#dce3ee}h1{color:#b8860b}
  input,select,th{background:#fff;color:#1a2233}th{background:#f5f7fa}}
 </style></head><body>
-<h1>📊 BTC 상관계수 · 베타 스캐너 &nbsp;·&nbsp; <a href="/tv" style="font-size:14px;color:#448aff">📜 TV 스크립트 랭킹 →</a></h1>
+<h1>📊 BTC 상관계수 · 베타 스캐너 &nbsp;·&nbsp; <a href="/pulse" style="font-size:14px;color:#00dcb4">⚡ Pulse Entry 스크리너</a> &nbsp; <a href="/tv" style="font-size:14px;color:#448aff">📜 TV 스크립트 →</a></h1>
 <form id="f">
  <label>거래소<select name="exchange" id="exchange">
   <option value="binance">Binance USDT-M Futures</option>
@@ -445,6 +446,174 @@ def csv_route():
     fname = f'corr_{params.get("exchange","x")}_{datetime.now(KST):%Y%m%d_%H%M}.csv'
     return Response("﻿" + "\n".join(lines), mimetype="text/csv",
                     headers={"Content-Disposition": f"attachment; filename={fname}"})
+
+
+# ===========================================================================
+#  Pulse Entry Engine screener  (Binance USDT-M perps, default 15m)
+# ===========================================================================
+_pulse: Dict = {"running": False, "cancel": False, "done": 0, "total": 0,
+                "rows": [], "error": None, "at": None, "params": {}}
+
+
+def _pulse_set(**kw):
+    with _lock:
+        _pulse.update(kw)
+
+
+def _pulse_worker(params: Dict):
+    try:
+        mode = params.get("mode", "Balanced")
+        interval = params.get("interval", "15m")
+        include_ready = bool(params.get("include_ready", False))
+        min_score = int(params.get("min_score", 0))
+        delay = max(0.0, float(params.get("delay", 0.05)))
+        quote = params.get("quote", "USDT").upper()
+        asset_class = params.get("asset_class", "all")
+
+        if params.get("symbols"):
+            symbols = [s.strip().upper() for s in params["symbols"].split(",") if s.strip()]
+        else:
+            symbols = binance.fetch_perp_symbols(quote, asset_class)
+        _pulse_set(total=len(symbols), done=0, rows=[], error=None)
+
+        rows = []
+        for i, sym in enumerate(symbols, 1):
+            with _lock:
+                if _pulse["cancel"]:
+                    break
+            try:
+                o, h, l, c = binance.fetch_ohlc(sym, interval, 1000)
+                res = pulse.evaluate(o, h, l, c, mode=mode) if len(c) >= 900 else None
+            except Exception:  # noqa: BLE001
+                res = None
+            if res is not None:
+                sig = "LONG" if res["new_long"] else "SHORT" if res["new_short"] else ""
+                ready = "LONG" if res["long_cond"] else "SHORT" if res["short_cond"] else ""
+                keep = (sig != "" or (include_ready and ready != "")) and res["score"] >= min_score
+                if keep:
+                    rows.append({"symbol": sym, "signal": sig, "ready": ready if sig == "" else "",
+                                 "score": res["score"], "ratio": res["ratio"], "stretch": res["stretch"],
+                                 "close": res["close"]})
+            _pulse_set(done=i)
+            if delay:
+                time.sleep(delay)
+
+        # signals first, then by score desc
+        rows.sort(key=lambda r: (r["signal"] == "", -r["score"]))
+        _pulse_set(rows=rows, at=datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST"))
+    except Exception as exc:  # noqa: BLE001
+        _pulse_set(error=str(exc))
+    finally:
+        _pulse_set(running=False, cancel=False)
+
+
+@app.route("/pulse")
+def pulse_index():
+    return render_template_string(PULSE_PAGE)
+
+
+@app.route("/pulse/run", methods=["POST"])
+def pulse_run():
+    with _lock:
+        if _pulse["running"]:
+            return jsonify({"error": "이미 실행 중입니다"}), 409
+    params = request.get_json(force=True) or {}
+    _pulse_set(running=True, cancel=False, done=0, total=0, rows=[], error=None, params=params)
+    threading.Thread(target=_pulse_worker, args=(params,), daemon=True).start()
+    return jsonify({"status": "started"})
+
+
+@app.route("/pulse/status")
+def pulse_status():
+    with _lock:
+        return jsonify({k: _pulse[k] for k in ("running", "done", "total", "rows", "error", "at")})
+
+
+@app.route("/pulse/cancel", methods=["POST"])
+def pulse_cancel():
+    _pulse_set(cancel=True)
+    return jsonify({"status": "cancelling"})
+
+
+PULSE_PAGE = """<!doctype html><html lang="ko"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pulse Entry 스크리너</title>
+<style>
+:root{color-scheme:dark light}*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#0e1726;color:#e8eaed;padding:16px;max-width:1000px;margin:0 auto}
+h1{font-size:18px;margin:0 0 4px;color:#00dcb4}
+.sub{font-size:12px;color:#8a919e;margin:0 0 12px}
+a{color:#448aff}
+form{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;background:#141e30;border:1px solid #1e3a5f;border-radius:10px;padding:14px}
+label{display:flex;flex-direction:column;font-size:12px;color:#8a919e;gap:4px}
+input,select{background:#0e1726;color:#e8eaed;border:1px solid #1e3a5f;border-radius:6px;padding:8px;font-size:14px}
+button{background:#00b39a;color:#04120f;border:0;border-radius:6px;padding:10px 18px;font-size:14px;font-weight:700;cursor:pointer}
+button.stop{background:#ff4976;color:#fff}button:disabled{opacity:.5}
+#status{margin:14px 0;font-size:13px;color:#8a919e}
+.bar{height:8px;background:#1e3a5f;border-radius:4px;overflow:hidden;margin-top:6px}.bar>i{display:block;height:100%;width:0;background:#00dcb4;transition:width .3s}
+table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}
+th,td{padding:6px 8px;text-align:right;border-bottom:1px solid #1e3a5f;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:#8a919e;cursor:pointer;user-select:none}
+tbody tr:hover{background:#141e30}
+.long{color:#00dcb4;font-weight:700}.short{color:#ff4976;font-weight:700}.rdy{color:#f0b90b}
+.wrap{overflow-x:auto}
+@media(prefers-color-scheme:light){body{background:#f5f7fa;color:#1a2233}form{background:#fff;border-color:#dce3ee}h1{color:#0a7d6c}input,select,th{background:#fff;color:#1a2233}}
+</style></head><body>
+<h1>⚡ Pulse Entry Engine 스크리너</h1>
+<p class="sub">Binance USDT-M 선물 · 최근 <b>종료된</b> 봉 기준 LONG/SHORT 진입 신호 · <a href="/">← 상관·베타</a></p>
+<form id="f">
+ <label>모드<select name="mode" id="mode">
+  <option>Balanced</option><option>Aggressive</option><option>Scalping</option><option>Swing</option><option>Funded Account</option>
+ </select></label>
+ <label>인터벌<select name="interval" id="interval">
+  <option value="15m" selected>15m</option><option value="5m">5m</option><option value="1m">1m</option>
+  <option value="1h">1h</option><option value="4h">4h</option>
+ </select></label>
+ <label>자산군<select name="asset_class" id="asset_class">
+  <option value="all">전체</option><option value="crypto">크립토</option><option value="tradfi">TradFi</option>
+ </select></label>
+ <label>최소 점수<input type="number" name="min_score" id="min_score" value="0" min="0" max="100"></label>
+ <label>요청 간격(초)<input type="number" name="delay" id="delay" value="0.05" step="0.05" min="0"></label>
+ <label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="include_ready"> READY도 표시</label>
+ <button type="submit" id="go">스캔</button>
+ <button type="button" class="stop" id="stop" disabled>중지</button>
+ <button type="button" id="auto">자동refresh: OFF</button>
+</form>
+<div id="status">대기 중…<div class="bar"><i id="barfill"></i></div></div>
+<div class="wrap"><table id="tbl"><thead><tr>
+ <th data-k="symbol">SYMBOL</th><th data-k="signal">SIGNAL</th><th data-k="score">SCORE</th>
+ <th data-k="ratio">STRETCH×</th><th data-k="stretch">STATE</th><th data-k="close">CLOSE</th>
+</tr></thead><tbody></tbody></table></div>
+<script>
+const $=s=>document.querySelector(s);let rows=[],sortK='signal',sortAsc=false,poll=null,auto=false,autoTimer=null;
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function cls(sig,rdy){return sig==='LONG'?'long':sig==='SHORT'?'short':rdy?'rdy':'';}
+function render(){const r=[...rows].sort((a,b)=>{let x=a[sortK],y=b[sortK];
+ if(typeof x==='number')return sortAsc?x-y:y-x;return sortAsc?String(x).localeCompare(y):String(y).localeCompare(x);});
+ $('#tbl tbody').innerHTML=r.map(o=>{const sig=o.signal||(o.ready?o.ready+' READY':'');
+  return `<tr><td>${esc(o.symbol)}</td><td class="${cls(o.signal,o.ready)}">${esc(sig||'—')}</td>
+  <td>${o.score}</td><td>${o.ratio}</td><td>${esc(o.stretch)}</td><td>${o.close}</td></tr>`;}).join('');}
+document.querySelectorAll('th').forEach(th=>th.onclick=()=>{const k=th.dataset.k;
+ if(k===sortK)sortAsc=!sortAsc;else{sortK=k;sortAsc=false;}render();});
+async function startScan(){const p=Object.fromEntries(new FormData($('#f')));
+ p.include_ready=$('#include_ready').checked;
+ const res=await fetch('/pulse/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
+ if(!res.ok){$('#status').firstChild.textContent=(await res.json()).error||'오류';return;}
+ $('#go').disabled=true;$('#stop').disabled=false;if(poll)clearInterval(poll);poll=setInterval(tick,700);tick();}
+$('#f').onsubmit=e=>{e.preventDefault();startScan();};
+$('#stop').onclick=()=>fetch('/pulse/cancel',{method:'POST'});
+$('#auto').onclick=()=>{auto=!auto;$('#auto').textContent='자동refresh: '+(auto?'ON(60s)':'OFF');
+ if(auto&&!poll)startScan();};
+async function tick(){const s=await (await fetch('/pulse/status')).json();
+ const pct=s.total?Math.round(100*s.done/s.total):0;$('#barfill').style.width=pct+'%';
+ const nSig=(s.rows||[]).filter(r=>r.signal).length;
+ $('#status').firstChild.textContent=(s.running?`스캔 중… ${s.done}/${s.total}`
+  :`완료 · 신호 ${nSig}건 / 표시 ${(s.rows||[]).length} · ${s.at||''}`)+(s.error?(' · '+s.error):'');
+ rows=s.rows||[];render();
+ if(!s.running){clearInterval(poll);poll=null;$('#go').disabled=false;$('#stop').disabled=true;
+  if(auto){if(autoTimer)clearTimeout(autoTimer);autoTimer=setTimeout(startScan,60000);}}}
+</script></body></html>"""
 
 
 def main() -> None:

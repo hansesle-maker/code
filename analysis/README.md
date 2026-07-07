@@ -26,6 +26,16 @@ python web_corr_beta.py            # http://0.0.0.0:5000
 > ```
 > 그리고 VCN Security List(또는 NSG)에 TCP 5000 Ingress 규칙을 추가하세요.
 
+## Pulse Entry 스크리너 (`pulse_entry.py` / 웹 탭 `/pulse`)
+
+`Pulse Entry Engine [trade_w_samet]` 인디케이터의 신호 로직을 파이썬으로 포팅해, **Binance USDT-M 선물 전 종목**의 최근 **종료된** 봉(기본 15m)에서 LONG/SHORT 진입 신호를 실시간 스크리닝합니다. 웹앱 상단 "⚡ Pulse Entry 스크리너" 링크(`/pulse`).
+
+- 코어 오실레이터는 **Martin Pring의 Special K**(고정 12-요소 가중합; 원본 Pine의 724봉 워밍업과 일치). 시그널선은 SpecialK의 SMA(길이 100).
+- 거리/스트레치, Zero·EMA 리버설 필터, 0–100 리버설 점수, 모드 프리셋(Balanced/Aggressive/Scalping/Swing/Funded), 신호 상태머신, TP/SL 트레이드 차단 게이트까지 **원본 로직 그대로** 포팅.
+- 모드·인터벌·자산군·최소 점수 선택, READY 표시 토글, 60초 자동 refresh 지원. 백그라운드 스캔 + 진행률 바.
+
+> ⚠️ **정확도 주의**: `specialK` 코어는 Pring 표준 공식과 724봉 워밍업으로 검증했지만, TradingView `ta.specialK`의 **시그널선 스무딩(length2)** 내부가 다르면 신호가 차트와 미세하게 어긋날 수 있습니다. 정확히 일치시키려면 `ta` 라이브러리 소스를 주시면 `_signal_line`을 맞추겠습니다. 또 스크리너는 HTF 필터 OFF(원본 기본값), Bar Close 확정 기준입니다.
+
 ## TradingView 스크립트 랭킹 (`tv_scripts.py` / 웹 탭)
 
 트레이딩뷰 공개 스크립트 목록(`/scripts/`)을 받아 **부스트 많은순 / 최신순 / 제목순**으로 정렬해 봅니다. 웹앱 상단 "📜 TV 스크립트 랭킹" 링크(`/tv`) 또는 CLI:
