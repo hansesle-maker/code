@@ -152,6 +152,12 @@ MODES = {
 }
 
 
+def stars(score: float) -> str:
+    """Star rating exactly as the indicator maps its reversal score."""
+    return ("★★★★★" if score >= 96 else "★★★★" if score >= 92 else "★★★" if score >= 88
+            else "★★" if score >= 84 else "★" if score >= 80 else "☆")
+
+
 def _stretch_state(ratio: float, dist: float, ext: float) -> str:
     if ratio >= ext:
         return "EXTREME"
@@ -202,6 +208,8 @@ def evaluate(open_: List[float], high: List[float], low: List[float], close: Lis
     tr_dir = 0
     tr_entry = tr_sl = tr_tp1 = tr_tp2 = tr_tp3 = 0.0
     tr_maxtp = 0
+    tr_score = 0
+    tr_start = 0
 
     last = None
     for i in range(start, n):
@@ -287,14 +295,14 @@ def evaluate(open_: List[float], high: List[float], low: List[float], close: Lis
             tp3 = entry + (entry - sl) * tp_rr
             tr_active, tr_dir, tr_entry, tr_sl = True, 1, entry, sl
             tr_tp3, tr_tp1, tr_tp2 = tp3, entry + (tp3 - entry) * 0.25, entry + (tp3 - entry) * 0.50
-            tr_maxtp = 0
+            tr_maxtp, tr_score, tr_start = 0, round(score), i
         elif new_short:
             entry = close[i]
             sl = entry + risk_atr[i] * sl_atr_mult
             tp3 = entry - (sl - entry) * tp_rr
             tr_active, tr_dir, tr_entry, tr_sl = True, -1, entry, sl
             tr_tp3, tr_tp1, tr_tp2 = tp3, entry - (entry - tp3) * 0.25, entry - (entry - tp3) * 0.50
-            tr_maxtp = 0
+            tr_maxtp, tr_score, tr_start = 0, round(score), i
 
         last = {
             "new_long": new_long, "new_short": new_short,
@@ -304,6 +312,19 @@ def evaluate(open_: List[float], high: List[float], low: List[float], close: Lis
             "specialK": sk[i], "signal": sig[i], "close": close[i],
             "state": signal_state,
         }
+
+    # active-trade snapshot as of the latest bar (an open TP/SL projection)
+    if last is not None:
+        last["pos_active"] = tr_active
+        last["pos_dir"] = tr_dir if tr_active else 0
+        last["pos_entry"] = tr_entry if tr_active else None
+        last["pos_sl"] = tr_sl if tr_active else None
+        last["pos_tp1"] = tr_tp1 if tr_active else None
+        last["pos_tp2"] = tr_tp2 if tr_active else None
+        last["pos_tp3"] = tr_tp3 if tr_active else None
+        last["pos_score"] = tr_score if tr_active else 0
+        last["pos_maxtp"] = tr_maxtp if tr_active else 0
+        last["pos_bars"] = (n - 1 - tr_start) if tr_active else 0
     return last
 
 

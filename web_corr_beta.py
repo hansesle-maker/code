@@ -452,7 +452,7 @@ def csv_route():
 #  Pulse Entry Engine screener  (Binance USDT-M perps, default 15m)
 # ===========================================================================
 _pulse: Dict = {"running": False, "cancel": False, "done": 0, "total": 0,
-                "rows": [], "error": None, "at": None, "params": {}}
+                "rows": [], "error": None, "at": None, "params": {}, "scan": "signal"}
 
 
 def _pulse_set(**kw):
@@ -464,6 +464,7 @@ def _pulse_worker(params: Dict):
     try:
         mode = params.get("mode", "Balanced")
         interval = params.get("interval", "15m")
+        scan_type = params.get("scan", "signal")
         include_ready = bool(params.get("include_ready", False))
         min_score = int(params.get("min_score", 0))
         delay = max(0.0, float(params.get("delay", 0.05)))
@@ -486,7 +487,20 @@ def _pulse_worker(params: Dict):
                 res = pulse.evaluate(o, h, l, c, mode=mode) if len(c) >= 1000 else None
             except Exception:  # noqa: BLE001
                 res = None
-            if res is not None:
+            if res is not None and scan_type == "position":
+                # currently in an open projection that has NOT hit any TP or SL
+                if res["pos_active"] and res["pos_maxtp"] == 0 and res["pos_score"] >= min_score:
+                    d = res["pos_dir"]
+                    entry, now = res["pos_entry"], res["close"]
+                    fav = (now - entry) if d == 1 else (entry - now)
+                    rows.append({
+                        "symbol": sym, "dir": "LONG" if d == 1 else "SHORT",
+                        "score": res["pos_score"], "stars": pulse.stars(res["pos_score"]),
+                        "entry": entry, "now": now,
+                        "fav_pct": round(fav / entry * 100, 2) if entry else 0.0,
+                        "tp1": res["pos_tp1"], "tp2": res["pos_tp2"], "tp3": res["pos_tp3"],
+                        "sl": res["pos_sl"], "bars": res["pos_bars"]})
+            elif res is not None:
                 sig = "LONG" if res["new_long"] else "SHORT" if res["new_short"] else ""
                 ready = "LONG" if res["long_cond"] else "SHORT" if res["short_cond"] else ""
                 keep = (sig != "" or (include_ready and ready != "")) and res["score"] >= min_score
@@ -498,9 +512,11 @@ def _pulse_worker(params: Dict):
             if delay:
                 time.sleep(delay)
 
-        # signals first, then by score desc
-        rows.sort(key=lambda r: (r["signal"] == "", -r["score"]))
-        _pulse_set(rows=rows, at=datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST"))
+        if scan_type == "position":
+            rows.sort(key=lambda r: (-r["score"], -r["fav_pct"]))
+        else:
+            rows.sort(key=lambda r: (r["signal"] == "", -r["score"]))
+        _pulse_set(rows=rows, scan=scan_type, at=datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S KST"))
     except Exception as exc:  # noqa: BLE001
         _pulse_set(error=str(exc))
     finally:
@@ -526,7 +542,7 @@ def pulse_run():
 @app.route("/pulse/status")
 def pulse_status():
     with _lock:
-        return jsonify({k: _pulse[k] for k in ("running", "done", "total", "rows", "error", "at")})
+        return jsonify({k: _pulse[k] for k in ("running", "done", "total", "rows", "error", "at", "scan")})
 
 
 @app.route("/pulse/cancel", methods=["POST"])
@@ -563,6 +579,9 @@ tbody tr:hover{background:#141e30}
 <h1>⚡ Pulse Entry Engine 스크리너</h1>
 <p class="sub">Binance USDT-M 선물 · 최근 <b>종료된</b> 봉 기준 LONG/SHORT 진입 신호 · <a href="/">← 상관·베타</a></p>
 <form id="f">
+ <label>스캔 유형<select name="scan" id="scan">
+  <option value="signal">새 신호</option><option value="position">진입중 (미청산)</option>
+ </select></label>
  <label>모드<select name="mode" id="mode">
   <option>Balanced</option><option>Aggressive</option><option>Scalping</option><option>Swing</option><option>Funded Account</option>
  </select></label>
@@ -581,38 +600,48 @@ tbody tr:hover{background:#141e30}
  <button type="button" id="auto">자동refresh: OFF</button>
 </form>
 <div id="status">대기 중…<div class="bar"><i id="barfill"></i></div></div>
-<div class="wrap"><table id="tbl"><thead><tr>
- <th data-k="symbol">SYMBOL</th><th data-k="signal">SIGNAL</th><th data-k="score">SCORE</th>
- <th data-k="ratio">STRETCH×</th><th data-k="stretch">STATE</th><th data-k="close">CLOSE</th>
-</tr></thead><tbody></tbody></table></div>
+<div class="wrap"><table id="tbl"><thead id="thead"></thead><tbody></tbody></table></div>
 <script>
-const $=s=>document.querySelector(s);let rows=[],sortK='signal',sortAsc=false,poll=null,auto=false,autoTimer=null;
-function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
-function cls(sig,rdy){return sig==='LONG'?'long':sig==='SHORT'?'short':rdy?'rdy':'';}
-function render(){const r=[...rows].sort((a,b)=>{let x=a[sortK],y=b[sortK];
- if(typeof x==='number')return sortAsc?x-y:y-x;return sortAsc?String(x).localeCompare(y):String(y).localeCompare(x);});
- $('#tbl tbody').innerHTML=r.map(o=>{const sig=o.signal||(o.ready?o.ready+' READY':'');
-  return `<tr><td>${esc(o.symbol)}</td><td class="${cls(o.signal,o.ready)}">${esc(sig||'—')}</td>
-  <td>${o.score}</td><td>${o.ratio}</td><td>${esc(o.stretch)}</td><td>${o.close}</td></tr>`;}).join('');}
-document.querySelectorAll('th').forEach(th=>th.onclick=()=>{const k=th.dataset.k;
- if(k===sortK)sortAsc=!sortAsc;else{sortK=k;sortAsc=false;}render();});
-async function startScan(){const p=Object.fromEntries(new FormData($('#f')));
- p.include_ready=$('#include_ready').checked;
+const $=s=>document.querySelector(s);let rows=[],scan='signal',sortK='',sortAsc=false,poll=null,auto=false,autoTimer=null;
+function esc(s){return (s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function fp(x){if(x==null)return '—';const a=Math.abs(x);const d=a>=100?2:a>=1?4:a>=0.01?6:8;return x.toFixed(d);}
+const COLS={
+ signal:[['symbol','SYMBOL'],['signal','SIGNAL'],['score','SCORE'],['ratio','STRETCH×'],['stretch','STATE'],['close','CLOSE']],
+ position:[['symbol','SYMBOL'],['dir','DIR'],['stars','★'],['entry','ENTRY'],['now','NOW (유리%)'],['tp1','TP1'],['tp2','TP2'],['tp3','TP3'],['sl','SL'],['bars','BARS']]
+};
+function header(){$('#thead').innerHTML='<tr>'+COLS[scan].map(c=>`<th data-k="${c[0]}">${c[1]}</th>`).join('')+'</tr>';
+ document.querySelectorAll('#thead th').forEach(th=>th.onclick=()=>{const k=th.dataset.k;
+  if(k===sortK)sortAsc=!sortAsc;else{sortK=k;sortAsc=false;}render();});}
+function row(o){
+ if(scan==='position'){const c=o.dir==='LONG'?'long':'short';
+  const favc=o.fav_pct>=0?'long':'short';
+  return `<tr><td>${esc(o.symbol)}</td><td class="${c}">${o.dir}</td><td class="rdy">${o.stars}</td>
+   <td>${fp(o.entry)}</td><td>${fp(o.now)} <span class="${favc}">(${o.fav_pct>=0?'+':''}${o.fav_pct}%)</span></td>
+   <td>${fp(o.tp1)}</td><td>${fp(o.tp2)}</td><td>${fp(o.tp3)}</td><td class="short">${fp(o.sl)}</td><td>${o.bars}</td></tr>`;}
+ const sig=o.signal||(o.ready?o.ready+' READY':'');const cl=o.signal==='LONG'?'long':o.signal==='SHORT'?'short':o.ready?'rdy':'';
+ return `<tr><td>${esc(o.symbol)}</td><td class="${cl}">${esc(sig||'—')}</td><td>${o.score}</td><td>${o.ratio}</td><td>${esc(o.stretch)}</td><td>${fp(o.close)}</td></tr>`;}
+function render(){let r=[...rows];if(sortK)r.sort((a,b)=>{let x=a[sortK],y=b[sortK];
+  if(typeof x==='number')return sortAsc?x-y:y-x;return sortAsc?String(x).localeCompare(y):String(y).localeCompare(x);});
+ $('#tbl tbody').innerHTML=r.map(row).join('');}
+async function startScan(){const p=Object.fromEntries(new FormData($('#f')));p.include_ready=$('#include_ready').checked;
+ scan=p.scan;sortK='';header();
  const res=await fetch('/pulse/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
  if(!res.ok){$('#status').firstChild.textContent=(await res.json()).error||'오류';return;}
  $('#go').disabled=true;$('#stop').disabled=false;if(poll)clearInterval(poll);poll=setInterval(tick,700);tick();}
 $('#f').onsubmit=e=>{e.preventDefault();startScan();};
+$('#scan').onchange=()=>{scan=$('#scan').value;sortK='';header();rows=[];render();};
 $('#stop').onclick=()=>fetch('/pulse/cancel',{method:'POST'});
-$('#auto').onclick=()=>{auto=!auto;$('#auto').textContent='자동refresh: '+(auto?'ON(60s)':'OFF');
- if(auto&&!poll)startScan();};
+$('#auto').onclick=()=>{auto=!auto;$('#auto').textContent='자동refresh: '+(auto?'ON(60s)':'OFF');if(auto&&!poll)startScan();};
 async function tick(){const s=await (await fetch('/pulse/status')).json();
  const pct=s.total?Math.round(100*s.done/s.total):0;$('#barfill').style.width=pct+'%';
- const nSig=(s.rows||[]).filter(r=>r.signal).length;
+ if(s.scan)scan=s.scan;
+ const lbl=scan==='position'?'진입중':'신호';
  $('#status').firstChild.textContent=(s.running?`스캔 중… ${s.done}/${s.total}`
-  :`완료 · 신호 ${nSig}건 / 표시 ${(s.rows||[]).length} · ${s.at||''}`)+(s.error?(' · '+s.error):'');
+  :`완료 · ${lbl} ${(s.rows||[]).length}건 · ${s.at||''}`)+(s.error?(' · '+s.error):'');
  rows=s.rows||[];render();
  if(!s.running){clearInterval(poll);poll=null;$('#go').disabled=false;$('#stop').disabled=true;
   if(auto){if(autoTimer)clearTimeout(autoTimer);autoTimer=setTimeout(startScan,60000);}}}
+header();
 </script></body></html>"""
 
 
