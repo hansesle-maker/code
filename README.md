@@ -69,6 +69,26 @@ python generate_static.py --out public --limit 20   # 20종목만 빠르게
 python web_scanner.py                                # http://localhost:5000
 ```
 
+## 🧠 SMC 스크리너 (전 종목 · 포지션/SL/TP)
+
+`web_scanner.py`를 띄우면 `http://<vm-ip>:5000/smc` 에서 **Smart Money Concepts
+전략**( `pine/smart_money_concepts_strategy.pine` 의 파이썬 포팅판,
+`tsi_signal/smc.py` )으로 바이낸스 USDT-M 선물 **전 종목**을 스크리닝합니다.
+심볼별로 최근 ~500봉을 전략 시뮬레이션해서 현재 상태를 카드로 보여줍니다:
+
+- **포지션**: LONG / SHORT / FLAT, 진입가, 진입 후 경과 봉수, 미실현 PnL%(R 배수)
+- **SL / TP**: 손절·익절 레벨과 현재가 대비 거리 %, 계획 R:R
+- **구조**: 스윙/내부 추세 방향, 최근 BOS·CHoCH 신호와 경과 봉수
+- **존**: Premium / Equilibrium / Discount + 레인지 내 위치 %, EQ 레벨
+- **레인지**: Strong/Weak High·Low 레벨
+- **오더블록 / FVG**: 가장 가까운 미소멸 지지·저항 존
+- **EQH/EQL**: 최근 발생 여부
+- **백테스트**: 분석 구간 내 트레이드 수 · 승률 · 누적 PnL%
+
+타임프레임(5m/15m/1h/4h) 칩으로 전환, 필터(롱/숏/신규 진입/신호 최근/존)와
+정렬(최근 신호순, PnL순 등) 지원. 매 15분봉 마감마다 자동 재스캔되며
+JSON API는 `GET /api/smc?tf=15m` 입니다.
+
 ## 사용법
 
 ```bash

@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Binance Futures TSI scanner — mobile-friendly web dashboard.
+"""Binance Futures scanner — mobile-friendly web dashboard.
+
+Two screens on the same server:
+    /      TSI multi-timeframe scanner (4h/1h/15m TSI states)
+    /smc   Smart Money Concepts screener — per-symbol simulated position
+           (LONG/SHORT/FLAT), entry, SL/TP, R:R, PnL, market structure
+           (BOS/CHoCH), premium/discount zone, order blocks, FVG, EQH/EQL
 
 Usage:
     python web_scanner.py                  # starts on port 5000
@@ -18,13 +24,19 @@ import threading
 import time
 from typing import List, Optional
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 
 from tsi_signal.scanner import (
     SymbolScan,
     fetch_all_futures_symbols,
     scan_all,
     symbolscan_to_dict,
+)
+from tsi_signal.smc_scanner import (
+    DEFAULT_TIMEFRAME,
+    SMC_TIMEFRAMES,
+    scan_all_smc,
+    smc_to_dict,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -42,6 +54,15 @@ _cache: dict = {
     "scanning": False,
     "error": None,
 }
+
+# SMC screener cache, one slot per timeframe.
+_smc_cache: dict = {
+    tf: {"results": [], "scanned_at": None, "scanning": False, "error": None}
+    for tf in SMC_TIMEFRAMES
+}
+# The timeframe most recently viewed in the UI — the background loop keeps
+# only this one fresh so we don't hammer the Binance API for unused TFs.
+_smc_active_tf: str = DEFAULT_TIMEFRAME
 
 
 # ---------------------------------------------------------------------------
@@ -82,22 +103,73 @@ def do_scan() -> None:
             _cache["scanning"] = False
 
 
+def do_smc_scan(tf: str = DEFAULT_TIMEFRAME) -> None:
+    """Run the SMC screener over all futures symbols for one timeframe."""
+    if tf not in _smc_cache:
+        return
+    slot = _smc_cache[tf]
+    with _lock:
+        if slot["scanning"]:
+            return
+        slot["scanning"] = True
+        slot["error"] = None
+    try:
+        log.info("SMC scan started (%s): fetching symbol list …", tf)
+        symbols = fetch_all_futures_symbols()
+        log.info("SMC scanning %d symbols @ %s …", len(symbols), tf)
+        results = scan_all_smc(symbols, tf)
+        with _lock:
+            slot["results"] = results
+            slot["scanned_at"] = datetime.datetime.utcnow()
+        log.info("SMC scan complete (%s) — %d symbols", tf, len(results))
+    except Exception as exc:
+        log.error("SMC scan failed (%s): %s", tf, exc)
+        with _lock:
+            slot["error"] = str(exc)
+    finally:
+        with _lock:
+            slot["scanning"] = False
+
+
 def _background_loop() -> None:
-    """Sleep until each 15-minute candle close, then trigger a scan."""
+    """Sleep until each 15-minute candle close, then trigger the scans."""
     while True:
         wait = _secs_to_next_15m()
         log.info("Next scan in %.0f s (at next 15 m close + 8 s)", wait)
         time.sleep(wait)
         do_scan()
+        do_smc_scan(_smc_active_tf)
 
 
 # ---------------------------------------------------------------------------
-# Template filter
+# Template filters
 # ---------------------------------------------------------------------------
 
 @app.template_filter("fmt_tsi")
 def fmt_tsi(v: float) -> str:
     return f"{v:+.2f}"
+
+
+@app.template_filter("fmt_price")
+def fmt_price(v: Optional[float]) -> str:
+    """Adaptive price formatting across the huge Binance price spectrum."""
+    if v is None:
+        return "—"
+    av = abs(v)
+    if av >= 1000:
+        return f"{v:,.1f}"
+    if av >= 100:
+        return f"{v:,.2f}"
+    if av >= 1:
+        return f"{v:.4f}"
+    if av >= 0.01:
+        return f"{v:.5f}"
+    return f"{v:.8f}"
+
+
+@app.template_filter("fmt_signed")
+def fmt_signed(v: Optional[float]) -> str:
+    return "—" if v is None else f"{v:+.2f}"
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +214,63 @@ def manual_refresh():
 
 
 # ---------------------------------------------------------------------------
+# SMC screener routes
+# ---------------------------------------------------------------------------
+
+def _parse_tf() -> str:
+    tf = request.args.get("tf", DEFAULT_TIMEFRAME)
+    return tf if tf in SMC_TIMEFRAMES else DEFAULT_TIMEFRAME
+
+
+@app.route("/smc")
+def smc_dashboard():
+    global _smc_active_tf
+    tf = _parse_tf()
+    _smc_active_tf = tf
+    slot = _smc_cache[tf]
+    with _lock:
+        results = list(slot["results"])
+        scanned_at = slot["scanned_at"]
+        scanning = slot["scanning"]
+        error = slot["error"]
+    # lazy first scan: viewing a timeframe with no data kicks one off
+    if not results and not scanning:
+        threading.Thread(target=do_smc_scan, args=(tf,), daemon=True).start()
+        scanning = True
+    return render_template(
+        "smc.html",
+        results=results,
+        scanned_at=scanned_at,
+        scanning=scanning,
+        error=error,
+        tf=tf,
+        timeframes=SMC_TIMEFRAMES,
+    )
+
+
+@app.route("/api/smc")
+def api_smc():
+    tf = _parse_tf()
+    slot = _smc_cache[tf]
+    with _lock:
+        results = list(slot["results"])
+        scanned_at = slot["scanned_at"]
+    return jsonify({
+        "tf": tf,
+        "scanned_at": scanned_at.isoformat() + "Z" if scanned_at else None,
+        "count": len(results),
+        "symbols": [smc_to_dict(r) for r in results],
+    })
+
+
+@app.route("/smc/refresh", methods=["POST"])
+def smc_manual_refresh():
+    tf = _parse_tf()
+    threading.Thread(target=do_smc_scan, args=(tf,), daemon=True).start()
+    return jsonify({"status": "started", "tf": tf})
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -154,6 +283,7 @@ def main() -> None:
 
     if not args.no_scan:
         threading.Thread(target=do_scan, daemon=True).start()
+        threading.Thread(target=do_smc_scan, args=(DEFAULT_TIMEFRAME,), daemon=True).start()
 
     threading.Thread(target=_background_loop, daemon=True).start()
 

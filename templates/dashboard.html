@@ -214,6 +214,9 @@
     </div>
     <div class="ctrl-group">
       {% if scanning %}<span class="badge-scanning">Scanning…</span>{% endif %}
+      {% if not static_mode %}
+      <a href="/smc" style="background:var(--surface);border:1px solid var(--border);color:var(--accent);border-radius:8px;font-size:12px;padding:5px 10px;text-decoration:none">SMC</a>
+      {% endif %}
       <button onclick="manualRefresh(this)" title="지금 스캔">↻</button>
       <select id="sortSel" onchange="applySort()">
         <option value="sym">A-Z</option>
