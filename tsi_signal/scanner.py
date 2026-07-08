@@ -14,9 +14,12 @@ import requests as _req
 
 from .data import FUTURES_BASE_URL, FUTURES_KLINES_PATH, fetch_klines
 from .indicators import true_strength_index
+from .rate_limit import FUTURES_LIMITER, BinanceBanned
 
 TIMEFRAMES = ("4h", "1h", "15m")
 KLINE_LIMIT = 300  # TSI(25,13,13) needs ~55 bars; 300 gives plenty of warm-up
+EXCHANGE_INFO_WEIGHT = 20  # conservative estimate for GET /fapi/v1/exchangeInfo
+KLINE_WEIGHT = 2           # weight for klines with 100 < limit <= 500
 
 
 @dataclass
@@ -55,8 +58,13 @@ class SymbolScan:
 def fetch_all_futures_symbols(session=None) -> List[str]:
     """Return sorted list of active USDT-M perpetual futures symbols."""
     http = session or _req
-    resp = http.get(f"{FUTURES_BASE_URL}/fapi/v1/exchangeInfo", timeout=20)
-    resp.raise_for_status()
+    FUTURES_LIMITER.acquire(EXCHANGE_INFO_WEIGHT)
+    try:
+        resp = http.get(f"{FUTURES_BASE_URL}/fapi/v1/exchangeInfo", timeout=20)
+        resp.raise_for_status()
+    except _req.exceptions.HTTPError as exc:
+        FUTURES_LIMITER.note_error(exc)
+        raise
     return sorted(
         s["symbol"]
         for s in resp.json()["symbols"]
@@ -88,6 +96,7 @@ def scan_symbol(symbol: str, session=None) -> SymbolScan:
     tf_states: Dict[str, Optional[TFState]] = {}
     latest_ts = 0
     for tf in TIMEFRAMES:
+        FUTURES_LIMITER.acquire(KLINE_WEIGHT)  # raises BinanceBanned if cooling down
         try:
             candles = fetch_klines(
                 symbol, tf,
@@ -102,25 +111,39 @@ def scan_symbol(symbol: str, session=None) -> SymbolScan:
                 tf_states[tf] = _state_from_closes([c.close for c in candles])
             else:
                 tf_states[tf] = None
+        except _req.exceptions.HTTPError as exc:
+            FUTURES_LIMITER.note_error(exc)  # raises BinanceBanned on 429/418
+            tf_states[tf] = None
         except Exception:
             tf_states[tf] = None
     return SymbolScan(symbol=symbol, ts=latest_ts, tf=tf_states)
 
 
-def scan_all(symbols: List[str], max_workers: int = 10) -> List[SymbolScan]:
-    """Scan all symbols concurrently and return results sorted by symbol name."""
+def scan_all(symbols: List[str], max_workers: int = 5) -> List[SymbolScan]:
+    """Scan all symbols concurrently and return results sorted by symbol name.
+
+    Aborts early (raising :class:`BinanceBanned`) if Binance rate-limits or
+    bans the IP mid-scan, instead of continuing to hammer it symbol by symbol.
+    """
     results: List[SymbolScan] = []
     session = _req.Session()
     try:
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futs = {pool.submit(scan_symbol, sym, session): sym for sym in symbols}
-            for fut in as_completed(futs):
-                try:
-                    results.append(fut.result())
-                except Exception as exc:
-                    results.append(
-                        SymbolScan(symbol=futs[fut], ts=0, tf={}, error=str(exc))
-                    )
+            try:
+                for fut in as_completed(futs):
+                    try:
+                        results.append(fut.result())
+                    except BinanceBanned:
+                        raise
+                    except Exception as exc:
+                        results.append(
+                            SymbolScan(symbol=futs[fut], ts=0, tf={}, error=str(exc))
+                        )
+            except BinanceBanned:
+                for f in futs:
+                    f.cancel()
+                raise
     finally:
         session.close()
     return sorted(results, key=lambda r: r.symbol)

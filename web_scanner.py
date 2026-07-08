@@ -38,6 +38,7 @@ from tsi_signal.smc_scanner import (
     scan_all_smc,
     smc_to_dict,
 )
+from tsi_signal.rate_limit import BinanceBanned
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -64,6 +65,11 @@ _smc_cache: dict = {
 # only this one fresh so we don't hammer the Binance API for unused TFs.
 _smc_active_tf: str = DEFAULT_TIMEFRAME
 
+# Global gate: only one full-symbol scan (TSI or SMC, any timeframe) runs at
+# a time, so their Binance request-weight bursts never stack on top of each
+# other regardless of which routes/threads triggered them.
+_scan_gate = threading.Lock()
+
 
 # ---------------------------------------------------------------------------
 # Scanning helpers
@@ -85,6 +91,11 @@ def do_scan() -> None:
             return
         _cache["scanning"] = True
         _cache["error"] = None
+    if not _scan_gate.acquire(blocking=False):
+        log.info("Scan skipped: another full-symbol scan is already running")
+        with _lock:
+            _cache["scanning"] = False
+        return
     try:
         log.info("Scan started: fetching symbol list …")
         symbols = fetch_all_futures_symbols()
@@ -94,6 +105,10 @@ def do_scan() -> None:
             _cache["results"] = results
             _cache["scanned_at"] = datetime.datetime.utcnow()
         log.info("Scan complete — %d symbols", len(results))
+    except BinanceBanned as exc:
+        log.error("Scan aborted: %s", exc)
+        with _lock:
+            _cache["error"] = str(exc)
     except Exception as exc:
         log.error("Scan failed: %s", exc)
         with _lock:
@@ -101,6 +116,7 @@ def do_scan() -> None:
     finally:
         with _lock:
             _cache["scanning"] = False
+        _scan_gate.release()
 
 
 def do_smc_scan(tf: str = DEFAULT_TIMEFRAME) -> None:
@@ -113,6 +129,11 @@ def do_smc_scan(tf: str = DEFAULT_TIMEFRAME) -> None:
             return
         slot["scanning"] = True
         slot["error"] = None
+    if not _scan_gate.acquire(blocking=False):
+        log.info("SMC scan (%s) skipped: another full-symbol scan is already running", tf)
+        with _lock:
+            slot["scanning"] = False
+        return
     try:
         log.info("SMC scan started (%s): fetching symbol list …", tf)
         symbols = fetch_all_futures_symbols()
@@ -122,6 +143,10 @@ def do_smc_scan(tf: str = DEFAULT_TIMEFRAME) -> None:
             slot["results"] = results
             slot["scanned_at"] = datetime.datetime.utcnow()
         log.info("SMC scan complete (%s) — %d symbols", tf, len(results))
+    except BinanceBanned as exc:
+        log.error("SMC scan aborted (%s): %s", tf, exc)
+        with _lock:
+            slot["error"] = str(exc)
     except Exception as exc:
         log.error("SMC scan failed (%s): %s", tf, exc)
         with _lock:
@@ -129,10 +154,15 @@ def do_smc_scan(tf: str = DEFAULT_TIMEFRAME) -> None:
     finally:
         with _lock:
             slot["scanning"] = False
+        _scan_gate.release()
 
 
 def _background_loop() -> None:
-    """Sleep until each 15-minute candle close, then trigger the scans."""
+    """Sleep until each 15-minute candle close, then trigger the scans.
+
+    The two scans run one after another (not in parallel) so their Binance
+    request-weight bursts don't stack on top of each other.
+    """
     while True:
         wait = _secs_to_next_15m()
         log.info("Next scan in %.0f s (at next 15 m close + 8 s)", wait)
@@ -282,8 +312,13 @@ def main() -> None:
     args = parser.parse_args()
 
     if not args.no_scan:
-        threading.Thread(target=do_scan, daemon=True).start()
-        threading.Thread(target=do_smc_scan, args=(DEFAULT_TIMEFRAME,), daemon=True).start()
+        def _initial_scans():
+            # Sequential, not parallel: both scans share the same Binance
+            # rate-limit budget, so running them back-to-back (rather than
+            # in parallel threads) halves the peak request burst.
+            do_scan()
+            do_smc_scan(DEFAULT_TIMEFRAME)
+        threading.Thread(target=_initial_scans, daemon=True).start()
 
     threading.Thread(target=_background_loop, daemon=True).start()
 

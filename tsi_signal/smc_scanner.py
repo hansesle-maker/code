@@ -16,6 +16,7 @@ import requests as _req
 from .data import FUTURES_BASE_URL, FUTURES_KLINES_PATH, fetch_klines
 from .scanner import fetch_all_futures_symbols
 from .smc import SMCParams, SMCResult, analyze
+from .rate_limit import FUTURES_LIMITER, BinanceBanned
 
 SMC_TIMEFRAMES = ("5m", "15m", "1h", "4h")
 DEFAULT_TIMEFRAME = "15m"
@@ -23,11 +24,13 @@ DEFAULT_TIMEFRAME = "15m"
 # 499 bars keeps the Binance request weight low (limit<500 → weight 2) while
 # still covering the ATR(200) warm-up plus ~300 tradable bars of simulation.
 KLINE_LIMIT = 499
+KLINE_WEIGHT = 2  # weight for klines with 100 < limit <= 500
 
 
 def scan_symbol_smc(symbol: str, tf: str = DEFAULT_TIMEFRAME,
                     params: Optional[SMCParams] = None, session=None) -> SMCResult:
     """Fetch closed klines for one symbol and run the SMC engine on them."""
+    FUTURES_LIMITER.acquire(KLINE_WEIGHT)  # raises BinanceBanned if cooling down
     try:
         candles = fetch_klines(
             symbol, tf,
@@ -38,25 +41,39 @@ def scan_symbol_smc(symbol: str, tf: str = DEFAULT_TIMEFRAME,
             session=session,
         )
         return analyze(candles, symbol=symbol, tf=tf, params=params)
+    except _req.exceptions.HTTPError as exc:
+        FUTURES_LIMITER.note_error(exc)  # raises BinanceBanned on 429/418
+        return SMCResult(symbol=symbol, tf=tf, error=f"{type(exc).__name__}: {exc}")
     except Exception as exc:
         return SMCResult(symbol=symbol, tf=tf, error=f"{type(exc).__name__}: {exc}")
 
 
 def scan_all_smc(symbols: List[str], tf: str = DEFAULT_TIMEFRAME,
                  params: Optional[SMCParams] = None,
-                 max_workers: int = 8) -> List[SMCResult]:
-    """Scan all symbols concurrently; results are sorted by symbol name."""
+                 max_workers: int = 5) -> List[SMCResult]:
+    """Scan all symbols concurrently; results are sorted by symbol name.
+
+    Aborts early (raising :class:`BinanceBanned`) if Binance rate-limits or
+    bans the IP mid-scan, instead of continuing to hammer it symbol by symbol.
+    """
     results: List[SMCResult] = []
     session = _req.Session()
     try:
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futs = {pool.submit(scan_symbol_smc, sym, tf, params, session): sym
                     for sym in symbols}
-            for fut in as_completed(futs):
-                try:
-                    results.append(fut.result())
-                except Exception as exc:  # defensive: scan_symbol_smc catches its own
-                    results.append(SMCResult(symbol=futs[fut], tf=tf, error=str(exc)))
+            try:
+                for fut in as_completed(futs):
+                    try:
+                        results.append(fut.result())
+                    except BinanceBanned:
+                        raise
+                    except Exception as exc:  # defensive: scan_symbol_smc catches its own
+                        results.append(SMCResult(symbol=futs[fut], tf=tf, error=str(exc)))
+            except BinanceBanned:
+                for f in futs:
+                    f.cancel()
+                raise
     finally:
         session.close()
     return sorted(results, key=lambda r: r.symbol)
