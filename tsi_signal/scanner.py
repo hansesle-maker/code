@@ -27,12 +27,13 @@ log = logging.getLogger(__name__)
 
 TIMEFRAMES = ("12h", "4h", "1h", "15m")
 
-# TradFi 후보 심볼 (금·미국주식 페어 등). 매 스캔마다 바이낸스 선물 →
-# 현물 순서로 실제 상장 여부를 확인해서(:func:`resolve_tradfi_markets`)
-# 있는 마켓의 API로 가져오고, 어느 쪽에도 없으면 대시보드에 "미상장"
-# 안내를 띄운다. 여기에 심볼만 추가하면 나머지는 자동.
+# TradFi 안전망 후보. 기본 탐색은 :func:`discover_tradfi_futures`가
+# exchangeInfo의 underlyingType/underlyingSubType로 자동 수행하며, 여기
+# 리스트는 자동 탐색에 안 걸리는 심볼을 수동 추가하는 용도다. 매 스캔마다
+# 선물 → 현물 순으로 상장 확인 후(:func:`resolve_tradfi_markets`) 맞는
+# API로 가져오고, 어느 쪽에도 없으면 대시보드에 "미상장"으로 표시된다.
 TRADFI_SYMBOLS: List[str] = [
-    "XAUUSDT",   # 금 (없으면 미상장 표시 — 금 프록시는 PAXGUSDT 선물이 자동 포함됨)
+    "XAUUSDT",   # 금 (미상장이면 안내 표시 — 금 프록시로는 PAXGUSDT 퍼프가 자동 포함)
     "NVDAUSDT",
     "TSLAUSDT",
     "AAPLUSDT",
@@ -108,6 +109,35 @@ def fetch_all_futures_symbols(session=None,
         if s["status"] == "TRADING"
         and s["contractType"] == "PERPETUAL"
         and s["quoteAsset"] == "USDT"
+    )
+
+
+# fapi exchangeInfo에서 TradFi(주식·귀금속 등) 상품을 식별하는 토큰.
+# 예: underlyingType "EQUITY"/"STOCK", underlyingSubType ["US-STOCKS"] 등.
+# METAL/COMMODITY는 금(XAU류) 상품이 상장될 경우를 대비해 포함.
+_TRADFI_TYPE_TOKENS = ("STOCK", "EQUITY", "TRADFI", "METAL", "COMMODITY")
+
+
+def is_tradfi_entry(s: dict) -> bool:
+    """exchangeInfo 심볼 항목이 TradFi(주식 등) 상품인지 판별."""
+    ut = str(s.get("underlyingType", "")).upper()
+    if any(tok in ut for tok in _TRADFI_TYPE_TOKENS):
+        return True
+    subs = [str(x).upper() for x in (s.get("underlyingSubType") or [])]
+    return any(tok in sub for sub in subs for tok in _TRADFI_TYPE_TOKENS)
+
+
+def discover_tradfi_futures(info: List[dict]) -> List[str]:
+    """fapi exchangeInfo에서 TradFi 상품 심볼을 자동 탐색.
+
+    주식 퍼프는 contractType 값이 "PERPETUAL"이 아닐 수 있어 따지지
+    않는다. 단 ``_`` 포함 심볼(만기형 delivery 계약)은 제외.
+    """
+    return sorted(
+        s["symbol"] for s in info
+        if s.get("status") == "TRADING"
+        and "_" not in s["symbol"]
+        and is_tradfi_entry(s)
     )
 
 

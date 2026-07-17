@@ -34,6 +34,7 @@ from tsi_signal.positions import (
 )
 from tsi_signal.scanner import (
     SymbolScan,
+    discover_tradfi_futures,
     fetch_all_futures_symbols,
     fetch_futures_symbol_info,
     resolve_tradfi_markets,
@@ -129,15 +130,23 @@ def do_scan() -> None:
         log.info("Scan started: fetching symbol list …")
         info = fetch_futures_symbol_info()
         fut_universe = set(fetch_all_futures_symbols(info=info))
-        # TradFi 후보는 선물 전체(모든 contractType) → 현물 순으로 상장 확인
+        # TradFi ①: underlyingType/underlyingSubType 기반 자동 탐색 (fapi)
+        auto_tradfi = set(discover_tradfi_futures(info))
+        # TradFi ②: 안전망 후보를 선물 전체(모든 contractType) → 현물 순 확인
         fut_all = {s["symbol"] for s in info if s["status"] == "TRADING"}
         markets, missing = resolve_tradfi_markets(fut_all)
+        tradfi_syms = sorted(auto_tradfi | set(markets))
+        parts = []
+        if tradfi_syms:
+            shown = ", ".join(tradfi_syms[:12])
+            if len(tradfi_syms) > 12:
+                shown += f" 외 {len(tradfi_syms) - 12}종목"
+            parts.append(f"TradFi {len(tradfi_syms)}종목 포함: {shown}")
+        if missing:
+            parts.append("바이낸스 미상장: " + ", ".join(missing))
         with _lock:
-            _cache["notice"] = (
-                "바이낸스 미상장 TradFi 심볼: " + ", ".join(missing)
-                if missing else None
-            )
-        symbols = sorted(fut_universe | set(markets))
+            _cache["notice"] = " · ".join(parts) if parts else None
+        symbols = sorted(fut_universe | auto_tradfi | set(markets))
         log.info("Scanning %d symbols × 4 timeframes …", len(symbols))
         results = scan_all(symbols, markets=markets)
         scanned_at = datetime.datetime.utcnow()
