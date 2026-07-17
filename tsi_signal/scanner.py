@@ -90,34 +90,26 @@ def fetch_all_futures_symbols(session=None) -> List[str]:
 
 
 def _find_last_inflection(sig_vals: List[float], max_bars: int = 45):
-    """Return (bars_ago, type_str) for the most recent MATHEMATICAL inflection point.
+    """시그널선의 가장 최근 고점(하락변곡) 또는 저점(상승변곡) 탐지.
 
-    수학적 변곡점: 2차 도함수(기울기의 기울기)가 부호를 바꾸는 지점.
-    1차 도함수가 부호를 바꾸는 극값(peak/trough)이 아님.
+    - "하락변곡": 기울기 + → -  (신호선이 실제로 고점 찍고 하락 전환)
+    - "상승변곡": 기울기 - → +  (신호선이 실제로 저점 찍고 상승 전환)
 
-    - "하락변곡": accel + → -  (기울기 증가세 꺾임; 시그널선은 여전히 상승 중일 수 있음)
-    - "상승변곡": accel - → +  (기울기 감소세 꺾임; 시그널선은 여전히 하락 중일 수 있음)
-
-    accel[j] = slopes[j+1] - slopes[j]  (이산 2차 도함수)
-    accel 부호 전환 위치 j → 변곡은 sig_vals[j+1] → bars_ago = (n-2) - j
-    EMA 시그널선은 충분히 매끄러우므로 별도 임계값 없이 부호 변화만 체크.
+    1차 도함수(기울기) 부호가 바뀌는 지점. 신호선이 아직 상승 중인데
+    "하락변곡"이 뜨는 일은 없음.
+    bars_ago = (n-1) - j  (j = n-2 이면 1봉전)
     """
     n = len(sig_vals)
-    if n < 4:
+    if n < 3:
         return -1, ""
-
     slopes = [sig_vals[i] - sig_vals[i - 1] for i in range(1, n)]
-    accel  = [slopes[i] - slopes[i - 1]     for i in range(1, len(slopes))]
-    # len(accel) = n-2;  bars_ago = (n-2) - j  (j=n-3 → bars_ago=1 = 가장 최근)
-
-    j_min = max(1, len(accel) - max_bars)
-
-    for j in range(len(accel) - 1, j_min - 1, -1):
-        prev_a, cur_a = accel[j - 1], accel[j]
-        if prev_a > 0 and cur_a < 0:
-            return (n - 2) - j, "하락변곡"
-        if prev_a < 0 and cur_a > 0:
-            return (n - 2) - j, "상승변곡"
+    j_min  = max(1, len(slopes) - max_bars)
+    for j in range(len(slopes) - 1, j_min - 1, -1):
+        prev_s, cur_s = slopes[j - 1], slopes[j]
+        if prev_s > 0 and cur_s < 0:
+            return (n - 1) - j, "하락변곡"
+        if prev_s < 0 and cur_s > 0:
+            return (n - 1) - j, "상승변곡"
     return -1, ""
 
 
