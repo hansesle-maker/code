@@ -1,7 +1,7 @@
 """Multi-symbol, multi-timeframe TSI scanner for Binance USDT-M Futures.
 
 Fetches live klines for every active USDT perpetual and computes TSI(25,13,13)
-across three timeframes (4h, 1h, 15m). Designed for the web dashboard but
+across four timeframes (12h, 4h, 1h, 15m). Designed for the web dashboard but
 importable on its own.
 """
 from __future__ import annotations
@@ -19,13 +19,19 @@ from .indicators import true_strength_index
 
 log = logging.getLogger(__name__)
 
-TIMEFRAMES = ("4h", "1h", "15m")
+TIMEFRAMES = ("12h", "4h", "1h", "15m")
+
+# Extra TradFi symbols to always include (merged with auto-fetched list).
+TRADFI_SYMBOLS: List[str] = ["XAUUSDT"]
+
+# Only these three timeframes contribute to bull/bear score so that existing
+# alert thresholds (score == 3 = full alignment) remain unchanged.
+_SCORE_TFS = ("4h", "1h", "15m")
 
 # Binance USDT-M klines weight tiers (per request):
 #   limit  1-99  → weight 1   ← we use this
 #   limit 100-499 → weight 2
-#   limit 500-999 → weight 5
-# TSI(25,13,13) needs ≥55 bars; 99 gives 44 bars of extra warm-up and
+# TSI(25,13,13) needs ≥50 bars; 99 gives ~49 bars of extra warm-up and
 # keeps weight=1 so we stay well within the 2400-weight/min rate limit.
 KLINE_LIMIT = 99
 
@@ -34,9 +40,11 @@ KLINE_LIMIT = 99
 class TFState:
     tsi: float
     signal: float
-    above_zero: bool    # TSI > 0
-    rising: bool        # TSI[n] > TSI[n-1]
-    above_signal: bool  # TSI > signal
+    above_zero: bool      # TSI > 0
+    rising: bool          # TSI[n] > TSI[n-1]  (TSI slope up)
+    above_signal: bool    # TSI > signal
+    sig_slope: bool       # signal[n] > signal[n-1]  (signal line rising)
+    sig_above_zero: bool  # signal > 0
     fresh_cross: int = 0  # +1 = just crossed above signal, -1 = just crossed below, 0 = no cross
 
 
@@ -44,23 +52,23 @@ class TFState:
 class SymbolScan:
     symbol: str
     ts: int                             # epoch ms of latest closed bar
-    tf: Dict[str, Optional[TFState]]    # "4h" / "1h" / "15m" -> TFState | None
+    tf: Dict[str, Optional[TFState]]    # "12h"/"4h"/"1h"/"15m" -> TFState | None
     last_price: float = 0.0             # latest closed 15m price (entry/exit ref)
     error: Optional[str] = None
 
     @property
     def bull_score(self) -> int:
-        """Timeframes where TSI > 0 AND TSI > signal (fully bullish)."""
+        """4h/1h/15m timeframes where TSI > 0 AND TSI > signal (fully bullish)."""
         return sum(
-            1 for tf in TIMEFRAMES
+            1 for tf in _SCORE_TFS
             if (s := self.tf.get(tf)) and s.above_zero and s.above_signal
         )
 
     @property
     def bear_score(self) -> int:
-        """Timeframes where TSI < 0 AND TSI < signal (fully bearish)."""
+        """4h/1h/15m timeframes where TSI < 0 AND TSI < signal (fully bearish)."""
         return sum(
-            1 for tf in TIMEFRAMES
+            1 for tf in _SCORE_TFS
             if (s := self.tf.get(tf)) and not s.above_zero and not s.above_signal
         )
 
@@ -102,6 +110,8 @@ def _state_from_closes(closes: List[float]) -> Optional[TFState]:
         above_zero=cur > 0,
         rising=cur > prev,
         above_signal=cur > sig,
+        sig_slope=sig > sig_prev,
+        sig_above_zero=sig > 0,
         fresh_cross=fresh_cross,
     )
 
@@ -122,8 +132,8 @@ def _fetch_with_retry(symbol: str, tf: str, http, retries: int = 3) -> list:
         except Exception as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None)
             if status == 429 or status == 418:
-                if attempt < retries - 1:   # don't sleep after the last attempt
-                    wait = 2 ** attempt     # 1s, 2s, 4s …
+                if attempt < retries - 1:
+                    wait = 2 ** attempt
                     log.warning("Rate-limited fetching %s %s (attempt %d/%d) — waiting %ds",
                                 symbol, tf, attempt + 1, retries, wait)
                     time.sleep(wait)
@@ -134,7 +144,7 @@ def _fetch_with_retry(symbol: str, tf: str, http, retries: int = 3) -> list:
 
 
 def scan_symbol(symbol: str, session=None) -> SymbolScan:
-    """Fetch klines for all three timeframes and compute TSI states."""
+    """Fetch klines for all four timeframes and compute TSI states."""
     http = session or _req
     tf_states: Dict[str, Optional[TFState]] = {}
     latest_ts = 0
@@ -145,7 +155,7 @@ def scan_symbol(symbol: str, session=None) -> SymbolScan:
             latest_ts = max(latest_ts, candles[-1].open_time)
             closes = [c.close for c in candles]
             if tf == "15m":
-                last_price = closes[-1]   # entry/exit reference price
+                last_price = closes[-1]
             tf_states[tf] = _state_from_closes(closes)
         else:
             tf_states[tf] = None
@@ -176,7 +186,6 @@ def scan_all(
 
     with ThreadPoolExecutor(max_workers=max_workers,
                             initializer=None) as pool:
-        # Give each future its own session to avoid sharing state.
         futs = {pool.submit(scan_symbol, sym, _make_session()): sym
                 for sym in symbols}
         for fut in as_completed(futs):
@@ -205,6 +214,8 @@ def symbolscan_to_dict(r: SymbolScan) -> dict:
                 "above_zero": s.above_zero,
                 "rising": s.rising,
                 "above_signal": s.above_signal,
+                "sig_slope": s.sig_slope,
+                "sig_above_zero": s.sig_above_zero,
                 "fresh_cross": s.fresh_cross,
             }
     return {

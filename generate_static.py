@@ -41,6 +41,7 @@ from tsi_signal.positions import (
 from tsi_signal.scanner import (
     KLINE_LIMIT,
     TIMEFRAMES,
+    TRADFI_SYMBOLS,
     SymbolScan,
     fetch_all_futures_symbols,
     scan_all,
@@ -154,7 +155,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     try:
-        symbols = fetch_all_futures_symbols()
+        symbols = sorted(set(fetch_all_futures_symbols()) | set(TRADFI_SYMBOLS))
     except Exception as exc:
         print(f"ERROR: cannot reach Binance futures API: "
               f"{type(exc).__name__}: {exc}", file=sys.stderr)

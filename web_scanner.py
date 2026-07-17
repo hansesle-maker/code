@@ -34,6 +34,7 @@ from tsi_signal.positions import (
 )
 from tsi_signal.scanner import (
     SymbolScan,
+    TRADFI_SYMBOLS,
     fetch_all_futures_symbols,
     scan_all,
     symbolscan_to_dict,
@@ -124,8 +125,8 @@ def do_scan() -> None:
         _cache["error"] = None
     try:
         log.info("Scan started: fetching symbol list …")
-        symbols = fetch_all_futures_symbols()
-        log.info("Scanning %d symbols × 3 timeframes …", len(symbols))
+        symbols = sorted(set(fetch_all_futures_symbols()) | set(TRADFI_SYMBOLS))
+        log.info("Scanning %d symbols × 4 timeframes …", len(symbols))
         results = scan_all(symbols)
         scanned_at = datetime.datetime.utcnow()
         positions_view = _process_signals(results, scanned_at)
