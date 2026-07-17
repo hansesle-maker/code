@@ -62,10 +62,15 @@
       border-radius: 8px; color: var(--bear); font-size: 12px;
     }
 
-    /* Table */
+    /* Table — table-wrap is both the horizontal AND vertical scroll container.
+       This makes position:sticky on thead work correctly: the sticky offset is
+       relative to table-wrap (top:0), not the viewport, so it's unaffected by
+       the parent overflow-x:auto problem. */
     .table-wrap {
-      overflow-x: auto; -webkit-overflow-scrolling: touch;
-      padding: 8px 10px env(safe-area-inset-bottom, 12px) 10px;
+      overflow: auto;
+      -webkit-overflow-scrolling: touch;
+      height: calc(100vh - var(--topbar-h, 120px));
+      padding-bottom: env(safe-area-inset-bottom, 12px);
     }
     #mainTable {
       border-collapse: collapse; font-size: 12px;
@@ -78,7 +83,7 @@
     #mainTable thead th {
       background: var(--surface); color: var(--muted);
       font-size: 11px; font-weight: 600;
-      position: sticky; top: var(--thead-top, 0px); z-index: 10;
+      position: sticky; top: 0; z-index: 10;
     }
     .th-sym {
       text-align: left; padding-left: 10px; min-width: 88px;
@@ -337,13 +342,13 @@ updateCountdown();
 // Auto-reload ~20 s after next 15m candle close
 setTimeout(reloadFresh, (secsToNext15m() + 20) * 1000);
 
-// Stick header row just below the topbar
-function setStickyOffset() {
+// Set table-wrap height = viewport minus topbar so table-wrap is the scroll container
+function setTableHeight() {
   const topbar = document.getElementById("topbar");
-  if (topbar) document.documentElement.style.setProperty("--thead-top", topbar.offsetHeight + "px");
+  if (topbar) document.documentElement.style.setProperty("--topbar-h", topbar.offsetHeight + "px");
 }
-setTimeout(setStickyOffset, 50);
-window.addEventListener("resize", setStickyOffset);
+setTimeout(setTableHeight, 50);
+window.addEventListener("resize", setTableHeight);
 
 _doSort();
 </script>
