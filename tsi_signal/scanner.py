@@ -93,13 +93,14 @@ def _find_last_inflection(sig_vals: List[float], max_bars: int = 45):
     """Return (bars_ago, type_str) for the most recent MATHEMATICAL inflection point.
 
     수학적 변곡점: 2차 도함수(기울기의 기울기)가 부호를 바꾸는 지점.
-    1차 도함수(기울기)가 부호를 바꾸는 극값(peak/trough)이 아님.
+    1차 도함수가 부호를 바꾸는 극값(peak/trough)이 아님.
 
-    - "하락변곡": 2차 도함수 + → -  (기울기가 감소로 전환; 시그널선은 여전히 상승 중일 수 있음)
-    - "상승변곡": 2차 도함수 - → +  (기울기가 증가로 전환; 시그널선은 여전히 하락 중일 수 있음)
+    - "하락변곡": accel + → -  (기울기 증가세 꺾임; 시그널선은 여전히 상승 중일 수 있음)
+    - "상승변곡": accel - → +  (기울기 감소세 꺾임; 시그널선은 여전히 하락 중일 수 있음)
 
     accel[j] = slopes[j+1] - slopes[j]  (이산 2차 도함수)
-    accel이 j-1 → j 에서 부호 전환 → 변곡은 sig_vals[j+1] 위치 → bars_ago = (n-2) - j
+    accel 부호 전환 위치 j → 변곡은 sig_vals[j+1] → bars_ago = (n-2) - j
+    EMA 시그널선은 충분히 매끄러우므로 별도 임계값 없이 부호 변화만 체크.
     """
     n = len(sig_vals)
     if n < 4:
@@ -107,25 +108,15 @@ def _find_last_inflection(sig_vals: List[float], max_bars: int = 45):
 
     slopes = [sig_vals[i] - sig_vals[i - 1] for i in range(1, n)]
     accel  = [slopes[i] - slopes[i - 1]     for i in range(1, len(slopes))]
-    # len(accel) = n-2; accel[j] = curvature at sig_vals[j+1]
-    # bars_ago when sign change detected at j: (n-2) - j  (j = n-3 → bars_ago = 1)
+    # len(accel) = n-2;  bars_ago = (n-2) - j  (j=n-3 → bars_ago=1 = 가장 최근)
 
     j_min = max(1, len(accel) - max_bars)
 
-    # Noise gate: require accel magnitude > 5% of slope range in the search window
-    slope_window = slopes[j_min:]
-    if not slope_window:
-        return -1, ""
-    slope_range = max(slope_window) - min(slope_window)
-    if slope_range < 1e-9:
-        return -1, ""
-    threshold = slope_range * 0.05
-
     for j in range(len(accel) - 1, j_min - 1, -1):
         prev_a, cur_a = accel[j - 1], accel[j]
-        if prev_a > threshold and cur_a < -threshold:
+        if prev_a > 0 and cur_a < 0:
             return (n - 2) - j, "하락변곡"
-        if prev_a < -threshold and cur_a > threshold:
+        if prev_a < 0 and cur_a > 0:
             return (n - 2) - j, "상승변곡"
     return -1, ""
 

@@ -75,15 +75,10 @@
       padding: 5px 8px; text-align: center;
       white-space: nowrap; border-bottom: 1px solid var(--border);
     }
-    #mainTable thead tr:first-child th {
+    #mainTable thead th {
       background: var(--surface); color: var(--muted);
       font-size: 11px; font-weight: 600;
       position: sticky; top: var(--thead-top, 0px); z-index: 10;
-    }
-    #mainTable thead tr:last-child th {
-      background: var(--surface); color: var(--muted);
-      font-size: 11px; font-weight: 600;
-      position: sticky; top: calc(var(--thead-top, 0px) + var(--th1-h, 28px)); z-index: 9;
     }
     .th-sym {
       text-align: left; padding-left: 10px; min-width: 88px;
@@ -191,27 +186,21 @@
   <table id="mainTable">
     <thead>
       <tr>
-        <th class="th-sym th-sortable" rowspan="2" onclick="sortBy('sym')" title="심볼명으로 정렬">
+        <th class="th-sym th-sortable" onclick="sortBy('sym')" title="심볼명">
           심볼<span id="dir-sym" class="sort-dir"></span>
         </th>
-        <th class="th-tf" colspan="3">12h</th>
-        <th class="th-tf" colspan="3">4h</th>
-        <th class="th-tf" colspan="3">1h</th>
-        <th class="th-tf" colspan="3">15m</th>
-      </tr>
-      <tr>
-        <th class="th-sortable th-sep" onclick="sortBy('12h-0')" title="12h 시그널선 변곡 발생지점 (수학적 변곡점)">시그변곡<span id="dir-12h-0" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('12h-1')" title="12h TSI선 기울기 (증가/감소) + TSI vs 0 (상승/하락추세)">TSI기울기<span id="dir-12h-1" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('12h-2')" title="12h 시그널선 기울기 (증가/감소) + 시그 vs 0">시그기울기<span id="dir-12h-2" class="sort-dir"></span></th>
-        <th class="th-sortable th-sep" onclick="sortBy('4h-0')"  title="4h 시그널선 변곡 발생지점">시그변곡<span id="dir-4h-0" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('4h-1')"  title="4h TSI선 기울기 + TSI vs 0">TSI기울기<span id="dir-4h-1" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('4h-2')"  title="4h 시그널선 기울기 + 시그 vs 0">시그기울기<span id="dir-4h-2" class="sort-dir"></span></th>
-        <th class="th-sortable th-sep" onclick="sortBy('1h-0')"  title="1h 시그널선 변곡 발생지점">시그변곡<span id="dir-1h-0" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('1h-1')"  title="1h TSI선 기울기 + TSI vs 0">TSI기울기<span id="dir-1h-1" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('1h-2')"  title="1h 시그널선 기울기 + 시그 vs 0">시그기울기<span id="dir-1h-2" class="sort-dir"></span></th>
-        <th class="th-sortable th-sep" onclick="sortBy('15m-0')" title="15m 시그널선 변곡 발생지점">시그변곡<span id="dir-15m-0" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('15m-1')" title="15m TSI선 기울기 + TSI vs 0">TSI기울기<span id="dir-15m-1" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('15m-2')" title="15m 시그널선 기울기 + 시그 vs 0">시그기울기<span id="dir-15m-2" class="sort-dir"></span></th>
+        <th class="th-sortable th-sep" onclick="sortBy('12h-0')" title="12h 시그널선 변곡 발생지점 (수학적 변곡점)">12h 변곡<span id="dir-12h-0" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('12h-1')" title="12h TSI선 기울기 + TSI vs 0">12h TSI↕<span id="dir-12h-1" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('12h-2')" title="12h 시그널선 기울기 + 시그 vs 0">12h 시그↕<span id="dir-12h-2" class="sort-dir"></span></th>
+        <th class="th-sortable th-sep" onclick="sortBy('4h-0')"  title="4h 시그널선 변곡 발생지점">4h 변곡<span id="dir-4h-0" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('4h-1')"  title="4h TSI선 기울기 + TSI vs 0">4h TSI↕<span id="dir-4h-1" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('4h-2')"  title="4h 시그널선 기울기 + 시그 vs 0">4h 시그↕<span id="dir-4h-2" class="sort-dir"></span></th>
+        <th class="th-sortable th-sep" onclick="sortBy('1h-0')"  title="1h 시그널선 변곡 발생지점">1h 변곡<span id="dir-1h-0" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('1h-1')"  title="1h TSI선 기울기 + TSI vs 0">1h TSI↕<span id="dir-1h-1" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('1h-2')"  title="1h 시그널선 기울기 + 시그 vs 0">1h 시그↕<span id="dir-1h-2" class="sort-dir"></span></th>
+        <th class="th-sortable th-sep" onclick="sortBy('15m-0')" title="15m 시그널선 변곡 발생지점">15m 변곡<span id="dir-15m-0" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('15m-1')" title="15m TSI선 기울기 + TSI vs 0">15m TSI↕<span id="dir-15m-1" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('15m-2')" title="15m 시그널선 기울기 + 시그 vs 0">15m 시그↕<span id="dir-15m-2" class="sort-dir"></span></th>
       </tr>
     </thead>
     <tbody id="tbody">
@@ -348,14 +337,10 @@ updateCountdown();
 // Auto-reload ~20 s after next 15m candle close
 setTimeout(reloadFresh, (secsToNext15m() + 20) * 1000);
 
-// Keep sticky header offset updated
+// Stick header row just below the topbar
 function setStickyOffset() {
   const topbar = document.getElementById("topbar");
-  const trow1  = document.querySelector("#mainTable thead tr:first-child");
-  if (!topbar) return;
-  const root = document.documentElement;
-  root.style.setProperty("--thead-top", topbar.offsetHeight + "px");
-  if (trow1) root.style.setProperty("--th1-h", trow1.offsetHeight + "px");
+  if (topbar) document.documentElement.style.setProperty("--thead-top", topbar.offsetHeight + "px");
 }
 setTimeout(setStickyOffset, 50);
 window.addEventListener("resize", setStickyOffset);
