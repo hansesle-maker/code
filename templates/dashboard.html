@@ -27,7 +27,7 @@
       -webkit-text-size-adjust: 100%;
     }
 
-    /* Topbar */
+    /* ── Topbar ─────────────────────────────────────────────── */
     .topbar {
       position: sticky; top: 0; z-index: 200;
       background: var(--bg); border-bottom: 1px solid var(--border);
@@ -40,7 +40,7 @@
     }
     .title { font-size: 15px; font-weight: 700; color: var(--accent); }
     .meta  { font-size: 11px; color: var(--muted); margin-top: 1px; }
-    .ctrl-group { display: flex; align-items: center; gap: 6px; }
+    .ctrl-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     button {
       background: var(--surface); border: 1px solid var(--border);
       color: var(--muted); border-radius: 8px; font-size: 12px;
@@ -48,6 +48,7 @@
       -webkit-tap-highlight-color: transparent;
     }
     button:active { opacity: .7; }
+    button.active { border-color: var(--accent); color: var(--text); background: rgba(106,106,255,.15); }
     .search {
       width: 100%; padding: 7px 12px;
       background: var(--surface); border: 1px solid var(--border);
@@ -62,10 +63,7 @@
       border-radius: 8px; color: var(--bear); font-size: 12px;
     }
 
-    /* Table — table-wrap is both the horizontal AND vertical scroll container.
-       This makes position:sticky on thead work correctly: the sticky offset is
-       relative to table-wrap (top:0), not the viewport, so it's unaffected by
-       the parent overflow-x:auto problem. */
+    /* ── Table wrap — both scroll axes so sticky works ───────── */
     .table-wrap {
       overflow: auto;
       -webkit-overflow-scrolling: touch;
@@ -80,28 +78,40 @@
       padding: 5px 8px; text-align: center;
       white-space: nowrap; border-bottom: 1px solid var(--border);
     }
-    #mainTable thead th {
+
+    /* ── Sticky header row (row 1) ───────────────────────────── */
+    #mainTable thead tr:first-child th {
       background: var(--surface); color: var(--muted);
       font-size: 11px; font-weight: 600;
-      position: sticky; top: 0; z-index: 10;
+      position: sticky; top: 0; z-index: 11;
     }
+    /* ── Sticky filter row (row 2) ───────────────────────────── */
+    #mainTable thead tr.filter-row th {
+      background: var(--surface);
+      position: sticky; top: var(--hdr-h, 30px); z-index: 10;
+      padding: 3px 4px;
+      border-bottom: 2px solid var(--border);
+    }
+
+    /* Symbol column — sticky left in all rows */
     .th-sym {
-      text-align: left; padding-left: 10px; min-width: 88px;
-      position: sticky; left: 0; z-index: 20; background: var(--surface);
+      text-align: left; padding-left: 10px; min-width: 108px;
+      position: sticky; left: 0; z-index: 21;
+      background: var(--surface);
     }
-    .th-tf {
-      font-size: 12px; font-weight: 700; color: var(--accent);
-      border-left: 2px solid var(--border);
-    }
-    .th-sortable { cursor: pointer; user-select: none; }
-    .th-sortable:hover { color: var(--text); }
-    .th-sep { border-left: 2px solid var(--border); }
     .td-sym {
       text-align: left; font-weight: 700; font-size: 13px; color: var(--text);
-      padding-left: 10px; min-width: 88px;
+      padding-left: 8px; min-width: 108px;
       position: sticky; left: 0; z-index: 5;
       background: var(--bg); border-right: 1px solid var(--border);
     }
+    /* filter row sym cell: also sticky left at same z-index 21 */
+    #mainTable thead tr.filter-row th.th-sym { z-index: 21; }
+
+    .th-sortable { cursor: pointer; user-select: none; }
+    .th-sortable:hover { color: var(--text); }
+    .th-sep { border-left: 2px solid var(--border); }
+
     td.up { color: var(--bull); font-weight: 600; }
     td.dn { color: var(--bear); font-weight: 600; }
     td.na { color: var(--muted); }
@@ -112,6 +122,23 @@
     #mainTable tbody tr:hover .td-sym           { background: #1a1a36; }
 
     .sort-dir { font-size: 9px; margin-left: 2px; opacity: .75; }
+
+    /* Bookmark star */
+    .bm-star {
+      cursor: pointer; margin-left: 5px; font-size: 13px;
+      color: var(--muted); display: inline-block;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .bm-star.on { color: #ffd700; }
+
+    /* Filter dropdowns */
+    .filter-row select {
+      background: var(--bg); color: var(--text);
+      border: 1px solid var(--border); border-radius: 4px;
+      font-size: 11px; padding: 2px 3px; cursor: pointer;
+      max-width: 100%;
+    }
+    .filter-row select:focus { outline: none; border-color: var(--accent); }
 
     .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
     .spinner {
@@ -141,35 +168,39 @@
     </div>
     <div class="ctrl-group">
       <a href="/backtest" style="text-decoration:none"><button title="Cardwell RSI 백테스트">📊 백테스트</button></a>
+      <button id="bmBtn" onclick="toggleBmFilter(this)" title="즐겨찾기만 보기">⭐ 즐겨찾기</button>
       <button onclick="resetSort()" title="기본 정렬 (심볼 순)">↩</button>
       <button onclick="manualRefresh(this)" title="지금 스캔">↻</button>
     </div>
   </div>
   <input class="search" id="search" type="search"
-         placeholder="심볼 검색 (예: BTC, ETH, XAU…)" oninput="searchFilter()">
+         placeholder="심볼 검색 (예: BTC, ETH, XAU…)" oninput="applyFilter()">
 </div>
 
 {% if error %}
 <div class="error-bar">⚠️ 스캔 오류: {{ error }}</div>
 {% endif %}
 
-{# Column legend (cell index in each tbody row):
-   0:     symbol
-   1-3:   12h → 시그변곡, TSI기울기, 시그기울기
-   4-6:   4h  → 시그변곡, TSI기울기, 시그기울기
-   7-9:   1h  → 시그변곡, TSI기울기, 시그기울기
-   10-12: 15m → 시그변곡, TSI기울기, 시그기울기
-
-   시그변곡  — mathematical inflection of signal line: "N봉전 / 하락변곡" / "N봉전 / 상승변곡"
-               sort: bars_ago ascending (1 = most recent); no-data = 9999
-   TSI기울기 — TSI slope direction × TSI vs zero: "증가/감소 / 상승/하락추세"
-               sort: (rising*2 + above_zero) descending (3 = rising+positive = most bullish)
-   시그기울기 — signal slope × signal vs zero: same format as TSI기울기
+{#
+  Cell layout (0-based index):
+    0  심볼 (sticky left)
+    1  12h 변곡     sig_inflect (N봉전/하락변곡|상승변곡)
+    2  12h TSI↕     rising × above_zero
+    3  12h 시그↕    sig_slope × sig_above_zero
+    4  4h  변곡
+    5  4h  TSI↕
+    6  4h  시그↕
+    7  1h  시그0    sig_above_zero → "시그 > 0" / "시그 < 0"
+    8  1h  TSI↕
+    9  1h  시그↕
 #}
 
-{% macro tf_cells(s, first) %}
+{% macro tf_cells(s, first, is_1h=False) %}
 {% if s %}
-  {% if s.sig_inflect_bars >= 0 %}
+  {% if is_1h %}
+<td class="{{ 'up' if s.sig_above_zero else 'dn' }}{% if first %} th-sep{% endif %}"
+    data-v="{{ 1 if s.sig_above_zero else 0 }}">{{ '시그 > 0' if s.sig_above_zero else '시그 < 0' }}</td>
+  {% elif s.sig_inflect_bars >= 0 %}
 <td class="{{ 'up' if s.sig_inflect_type == '상승변곡' else 'dn' }}{% if first %} th-sep{% endif %}"
     data-v="{{ s.sig_inflect_bars }}">{{ s.sig_inflect_bars }}봉전 / {{ s.sig_inflect_type }}</td>
   {% else %}
@@ -190,22 +221,99 @@
 <div class="table-wrap">
   <table id="mainTable">
     <thead>
+      <!-- Row 1: column headers -->
       <tr>
         <th class="th-sym th-sortable" onclick="sortBy('sym')" title="심볼명">
           심볼<span id="dir-sym" class="sort-dir"></span>
         </th>
-        <th class="th-sortable th-sep" onclick="sortBy('12h-0')" title="12h 시그널선 변곡 발생지점 (수학적 변곡점)">12h 변곡<span id="dir-12h-0" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('12h-1')" title="12h TSI선 기울기 + TSI vs 0">12h TSI↕<span id="dir-12h-1" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('12h-2')" title="12h 시그널선 기울기 + 시그 vs 0">12h 시그↕<span id="dir-12h-2" class="sort-dir"></span></th>
-        <th class="th-sortable th-sep" onclick="sortBy('4h-0')"  title="4h 시그널선 변곡 발생지점">4h 변곡<span id="dir-4h-0" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('4h-1')"  title="4h TSI선 기울기 + TSI vs 0">4h TSI↕<span id="dir-4h-1" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('4h-2')"  title="4h 시그널선 기울기 + 시그 vs 0">4h 시그↕<span id="dir-4h-2" class="sort-dir"></span></th>
-        <th class="th-sortable th-sep" onclick="sortBy('1h-0')"  title="1h 시그널선 변곡 발생지점">1h 변곡<span id="dir-1h-0" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('1h-1')"  title="1h TSI선 기울기 + TSI vs 0">1h TSI↕<span id="dir-1h-1" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('1h-2')"  title="1h 시그널선 기울기 + 시그 vs 0">1h 시그↕<span id="dir-1h-2" class="sort-dir"></span></th>
-        <th class="th-sortable th-sep" onclick="sortBy('15m-0')" title="15m 시그널선 변곡 발생지점">15m 변곡<span id="dir-15m-0" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('15m-1')" title="15m TSI선 기울기 + TSI vs 0">15m TSI↕<span id="dir-15m-1" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('15m-2')" title="15m 시그널선 기울기 + 시그 vs 0">15m 시그↕<span id="dir-15m-2" class="sort-dir"></span></th>
+        <th class="th-sortable th-sep" onclick="sortBy('12h-0')" title="12h 시그널선 변곡 (고점→하락/저점→상승)">12h 변곡<span id="dir-12h-0" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('12h-1')" title="12h TSI 기울기 + TSI vs 0">12h TSI↕<span id="dir-12h-1" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('12h-2')" title="12h 시그널 기울기 + 시그 vs 0">12h 시그↕<span id="dir-12h-2" class="sort-dir"></span></th>
+        <th class="th-sortable th-sep" onclick="sortBy('4h-0')"  title="4h 시그널선 변곡">4h 변곡<span id="dir-4h-0" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('4h-1')"  title="4h TSI 기울기 + TSI vs 0">4h TSI↕<span id="dir-4h-1" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('4h-2')"  title="4h 시그널 기울기 + 시그 vs 0">4h 시그↕<span id="dir-4h-2" class="sort-dir"></span></th>
+        <th class="th-sortable th-sep" onclick="sortBy('1h-0')"  title="1h 시그널선 0선 위/아래">1h 시그0<span id="dir-1h-0" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('1h-1')"  title="1h TSI 기울기 + TSI vs 0">1h TSI↕<span id="dir-1h-1" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('1h-2')"  title="1h 시그널 기울기 + 시그 vs 0">1h 시그↕<span id="dir-1h-2" class="sort-dir"></span></th>
+      </tr>
+      <!-- Row 2: column filters -->
+      <tr class="filter-row">
+        <th class="th-sym"></th>
+        <th class="th-sep">
+          <select data-col="12h-0" onchange="applyFilter()">
+            <option value="">전체</option>
+            <option value="하락변곡">하락변곡</option>
+            <option value="상승변곡">상승변곡</option>
+          </select>
+        </th>
+        <th>
+          <select data-col="12h-1" onchange="applyFilter()">
+            <option value="">전체</option>
+            <option value="증가">증가↑</option>
+            <option value="감소">감소↓</option>
+            <option value="상승추세">0선 위</option>
+            <option value="하락추세">0선 아래</option>
+          </select>
+        </th>
+        <th>
+          <select data-col="12h-2" onchange="applyFilter()">
+            <option value="">전체</option>
+            <option value="증가">증가↑</option>
+            <option value="감소">감소↓</option>
+            <option value="상승추세">0선 위</option>
+            <option value="하락추세">0선 아래</option>
+          </select>
+        </th>
+        <th class="th-sep">
+          <select data-col="4h-0" onchange="applyFilter()">
+            <option value="">전체</option>
+            <option value="하락변곡">하락변곡</option>
+            <option value="상승변곡">상승변곡</option>
+          </select>
+        </th>
+        <th>
+          <select data-col="4h-1" onchange="applyFilter()">
+            <option value="">전체</option>
+            <option value="증가">증가↑</option>
+            <option value="감소">감소↓</option>
+            <option value="상승추세">0선 위</option>
+            <option value="하락추세">0선 아래</option>
+          </select>
+        </th>
+        <th>
+          <select data-col="4h-2" onchange="applyFilter()">
+            <option value="">전체</option>
+            <option value="증가">증가↑</option>
+            <option value="감소">감소↓</option>
+            <option value="상승추세">0선 위</option>
+            <option value="하락추세">0선 아래</option>
+          </select>
+        </th>
+        <th class="th-sep">
+          <select data-col="1h-0" onchange="applyFilter()">
+            <option value="">전체</option>
+            <option value="&gt; 0">&gt; 0</option>
+            <option value="&lt; 0">&lt; 0</option>
+          </select>
+        </th>
+        <th>
+          <select data-col="1h-1" onchange="applyFilter()">
+            <option value="">전체</option>
+            <option value="증가">증가↑</option>
+            <option value="감소">감소↓</option>
+            <option value="상승추세">0선 위</option>
+            <option value="하락추세">0선 아래</option>
+          </select>
+        </th>
+        <th>
+          <select data-col="1h-2" onchange="applyFilter()">
+            <option value="">전체</option>
+            <option value="증가">증가↑</option>
+            <option value="감소">감소↓</option>
+            <option value="상승추세">0선 위</option>
+            <option value="하락추세">0선 아래</option>
+          </select>
+        </th>
       </tr>
     </thead>
     <tbody id="tbody">
@@ -213,15 +321,13 @@
     {% set s12 = r.tf.get('12h') %}
     {% set s4  = r.tf.get('4h') %}
     {% set s1  = r.tf.get('1h') %}
-    {% set s15 = r.tf.get('15m') %}
     <tr data-sym="{{ r.symbol }}">
       <td class="td-sym" data-v="{{ r.symbol }}">
-        {{ r.symbol[:-4] if r.symbol.endswith('USDT') else r.symbol }}
+        {{ r.symbol[:-4] if r.symbol.endswith('USDT') else r.symbol }}<span class="bm-star" data-sym="{{ r.symbol }}">☆</span>
       </td>
       {{ tf_cells(s12, True) }}
       {{ tf_cells(s4,  True) }}
-      {{ tf_cells(s1,  True) }}
-      {{ tf_cells(s15, True) }}
+      {{ tf_cells(s1,  True, True) }}
     </tr>
     {% endfor %}
     </tbody>
@@ -254,34 +360,78 @@ function reloadFresh() {
   location.href = location.pathname + "?t=" + Date.now();
 }
 
-// Symbol search
-function searchFilter() {
-  const q = (document.getElementById("search").value || "").toUpperCase();
-  let visible = 0;
-  document.querySelectorAll("#tbody tr").forEach(row => {
-    const show = !q || (row.dataset.sym || "").includes(q);
-    row.style.display = show ? "" : "none";
-    if (show) visible++;
+/* ── Bookmarks ─────────────────────────────────────────────── */
+let bookmarks = new Set(JSON.parse(localStorage.getItem("tsi_bm") || "[]"));
+let showBmOnly = false;
+
+function renderStars() {
+  document.querySelectorAll("#tbody .bm-star").forEach(star => {
+    const on = bookmarks.has(star.dataset.sym);
+    star.textContent = on ? "★" : "☆";
+    star.classList.toggle("on", on);
   });
-  const lbl = document.getElementById("countLbl");
-  if (lbl) lbl.textContent = (q ? visible + "/" + document.querySelectorAll("#tbody tr").length : visible) + " 종목";
 }
 
-// Sort
+function toggleBm(sym) {
+  if (bookmarks.has(sym)) bookmarks.delete(sym);
+  else bookmarks.add(sym);
+  localStorage.setItem("tsi_bm", JSON.stringify([...bookmarks]));
+  renderStars();
+  applyFilter();
+}
+
+function toggleBmFilter(btn) {
+  showBmOnly = !showBmOnly;
+  if (btn) btn.classList.toggle("active", showBmOnly);
+  applyFilter();
+}
+
+document.getElementById("tbody")?.addEventListener("click", e => {
+  if (e.target.classList.contains("bm-star")) {
+    e.stopPropagation();
+    toggleBm(e.target.dataset.sym);
+  }
+});
+
+/* ── Column index map ──────────────────────────────────────── */
 const COL = {
   "12h-0": 1, "12h-1": 2, "12h-2": 3,
   "4h-0":  4, "4h-1":  5, "4h-2":  6,
   "1h-0":  7, "1h-1":  8, "1h-2":  9,
-  "15m-0":10, "15m-1":11, "15m-2":12,
 };
 
+/* ── Unified filter ────────────────────────────────────────── */
+function applyFilter() {
+  const q = (document.getElementById("search").value || "").toUpperCase();
+  let visible = 0;
+  const rows = document.querySelectorAll("#tbody tr");
+  const total = rows.length;
+
+  rows.forEach(row => {
+    const sym = row.dataset.sym || "";
+    if (q && !sym.includes(q))             { row.style.display = "none"; return; }
+    if (showBmOnly && !bookmarks.has(sym)) { row.style.display = "none"; return; }
+
+    let pass = true;
+    for (const [key, idx] of Object.entries(COL)) {
+      const sel = document.querySelector(`select[data-col="${key}"]`);
+      if (!sel || !sel.value) continue;
+      const cell = row.cells[idx];
+      if (cell && !cell.textContent.includes(sel.value)) { pass = false; break; }
+    }
+    row.style.display = pass ? "" : "none";
+    if (pass) visible++;
+  });
+
+  const lbl = document.getElementById("countLbl");
+  if (lbl) lbl.textContent = (visible < total ? visible + "/" + total : visible) + " 종목";
+}
+
+/* ── Sort ──────────────────────────────────────────────────── */
 let _key = "sym";
 let _asc = true;
 
-function resetSort() {
-  _key = "sym"; _asc = true;
-  _updateIcons(); _doSort();
-}
+function resetSort() { _key = "sym"; _asc = true; _updateIcons(); _doSort(); }
 
 function sortBy(key) {
   _asc = (_key === key) ? !_asc : (key === "sym");
@@ -307,7 +457,7 @@ function _doSort() {
     return _asc ? cmp : -cmp;
   });
   rows.forEach(r => tbody.appendChild(r));
-  searchFilter();
+  applyFilter();
 }
 
 function _updateIcons() {
@@ -316,7 +466,7 @@ function _updateIcons() {
   if (el) el.textContent = _asc ? "▲" : "▼";
 }
 
-// Manual refresh
+/* ── Manual refresh ────────────────────────────────────────── */
 function manualRefresh(btn) {
   if (STATIC_MODE) { reloadFresh(); return; }
   if (btn) { btn.disabled = true; btn.textContent = "…"; }
@@ -325,7 +475,7 @@ function manualRefresh(btn) {
     .catch(() => { if (btn) { btn.disabled = false; btn.textContent = "↻"; } });
 }
 
-// Countdown to next 15m candle close
+/* ── Countdown to next 15m close ───────────────────────────── */
 function secsToNext15m() {
   const now = new Date();
   const s = now.getUTCMinutes() * 60 + now.getUTCSeconds();
@@ -338,18 +488,20 @@ function updateCountdown() {
 }
 setInterval(updateCountdown, 1000);
 updateCountdown();
-
-// Auto-reload ~20 s after next 15m candle close
 setTimeout(reloadFresh, (secsToNext15m() + 20) * 1000);
 
-// Set table-wrap height = viewport minus topbar so table-wrap is the scroll container
+/* ── Layout heights ────────────────────────────────────────── */
 function setTableHeight() {
   const topbar = document.getElementById("topbar");
   if (topbar) document.documentElement.style.setProperty("--topbar-h", topbar.offsetHeight + "px");
+  const hdrRow = document.querySelector("#mainTable thead tr:first-child");
+  if (hdrRow) document.documentElement.style.setProperty("--hdr-h", hdrRow.offsetHeight + "px");
 }
 setTimeout(setTableHeight, 50);
 window.addEventListener("resize", setTableHeight);
 
+/* ── Init ──────────────────────────────────────────────────── */
+renderStars();
 _doSort();
 </script>
 </body>
