@@ -90,38 +90,43 @@ def fetch_all_futures_symbols(session=None) -> List[str]:
 
 
 def _find_last_inflection(sig_vals: List[float], max_bars: int = 45):
-    """Return (bars_ago, type_str) for the most recent signal-line inflection point.
+    """Return (bars_ago, type_str) for the most recent MATHEMATICAL inflection point.
 
-    A mathematical inflection occurs where the slope (first derivative) changes sign:
-    - "하락변곡": slope went positive → negative (local peak)
-    - "상승변곡": slope went negative → positive (local trough)
+    수학적 변곡점: 2차 도함수(기울기의 기울기)가 부호를 바꾸는 지점.
+    1차 도함수(기울기)가 부호를 바꾸는 극값(peak/trough)이 아님.
 
-    Searches the last max_bars bars (capped to avoid warmup artifacts) and requires
-    slope magnitude > 0.5% of the signal range to ignore micro-oscillation noise.
-    Returns (-1, "") when no meaningful inflection is found.
+    - "하락변곡": 2차 도함수 + → -  (기울기가 감소로 전환; 시그널선은 여전히 상승 중일 수 있음)
+    - "상승변곡": 2차 도함수 - → +  (기울기가 증가로 전환; 시그널선은 여전히 하락 중일 수 있음)
+
+    accel[j] = slopes[j+1] - slopes[j]  (이산 2차 도함수)
+    accel이 j-1 → j 에서 부호 전환 → 변곡은 sig_vals[j+1] 위치 → bars_ago = (n-2) - j
     """
     n = len(sig_vals)
-    if n < 3:
+    if n < 4:
         return -1, ""
+
     slopes = [sig_vals[i] - sig_vals[i - 1] for i in range(1, n)]
-    # j indexes slopes; sig_vals[j] is the candidate inflection point.
-    # bars_ago = (n-1) - j  (j = n-2 → bars_ago = 1 = most recent possible)
-    j_min = max(1, len(slopes) - max_bars)
+    accel  = [slopes[i] - slopes[i - 1]     for i in range(1, len(slopes))]
+    # len(accel) = n-2; accel[j] = curvature at sig_vals[j+1]
+    # bars_ago when sign change detected at j: (n-2) - j  (j = n-3 → bars_ago = 1)
 
-    # Minimum slope magnitude: 0.5% of signal range over the search window.
-    # Filters micro-oscillations in the smooth EMA signal line.
-    window = sig_vals[max(0, j_min - 1):]
-    sig_range = max(window) - min(window)
-    if sig_range < 1e-9:
+    j_min = max(1, len(accel) - max_bars)
+
+    # Noise gate: require accel magnitude > 5% of slope range in the search window
+    slope_window = slopes[j_min:]
+    if not slope_window:
         return -1, ""
-    threshold = sig_range * 0.005
+    slope_range = max(slope_window) - min(slope_window)
+    if slope_range < 1e-9:
+        return -1, ""
+    threshold = slope_range * 0.05
 
-    for j in range(len(slopes) - 1, j_min - 1, -1):
-        prev_s, cur_s = slopes[j - 1], slopes[j]
-        if prev_s > threshold and cur_s < -threshold:
-            return (n - 1) - j, "하락변곡"
-        if prev_s < -threshold and cur_s > threshold:
-            return (n - 1) - j, "상승변곡"
+    for j in range(len(accel) - 1, j_min - 1, -1):
+        prev_a, cur_a = accel[j - 1], accel[j]
+        if prev_a > threshold and cur_a < -threshold:
+            return (n - 2) - j, "하락변곡"
+        if prev_a < -threshold and cur_a > threshold:
+            return (n - 2) - j, "상승변곡"
     return -1, ""
 
 
