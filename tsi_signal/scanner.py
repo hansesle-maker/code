@@ -46,6 +46,8 @@ class TFState:
     sig_slope: bool       # signal[n] > signal[n-1]  (signal line rising)
     sig_above_zero: bool  # signal > 0
     fresh_cross: int = 0  # +1 = just crossed above signal, -1 = just crossed below, 0 = no cross
+    sig_inflect_bars: int = -1  # bars ago of last mathematical inflection in signal line (-1 = not found)
+    sig_inflect_type: str = ""  # "하락변곡" (peak) or "상승변곡" (trough)
 
 
 @dataclass
@@ -87,6 +89,32 @@ def fetch_all_futures_symbols(session=None) -> List[str]:
     )
 
 
+def _find_last_inflection(sig_vals: List[float], max_bars: int = 30):
+    """Return (bars_ago, type_str) for the most recent signal-line inflection point.
+
+    A mathematical inflection occurs where the slope (first derivative) changes sign:
+    - "하락변곡": slope went positive → negative (local peak)
+    - "상승변곡": slope went negative → positive (local trough)
+
+    Searches only the last max_bars bars to avoid warmup-period artifacts.
+    Returns (-1, "") when no inflection is found within the search window.
+    """
+    n = len(sig_vals)
+    if n < 3:
+        return -1, ""
+    slopes = [sig_vals[i] - sig_vals[i - 1] for i in range(1, n)]
+    # j indexes slopes; sig_vals[j] is the candidate inflection point.
+    # bars_ago = (n-1) - j  (j = n-2 → bars_ago = 1 = most recent possible)
+    j_min = max(1, len(slopes) - max_bars)
+    for j in range(len(slopes) - 1, j_min - 1, -1):
+        prev_s, cur_s = slopes[j - 1], slopes[j]
+        if prev_s > 0 and cur_s < 0:
+            return (n - 1) - j, "하락변곡"
+        if prev_s < 0 and cur_s > 0:
+            return (n - 1) - j, "상승변곡"
+    return -1, ""
+
+
 def _state_from_closes(closes: List[float]) -> Optional[TFState]:
     if len(closes) < 55:
         return None
@@ -104,6 +132,8 @@ def _state_from_closes(closes: List[float]) -> Optional[TFState]:
     else:
         fresh_cross = 0
 
+    inf_bars, inf_type = _find_last_inflection(sig_vals)
+
     return TFState(
         tsi=round(cur, 4),
         signal=round(sig, 4),
@@ -113,6 +143,8 @@ def _state_from_closes(closes: List[float]) -> Optional[TFState]:
         sig_slope=sig > sig_prev,
         sig_above_zero=sig > 0,
         fresh_cross=fresh_cross,
+        sig_inflect_bars=inf_bars,
+        sig_inflect_type=inf_type,
     )
 
 
@@ -217,6 +249,8 @@ def symbolscan_to_dict(r: SymbolScan) -> dict:
                 "sig_slope": s.sig_slope,
                 "sig_above_zero": s.sig_above_zero,
                 "fresh_cross": s.fresh_cross,
+                "sig_inflect_bars": s.sig_inflect_bars,
+                "sig_inflect_type": s.sig_inflect_type,
             }
     return {
         "symbol": r.symbol,

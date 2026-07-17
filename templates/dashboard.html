@@ -307,22 +307,38 @@
 
 <!-- ── Scan table ─────────────────────────────────────────────────── -->
 
-{# Column legend:
-   0: symbol
-   1-3:   12h  → sig_slope, rising, sig_above_zero
-   4-6:   4h   → sig_slope, rising, sig_above_zero
-   7-9:   1h   → sig_slope, rising, sig_above_zero
-   10-12: 15m  → sig_slope, rising, sig_above_zero
+{# Column legend (indices in tbody row):
+   0:     symbol
+   1-3:   12h  → 시그변곡, TSI기울기, 시그기울기
+   4-6:   4h   → 시그변곡, TSI기울기, 시그기울기
+   7-9:   1h   → 시그변곡, TSI기울기, 시그기울기
+   10-12: 15m  → 시그변곡, TSI기울기, 시그기울기
 #}
 
-{# Macro: render 3 indicator cells for one TF #}
+{# Macro: render 3 indicator cells for one TF
+   Cell 1 — 시그변곡: mathematical inflection of the signal line ("N봉전 / 하락/상승변곡")
+   Cell 2 — TSI기울기: TSI slope direction + TSI vs zero ("증가 / 상승추세" etc.)
+   Cell 3 — 시그기울기: signal slope direction + signal vs zero
+#}
 {% macro tf_cells(s, first) %}
 {% if s %}
-<td class="{{ 'up' if s.sig_slope else 'dn' }}{% if first %} sep{% endif %}" data-v="{{ 1 if s.sig_slope else 0 }}">{{ '↑' if s.sig_slope else '↓' }}</td>
-<td class="{{ 'up' if s.rising else 'dn' }}" data-v="{{ 1 if s.rising else 0 }}">{{ '↑' if s.rising else '↓' }}</td>
-<td class="{{ 'up' if s.sig_above_zero else 'dn' }}" data-v="{{ 1 if s.sig_above_zero else 0 }}">{{ '+' if s.sig_above_zero else '−' }}</td>
+{# Cell 1: signal inflection point #}
+{% if s.sig_inflect_bars >= 0 %}
+<td class="{{ 'up' if s.sig_inflect_type == '상승변곡' else 'dn' }}{% if first %} sep{% endif %}"
+    data-v="{{ s.sig_inflect_bars }}">{{ s.sig_inflect_bars }}봉전 / {{ s.sig_inflect_type }}</td>
 {% else %}
-<td class="na{% if first %} sep{% endif %}" data-v="-1">—</td><td class="na" data-v="-1">—</td><td class="na" data-v="-1">—</td>
+<td class="na{% if first %} sep{% endif %}" data-v="9999">—</td>
+{% endif %}
+{# Cell 2: TSI slope direction + TSI vs zero #}
+<td class="{{ 'up' if s.rising else 'dn' }}"
+    data-v="{{ (1 if s.rising else 0) * 2 + (1 if s.above_zero else 0) }}">{{ '증가' if s.rising else '감소' }} / {{ '상승추세' if s.above_zero else '하락추세' }}</td>
+{# Cell 3: signal slope direction + signal vs zero #}
+<td class="{{ 'up' if s.sig_slope else 'dn' }}"
+    data-v="{{ (1 if s.sig_slope else 0) * 2 + (1 if s.sig_above_zero else 0) }}">{{ '증가' if s.sig_slope else '감소' }} / {{ '상승추세' if s.sig_above_zero else '하락추세' }}</td>
+{% else %}
+<td class="na{% if first %} sep{% endif %}" data-v="9999">—</td>
+<td class="na" data-v="-1">—</td>
+<td class="na" data-v="-1">—</td>
 {% endif %}
 {% endmacro %}
 
@@ -340,20 +356,20 @@
         <th class="th-tf" colspan="3">1h</th>
         <th class="th-tf" colspan="3">15m</th>
       </tr>
-      <!-- Row 2: sub-column headers — each TF: sig slope | TSI slope | sig vs 0 -->
+      <!-- Row 2: sub-column headers — each TF: 시그변곡 | TSI기울기 | 시그기울기 -->
       <tr>
-        <th class="th-sortable th-sep" onclick="sortBy('12h-0')" title="12h 시그널선 방향 (↑상승/↓하락)">시그↕<span id="dir-12h-0" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('12h-1')" title="12h TSI선 기울기 증가/감소">TSI↕<span id="dir-12h-1" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('12h-2')" title="12h 시그널선 0 초과/미달">Sig0<span id="dir-12h-2" class="sort-dir"></span></th>
-        <th class="th-sortable th-sep" onclick="sortBy('4h-0')"  title="4h 시그널선 방향">시그↕<span id="dir-4h-0" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('4h-1')"  title="4h TSI선 기울기">TSI↕<span id="dir-4h-1" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('4h-2')"  title="4h 시그널선 0 초과/미달">Sig0<span id="dir-4h-2" class="sort-dir"></span></th>
-        <th class="th-sortable th-sep" onclick="sortBy('1h-0')"  title="1h 시그널선 방향">시그↕<span id="dir-1h-0" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('1h-1')"  title="1h TSI선 기울기">TSI↕<span id="dir-1h-1" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('1h-2')"  title="1h 시그널선 0 초과/미달">Sig0<span id="dir-1h-2" class="sort-dir"></span></th>
-        <th class="th-sortable th-sep" onclick="sortBy('15m-0')" title="15m 시그널선 방향">시그↕<span id="dir-15m-0" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('15m-1')" title="15m TSI선 기울기">TSI↕<span id="dir-15m-1" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('15m-2')" title="15m 시그널선 0 초과/미달">Sig0<span id="dir-15m-2" class="sort-dir"></span></th>
+        <th class="th-sortable th-sep" onclick="sortBy('12h-0')" title="12h 시그널선 변곡 발생지점 (수학적 변곡점, 낮을수록 최근)">시그변곡<span id="dir-12h-0" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('12h-1')" title="12h TSI선 기울기 (증가/감소) + TSI vs 0">TSI기울기<span id="dir-12h-1" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('12h-2')" title="12h 시그널선 기울기 (증가/감소) + 시그 vs 0">시그기울기<span id="dir-12h-2" class="sort-dir"></span></th>
+        <th class="th-sortable th-sep" onclick="sortBy('4h-0')"  title="4h 시그널선 변곡 발생지점">시그변곡<span id="dir-4h-0" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('4h-1')"  title="4h TSI선 기울기 + TSI vs 0">TSI기울기<span id="dir-4h-1" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('4h-2')"  title="4h 시그널선 기울기 + 시그 vs 0">시그기울기<span id="dir-4h-2" class="sort-dir"></span></th>
+        <th class="th-sortable th-sep" onclick="sortBy('1h-0')"  title="1h 시그널선 변곡 발생지점">시그변곡<span id="dir-1h-0" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('1h-1')"  title="1h TSI선 기울기 + TSI vs 0">TSI기울기<span id="dir-1h-1" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('1h-2')"  title="1h 시그널선 기울기 + 시그 vs 0">시그기울기<span id="dir-1h-2" class="sort-dir"></span></th>
+        <th class="th-sortable th-sep" onclick="sortBy('15m-0')" title="15m 시그널선 변곡 발생지점">시그변곡<span id="dir-15m-0" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('15m-1')" title="15m TSI선 기울기 + TSI vs 0">TSI기울기<span id="dir-15m-1" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('15m-2')" title="15m 시그널선 기울기 + 시그 vs 0">시그기울기<span id="dir-15m-2" class="sort-dir"></span></th>
       </tr>
     </thead>
     <tbody id="tbody">
