@@ -8,37 +8,30 @@
   <meta name="apple-mobile-web-app-title" content="TSI Scanner">
   <title>TSI Scanner — Binance Futures</title>
   <style>
-    /* ── Reset & tokens ─────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg:       #0b0b18;
-      --surface:  #13132a;
-      --border:   #242450;
-      --text:     #dde0ff;
-      --muted:    #7070a0;
-      --accent:   #6a6aff;
-      --bull:     #00d47e;
-      --bull-dim: rgba(0,212,126,.14);
-      --bear:     #ff4a5a;
-      --bear-dim: rgba(255,74,90,.14);
-      --warn:     #ffb340;
-      --warn-dim: rgba(255,179,64,.14);
+      --bg:      #0b0b18;
+      --surface: #13132a;
+      --border:  #242450;
+      --text:    #dde0ff;
+      --muted:   #7070a0;
+      --accent:  #6a6aff;
+      --bull:    #00d47e;
+      --bear:    #ff4a5a;
     }
     html { background: var(--bg); }
     body {
       color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", monospace;
-      font-size: 13px;
-      min-height: 100vh;
+      font-size: 13px; min-height: 100vh;
       -webkit-text-size-adjust: 100%;
     }
 
-    /* ── Sticky topbar ───────────────────────────────────────── */
+    /* Topbar */
     .topbar {
       position: sticky; top: 0; z-index: 200;
-      background: var(--bg);
-      border-bottom: 1px solid var(--border);
-      padding: 10px 14px 0 14px;
+      background: var(--bg); border-bottom: 1px solid var(--border);
+      padding: 10px 14px;
       padding-top: max(10px, env(safe-area-inset-top, 0));
     }
     .topbar-row {
@@ -48,13 +41,6 @@
     .title { font-size: 15px; font-weight: 700; color: var(--accent); }
     .meta  { font-size: 11px; color: var(--muted); margin-top: 1px; }
     .ctrl-group { display: flex; align-items: center; gap: 6px; }
-    .badge-scanning {
-      font-size: 10px; padding: 2px 7px;
-      background: var(--warn-dim); color: var(--warn);
-      border: 1px solid var(--warn); border-radius: 20px;
-      animation: blink 1.2s ease-in-out infinite;
-    }
-    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.4} }
     button {
       background: var(--surface); border: 1px solid var(--border);
       color: var(--muted); border-radius: 8px; font-size: 12px;
@@ -62,153 +48,72 @@
       -webkit-tap-highlight-color: transparent;
     }
     button:active { opacity: .7; }
-
-    /* ── Filter chips ───────────────────────────────────────── */
-    .filters { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 8px; }
-    .chip {
-      font-size: 11px; padding: 3px 10px; border-radius: 20px;
-      background: var(--surface); border: 1px solid var(--border); color: var(--muted);
-      cursor: pointer; white-space: nowrap;
-      -webkit-tap-highlight-color: transparent;
-    }
-    .chip.active      { background: rgba(106,106,255,.18); border-color: var(--accent); color: var(--accent); }
-    .chip.bull.active { background: var(--bull-dim); border-color: var(--bull); color: var(--bull); }
-    .chip.bear.active { background: var(--bear-dim); border-color: var(--bear); color: var(--bear); }
-
-    /* ── Search ─────────────────────────────────────────────── */
     .search {
       width: 100%; padding: 7px 12px;
       background: var(--surface); border: 1px solid var(--border);
       color: var(--text); border-radius: 8px; font-size: 13px;
-      margin-bottom: 10px;
     }
     .search::placeholder { color: var(--muted); }
     .search:focus { outline: none; border-color: var(--accent); }
 
-    /* ── Stats bar ──────────────────────────────────────────── */
-    .statsbar {
-      display: flex; gap: 10px; align-items: center;
-      padding: 6px 14px; font-size: 11px; color: var(--muted);
-      border-bottom: 1px solid var(--border);
-    }
-
-    /* ── Error banner ───────────────────────────────────────── */
     .error-bar {
       margin: 8px 10px; padding: 8px 12px;
-      background: var(--bear-dim); border: 1px solid var(--bear);
+      background: rgba(255,74,90,.14); border: 1px solid var(--bear);
       border-radius: 8px; color: var(--bear); font-size: 12px;
     }
 
-    /* ── Position panel ─────────────────────────────────────── */
-    .pos-wrap { padding: 10px 10px 4px; }
-    .pos-title {
-      font-size: 12px; font-weight: 700; color: var(--accent);
-      margin-bottom: 6px; display: flex; align-items: center; gap: 6px;
-    }
-    .pos-title .muted { color: var(--muted); font-weight: 400; }
-    .pos-list { display: flex; flex-direction: column; gap: 6px; }
-    .pos-row {
-      display: grid; grid-template-columns: 1fr auto auto;
-      align-items: center; gap: 10px;
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 8px; padding: 8px 11px;
-    }
-    .pos-row.long  { border-left: 3px solid var(--bull); }
-    .pos-row.short { border-left: 3px solid var(--bear); }
-    .pos-sym { font-weight: 700; font-size: 13px; }
-    .pos-side { font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 3px; margin-left: 6px; }
-    .pos-side.long  { background: var(--bull-dim); color: var(--bull); }
-    .pos-side.short { background: var(--bear-dim); color: var(--bear); }
-    .pos-entry { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
-    .pos-pnl { font-size: 14px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; min-width: 60px; }
-    .pos-pnl.up   { color: var(--bull); }
-    .pos-pnl.down { color: var(--bear); }
-
-    /* ── Scan table ─────────────────────────────────────────── */
+    /* Table */
     .table-wrap {
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
+      overflow-x: auto; -webkit-overflow-scrolling: touch;
       padding: 8px 10px env(safe-area-inset-bottom, 12px) 10px;
     }
     #mainTable {
-      border-collapse: collapse;
-      font-size: 12px;
-      width: max-content;
-      min-width: 100%;
+      border-collapse: collapse; font-size: 12px;
+      width: max-content; min-width: 100%;
     }
     #mainTable th, #mainTable td {
-      padding: 5px 8px;
-      text-align: center;
-      white-space: nowrap;
-      border-bottom: 1px solid var(--border);
+      padding: 5px 8px; text-align: center;
+      white-space: nowrap; border-bottom: 1px solid var(--border);
     }
-    /* Two-row sticky header: row 1 sits at topbar bottom, row 2 directly below row 1 */
     #mainTable thead tr:first-child th {
-      background: var(--surface);
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 600;
-      position: sticky;
-      top: var(--thead-top, 0px);
-      z-index: 10;
+      background: var(--surface); color: var(--muted);
+      font-size: 11px; font-weight: 600;
+      position: sticky; top: var(--thead-top, 0px); z-index: 10;
     }
     #mainTable thead tr:last-child th {
-      background: var(--surface);
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 600;
-      position: sticky;
-      top: calc(var(--thead-top, 0px) + var(--th1-h, 28px));
-      z-index: 9;
+      background: var(--surface); color: var(--muted);
+      font-size: 11px; font-weight: 600;
+      position: sticky; top: calc(var(--thead-top, 0px) + var(--th1-h, 28px)); z-index: 9;
     }
     .th-sym {
       text-align: left; padding-left: 10px; min-width: 88px;
-      position: sticky; left: 0; z-index: 20;
-      background: var(--surface);
+      position: sticky; left: 0; z-index: 20; background: var(--surface);
     }
     .th-tf {
       font-size: 12px; font-weight: 700; color: var(--accent);
-      letter-spacing: .5px; border-left: 2px solid var(--border);
+      border-left: 2px solid var(--border);
     }
     .th-sortable { cursor: pointer; user-select: none; }
     .th-sortable:hover { color: var(--text); }
     .th-sep { border-left: 2px solid var(--border); }
-
-    /* Data cells */
     .td-sym {
       text-align: left; font-weight: 700; font-size: 13px; color: var(--text);
       padding-left: 10px; min-width: 88px;
       position: sticky; left: 0; z-index: 5;
-      background: var(--bg);
-      border-right: 1px solid var(--border);
+      background: var(--bg); border-right: 1px solid var(--border);
     }
-    td.up  { color: var(--bull); font-weight: 600; }
-    td.dn  { color: var(--bear); font-weight: 600; }
-    td.na  { color: var(--muted); }
-    td.sep { border-left: 2px solid var(--border); }
+    td.up { color: var(--bull); font-weight: 600; }
+    td.dn { color: var(--bear); font-weight: 600; }
+    td.na { color: var(--muted); }
 
-    #mainTable tbody tr:nth-child(even) td    { background: rgba(255,255,255,.012); }
+    #mainTable tbody tr:nth-child(even) td      { background: rgba(255,255,255,.012); }
     #mainTable tbody tr:nth-child(even) .td-sym { background: #0e0e20; }
-    #mainTable tbody tr:hover td              { background: rgba(255,255,255,.05); }
-    #mainTable tbody tr:hover .td-sym         { background: #1a1a36; }
-
-    .row-x-bull td, .row-x-bull .td-sym { background: rgba(0,212,126,.07) !important; }
-    .row-x-bear td, .row-x-bear .td-sym { background: rgba(255,74,90,.07) !important; }
-
-    .cbadge {
-      font-size: 10px; font-weight: 800; padding: 1px 4px;
-      border-radius: 3px; margin-left: 4px; vertical-align: middle;
-      animation: cpulse 1.4s ease-in-out infinite;
-    }
-    .cbadge.bull { background: var(--bull); color: #001a0d; }
-    .cbadge.bear { background: var(--bear); color: #fff; }
-    @keyframes cpulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+    #mainTable tbody tr:hover td                { background: rgba(255,255,255,.05); }
+    #mainTable tbody tr:hover .td-sym           { background: #1a1a36; }
 
     .sort-dir { font-size: 9px; margin-left: 2px; opacity: .75; }
 
-    /* ── Empty / spinner ─────────────────────────────────────── */
     .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
-    .empty p { font-size: 15px; margin-bottom: 8px; }
     .spinner {
       width: 28px; height: 28px; margin: 0 auto;
       border: 3px solid var(--border); border-top-color: var(--accent);
@@ -219,11 +124,11 @@
 </head>
 <body>
 
-<!-- ── Topbar ─────────────────────────────────────────────────────── -->
+<!-- Topbar -->
 <div class="topbar" id="topbar">
   <div class="topbar-row">
     <div>
-      <div class="title">TSI Scanner</div>
+      <div class="title">TSI Scanner &nbsp;<span id="countLbl" style="font-size:11px;font-weight:400;color:var(--muted)">{{ results|length }} 종목</span></div>
       <div class="meta">
         {% if scanned_at %}
           갱신: {{ scanned_at.strftime('%Y-%m-%d %H:%M') }} UTC &nbsp;·&nbsp; 다음 갱신 <span id="countdown">—</span>
@@ -235,108 +140,47 @@
       </div>
     </div>
     <div class="ctrl-group">
-      {% if scanning %}<span class="badge-scanning">Scanning…</span>{% endif %}
       <a href="/backtest" style="text-decoration:none"><button title="Cardwell RSI 백테스트">📊 백테스트</button></a>
-      <button onclick="resetSort()" title="기본 정렬 (교차 우선)">↩</button>
+      <button onclick="resetSort()" title="기본 정렬 (심볼 순)">↩</button>
       <button onclick="manualRefresh(this)" title="지금 스캔">↻</button>
     </div>
   </div>
-
-  <div class="filters">
-    <button class="chip active" data-f="all"        onclick="setFilter(this)">전체</button>
-    <button class="chip"        data-f="cross_bull" onclick="setFilter(this)">🔥 3TF강세+15m↑교차</button>
-    <button class="chip"        data-f="cross_bear" onclick="setFilter(this)">🔥 3TF약세+15m↓교차</button>
-    <button class="chip bull"   data-f="bull3"      onclick="setFilter(this)">🟢 3TF 완전 강세</button>
-    <button class="chip bull"   data-f="bull2"      onclick="setFilter(this)">🟢 2TF+ 강세</button>
-    <button class="chip bear"   data-f="bear3"      onclick="setFilter(this)">🔴 3TF 완전 약세</button>
-    <button class="chip bear"   data-f="bear2"      onclick="setFilter(this)">🔴 2TF+ 약세</button>
-    <button class="chip"        data-f="4h_bull"    onclick="setFilter(this)">4h 강세</button>
-    <button class="chip"        data-f="4h_bear"    onclick="setFilter(this)">4h 약세</button>
-    <button class="chip"        data-f="all_up"     onclick="setFilter(this)">3TF ↑↑↑</button>
-    <button class="chip"        data-f="all_dn"     onclick="setFilter(this)">3TF ↓↓↓</button>
-  </div>
-
   <input class="search" id="search" type="search"
-         placeholder="심볼 검색 (예: BTC, ETH, XAU…)" oninput="applyFilter()">
-</div>
-
-<!-- ── Stats bar ──────────────────────────────────────────────────── -->
-<div class="statsbar">
-  <span id="countLbl">{{ results|length }} 종목</span>
-  {% if results %}
-  &nbsp;·&nbsp;
-  <span style="color:var(--bull)">🟢 {{ results|selectattr('bull_score','equalto',3)|list|length }}개 3TF 강세</span>
-  &nbsp;·&nbsp;
-  <span style="color:var(--bear)">🔴 {{ results|selectattr('bear_score','equalto',3)|list|length }}개 3TF 약세</span>
-  {% set hot_bull = namespace(n=0) %}
-  {% set hot_bear = namespace(n=0) %}
-  {% for r in results %}
-    {% set s15 = r.tf.get('15m') %}
-    {% if r.bull_score == 3 and s15 and s15.fresh_cross == 1 %}{% set hot_bull.n = hot_bull.n + 1 %}{% endif %}
-    {% if r.bear_score == 3 and s15 and s15.fresh_cross == -1 %}{% set hot_bear.n = hot_bear.n + 1 %}{% endif %}
-  {% endfor %}
-  {% if hot_bull.n or hot_bear.n %}
-  &nbsp;·&nbsp;
-  <span style="color:var(--warn)">🔥 {{ hot_bull.n + hot_bear.n }}개 15m 신규 교차</span>
-  {% endif %}
-  {% endif %}
+         placeholder="심볼 검색 (예: BTC, ETH, XAU…)" oninput="searchFilter()">
 </div>
 
 {% if error %}
 <div class="error-bar">⚠️ 스캔 오류: {{ error }}</div>
 {% endif %}
 
-<!-- ── Position panel ─────────────────────────────────────────────── -->
-{% if positions %}
-<div class="pos-wrap">
-  <div class="pos-title">📌 추적 중인 포지션 <span class="muted">({{ positions|length }})</span></div>
-  <div class="pos-list">
-    {% for p in positions %}
-    <div class="pos-row {{ p.side }}">
-      <div>
-        <span class="pos-sym">{{ p.symbol[:-4] if p.symbol.endswith('USDT') else p.symbol }}</span>
-        <span class="pos-side {{ p.side }}">{{ 'LONG' if p.side == 'long' else 'SHORT' }}</span>
-      </div>
-      <span class="pos-entry">{{ p.entry_str }} → {{ p.price_str }}</span>
-      <span class="pos-pnl {{ 'up' if p.pnl_pct >= 0 else 'down' }}">{{ '%+.1f'|format(p.pnl_pct) }}%</span>
-    </div>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}
-
-<!-- ── Scan table ─────────────────────────────────────────────────── -->
-
-{# Column legend (indices in tbody row):
+{# Column legend (cell index in each tbody row):
    0:     symbol
-   1-3:   12h  → 시그변곡, TSI기울기, 시그기울기
-   4-6:   4h   → 시그변곡, TSI기울기, 시그기울기
-   7-9:   1h   → 시그변곡, TSI기울기, 시그기울기
-   10-12: 15m  → 시그변곡, TSI기울기, 시그기울기
+   1-3:   12h → 시그변곡, TSI기울기, 시그기울기
+   4-6:   4h  → 시그변곡, TSI기울기, 시그기울기
+   7-9:   1h  → 시그변곡, TSI기울기, 시그기울기
+   10-12: 15m → 시그변곡, TSI기울기, 시그기울기
+
+   시그변곡  — mathematical inflection of signal line: "N봉전 / 하락변곡" / "N봉전 / 상승변곡"
+               sort: bars_ago ascending (1 = most recent); no-data = 9999
+   TSI기울기 — TSI slope direction × TSI vs zero: "증가/감소 / 상승/하락추세"
+               sort: (rising*2 + above_zero) descending (3 = rising+positive = most bullish)
+   시그기울기 — signal slope × signal vs zero: same format as TSI기울기
 #}
 
-{# Macro: render 3 indicator cells for one TF
-   Cell 1 — 시그변곡: mathematical inflection of the signal line ("N봉전 / 하락/상승변곡")
-   Cell 2 — TSI기울기: TSI slope direction + TSI vs zero ("증가 / 상승추세" etc.)
-   Cell 3 — 시그기울기: signal slope direction + signal vs zero
-#}
 {% macro tf_cells(s, first) %}
 {% if s %}
-{# Cell 1: signal inflection point #}
-{% if s.sig_inflect_bars >= 0 %}
-<td class="{{ 'up' if s.sig_inflect_type == '상승변곡' else 'dn' }}{% if first %} sep{% endif %}"
+  {% if s.sig_inflect_bars >= 0 %}
+<td class="{{ 'up' if s.sig_inflect_type == '상승변곡' else 'dn' }}{% if first %} th-sep{% endif %}"
     data-v="{{ s.sig_inflect_bars }}">{{ s.sig_inflect_bars }}봉전 / {{ s.sig_inflect_type }}</td>
-{% else %}
-<td class="na{% if first %} sep{% endif %}" data-v="9999">—</td>
-{% endif %}
-{# Cell 2: TSI slope direction + TSI vs zero #}
+  {% else %}
+<td class="na{% if first %} th-sep{% endif %}" data-v="9999">—</td>
+  {% endif %}
 <td class="{{ 'up' if s.rising else 'dn' }}"
     data-v="{{ (1 if s.rising else 0) * 2 + (1 if s.above_zero else 0) }}">{{ '증가' if s.rising else '감소' }} / {{ '상승추세' if s.above_zero else '하락추세' }}</td>
-{# Cell 3: signal slope direction + signal vs zero #}
 <td class="{{ 'up' if s.sig_slope else 'dn' }}"
     data-v="{{ (1 if s.sig_slope else 0) * 2 + (1 if s.sig_above_zero else 0) }}">{{ '증가' if s.sig_slope else '감소' }} / {{ '상승추세' if s.sig_above_zero else '하락추세' }}</td>
 {% else %}
-<td class="na{% if first %} sep{% endif %}" data-v="9999">—</td>
+<td class="na{% if first %} th-sep{% endif %}" data-v="9999">—</td>
 <td class="na" data-v="-1">—</td>
 <td class="na" data-v="-1">—</td>
 {% endif %}
@@ -346,7 +190,6 @@
 <div class="table-wrap">
   <table id="mainTable">
     <thead>
-      <!-- Row 1: group headers -->
       <tr>
         <th class="th-sym th-sortable" rowspan="2" onclick="sortBy('sym')" title="심볼명으로 정렬">
           심볼<span id="dir-sym" class="sort-dir"></span>
@@ -356,10 +199,9 @@
         <th class="th-tf" colspan="3">1h</th>
         <th class="th-tf" colspan="3">15m</th>
       </tr>
-      <!-- Row 2: sub-column headers — each TF: 시그변곡 | TSI기울기 | 시그기울기 -->
       <tr>
-        <th class="th-sortable th-sep" onclick="sortBy('12h-0')" title="12h 시그널선 변곡 발생지점 (수학적 변곡점, 낮을수록 최근)">시그변곡<span id="dir-12h-0" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('12h-1')" title="12h TSI선 기울기 (증가/감소) + TSI vs 0">TSI기울기<span id="dir-12h-1" class="sort-dir"></span></th>
+        <th class="th-sortable th-sep" onclick="sortBy('12h-0')" title="12h 시그널선 변곡 발생지점 (수학적 변곡점)">시그변곡<span id="dir-12h-0" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('12h-1')" title="12h TSI선 기울기 (증가/감소) + TSI vs 0 (상승/하락추세)">TSI기울기<span id="dir-12h-1" class="sort-dir"></span></th>
         <th class="th-sortable"        onclick="sortBy('12h-2')" title="12h 시그널선 기울기 (증가/감소) + 시그 vs 0">시그기울기<span id="dir-12h-2" class="sort-dir"></span></th>
         <th class="th-sortable th-sep" onclick="sortBy('4h-0')"  title="4h 시그널선 변곡 발생지점">시그변곡<span id="dir-4h-0" class="sort-dir"></span></th>
         <th class="th-sortable"        onclick="sortBy('4h-1')"  title="4h TSI선 기울기 + TSI vs 0">TSI기울기<span id="dir-4h-1" class="sort-dir"></span></th>
@@ -378,27 +220,13 @@
     {% set s4  = r.tf.get('4h') %}
     {% set s1  = r.tf.get('1h') %}
     {% set s15 = r.tf.get('15m') %}
-    {% set is_xb = (r.bull_score == 3 and s15 and s15.fresh_cross == 1) %}
-    {% set is_xs = (r.bear_score == 3 and s15 and s15.fresh_cross == -1) %}
-    <tr data-sym="{{ r.symbol }}"
-        data-bull="{{ r.bull_score }}"
-        data-bear="{{ r.bear_score }}"
-        data-crossbull="{{ 'true' if is_xb else 'false' }}"
-        data-crossbear="{{ 'true' if is_xs else 'false' }}"
-        data-4az="{{ 'true' if s4 and s4.above_zero else 'false' }}"
-        data-4as="{{ 'true' if s4 and s4.above_signal else 'false' }}"
-        data-allup="{{ 'true' if (s4 and s4.rising) and (s1 and s1.rising) and (s15 and s15.rising) else 'false' }}"
-        data-alldn="{{ 'true' if (s4 and not s4.rising) and (s1 and not s1.rising) and (s15 and not s15.rising) else 'false' }}"
-        {% if is_xb %}class="row-x-bull"{% elif is_xs %}class="row-x-bear"{% endif %}
-    >
+    <tr data-sym="{{ r.symbol }}">
       <td class="td-sym" data-v="{{ r.symbol }}">
         {{ r.symbol[:-4] if r.symbol.endswith('USDT') else r.symbol }}
-        {% if is_xb %}<span class="cbadge bull">⚡↑</span>{% endif %}
-        {% if is_xs %}<span class="cbadge bear">⚡↓</span>{% endif %}
       </td>
       {{ tf_cells(s12, True) }}
-      {{ tf_cells(s4, True) }}
-      {{ tf_cells(s1, True) }}
+      {{ tf_cells(s4,  True) }}
+      {{ tf_cells(s1,  True) }}
       {{ tf_cells(s15, True) }}
     </tr>
     {% endfor %}
@@ -432,68 +260,32 @@ function reloadFresh() {
   location.href = location.pathname + "?t=" + Date.now();
 }
 
-// ── Filter ────────────────────────────────────────────────────────
-let activeFilter = "all";
-
-function setFilter(btn) {
-  document.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
-  btn.classList.add("active");
-  activeFilter = btn.dataset.f;
-  applyFilter();
-}
-
-function applyFilter() {
-  const q     = (document.getElementById("search").value || "").toUpperCase();
-  const rows  = document.querySelectorAll("#tbody tr");
+// Symbol search
+function searchFilter() {
+  const q = (document.getElementById("search").value || "").toUpperCase();
   let visible = 0;
-
-  rows.forEach(row => {
-    const sym   = row.dataset.sym || "";
-    const bull  = +row.dataset.bull;
-    const bear  = +row.dataset.bear;
-    const az4   = row.dataset["4az"] === "true";
-    const as4   = row.dataset["4as"] === "true";
-    const au    = row.dataset.allup  === "true";
-    const ad    = row.dataset.alldn  === "true";
-    const cbull = row.dataset.crossbull === "true";
-    const cbear = row.dataset.crossbear === "true";
-
-    let show = !q || sym.includes(q);
-    if (show) {
-      switch (activeFilter) {
-        case "cross_bull": show = cbull;         break;
-        case "cross_bear": show = cbear;         break;
-        case "bull3":      show = bull >= 3;     break;
-        case "bull2":      show = bull >= 2;     break;
-        case "bear3":      show = bear >= 3;     break;
-        case "bear2":      show = bear >= 2;     break;
-        case "4h_bull":    show = az4 && as4;    break;
-        case "4h_bear":    show = !az4 && !as4;  break;
-        case "all_up":     show = au;            break;
-        case "all_dn":     show = ad;            break;
-      }
-    }
+  document.querySelectorAll("#tbody tr").forEach(row => {
+    const show = !q || (row.dataset.sym || "").includes(q);
     row.style.display = show ? "" : "none";
     if (show) visible++;
   });
-
-  document.getElementById("countLbl").textContent = visible + " 종목";
+  const lbl = document.getElementById("countLbl");
+  if (lbl) lbl.textContent = (q ? visible + "/" + document.querySelectorAll("#tbody tr").length : visible) + " 종목";
 }
 
-// ── Sort ──────────────────────────────────────────────────────────
-// Maps sort-key → cell index in each tbody row (0 = symbol td)
+// Sort
 const COL = {
-  "12h-0":1,"12h-1":2,"12h-2":3,
-  "4h-0":4, "4h-1":5, "4h-2":6,
-  "1h-0":7, "1h-1":8, "1h-2":9,
-  "15m-0":10,"15m-1":11,"15m-2":12,
+  "12h-0": 1, "12h-1": 2, "12h-2": 3,
+  "4h-0":  4, "4h-1":  5, "4h-2":  6,
+  "1h-0":  7, "1h-1":  8, "1h-2":  9,
+  "15m-0":10, "15m-1":11, "15m-2":12,
 };
 
-let _key = "cross";   // current sort key ("cross" = smart default)
-let _asc = false;
+let _key = "sym";
+let _asc = true;
 
 function resetSort() {
-  _key = "cross"; _asc = false;
+  _key = "sym"; _asc = true;
   _updateIcons(); _doSort();
 }
 
@@ -503,50 +295,34 @@ function sortBy(key) {
   _updateIcons(); _doSort();
 }
 
-function _crossPrio(row) {
-  if (row.dataset.crossbull === "true" || row.dataset.crossbear === "true") return 2;
-  if (+row.dataset.bull === 3 || +row.dataset.bear === 3) return 1;
-  return 0;
-}
-
 function _val(row) {
-  if (_key === "cross") return _crossPrio(row);
-  if (_key === "sym")   return row.dataset.sym || "";
+  if (_key === "sym") return row.dataset.sym || "";
   const idx = COL[_key];
-  if (idx == null) return 0;
+  if (idx == null) return 9999;
   const cell = row.cells[idx];
-  return cell ? parseFloat(cell.dataset.v ?? -1) : -1;
+  return cell ? parseFloat(cell.dataset.v ?? 9999) : 9999;
 }
 
 function _doSort() {
   const tbody = document.getElementById("tbody");
   if (!tbody) return;
   const rows = Array.from(tbody.rows);
-
   rows.sort((a, b) => {
-    const av = _val.call(null, a), bv = _val.call(null, b);
-    if (_key === "cross") {
-      let c = bv - av;
-      if (!c) c = +b.dataset.bull - +a.dataset.bull;
-      if (!c) c = (a.dataset.sym||"").localeCompare(b.dataset.sym||"");
-      return c;
-    }
+    const av = _val(a), bv = _val(b);
     const cmp = typeof av === "string" ? av.localeCompare(bv) : av - bv;
     return _asc ? cmp : -cmp;
   });
-
   rows.forEach(r => tbody.appendChild(r));
-  applyFilter();
+  searchFilter();
 }
 
 function _updateIcons() {
   document.querySelectorAll(".sort-dir").forEach(el => el.textContent = "");
-  if (_key === "cross") return;
   const el = document.getElementById("dir-" + _key);
   if (el) el.textContent = _asc ? "▲" : "▼";
 }
 
-// ── Manual refresh ────────────────────────────────────────────────
+// Manual refresh
 function manualRefresh(btn) {
   if (STATIC_MODE) { reloadFresh(); return; }
   if (btn) { btn.disabled = true; btn.textContent = "…"; }
@@ -555,7 +331,7 @@ function manualRefresh(btn) {
     .catch(() => { if (btn) { btn.disabled = false; btn.textContent = "↻"; } });
 }
 
-// ── Countdown ─────────────────────────────────────────────────────
+// Countdown to next 15m candle close
 function secsToNext15m() {
   const now = new Date();
   const s = now.getUTCMinutes() * 60 + now.getUTCSeconds();
@@ -569,10 +345,10 @@ function updateCountdown() {
 setInterval(updateCountdown, 1000);
 updateCountdown();
 
-// Auto-reload ~20 s after next 15 m candle close
+// Auto-reload ~20 s after next 15m candle close
 setTimeout(reloadFresh, (secsToNext15m() + 20) * 1000);
 
-// ── Sticky header top offset ─────────────────────────────────────
+// Keep sticky header offset updated
 function setStickyOffset() {
   const topbar = document.getElementById("topbar");
   const trow1  = document.querySelector("#mainTable thead tr:first-child");
@@ -584,7 +360,6 @@ function setStickyOffset() {
 setTimeout(setStickyOffset, 50);
 window.addEventListener("resize", setStickyOffset);
 
-// ── Initial sort on page load ─────────────────────────────────────
 _doSort();
 </script>
 </body>

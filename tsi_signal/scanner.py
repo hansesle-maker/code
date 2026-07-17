@@ -89,15 +89,16 @@ def fetch_all_futures_symbols(session=None) -> List[str]:
     )
 
 
-def _find_last_inflection(sig_vals: List[float], max_bars: int = 30):
+def _find_last_inflection(sig_vals: List[float], max_bars: int = 45):
     """Return (bars_ago, type_str) for the most recent signal-line inflection point.
 
     A mathematical inflection occurs where the slope (first derivative) changes sign:
     - "하락변곡": slope went positive → negative (local peak)
     - "상승변곡": slope went negative → positive (local trough)
 
-    Searches only the last max_bars bars to avoid warmup-period artifacts.
-    Returns (-1, "") when no inflection is found within the search window.
+    Searches the last max_bars bars (capped to avoid warmup artifacts) and requires
+    slope magnitude > 0.5% of the signal range to ignore micro-oscillation noise.
+    Returns (-1, "") when no meaningful inflection is found.
     """
     n = len(sig_vals)
     if n < 3:
@@ -106,11 +107,20 @@ def _find_last_inflection(sig_vals: List[float], max_bars: int = 30):
     # j indexes slopes; sig_vals[j] is the candidate inflection point.
     # bars_ago = (n-1) - j  (j = n-2 → bars_ago = 1 = most recent possible)
     j_min = max(1, len(slopes) - max_bars)
+
+    # Minimum slope magnitude: 0.5% of signal range over the search window.
+    # Filters micro-oscillations in the smooth EMA signal line.
+    window = sig_vals[max(0, j_min - 1):]
+    sig_range = max(window) - min(window)
+    if sig_range < 1e-9:
+        return -1, ""
+    threshold = sig_range * 0.005
+
     for j in range(len(slopes) - 1, j_min - 1, -1):
         prev_s, cur_s = slopes[j - 1], slopes[j]
-        if prev_s > 0 and cur_s < 0:
+        if prev_s > threshold and cur_s < -threshold:
             return (n - 1) - j, "하락변곡"
-        if prev_s < 0 and cur_s > 0:
+        if prev_s < -threshold and cur_s > threshold:
             return (n - 1) - j, "상승변곡"
     return -1, ""
 
