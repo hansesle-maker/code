@@ -34,8 +34,9 @@ from tsi_signal.positions import (
 )
 from tsi_signal.scanner import (
     SymbolScan,
-    TRADFI_SYMBOLS,
     fetch_all_futures_symbols,
+    fetch_futures_symbol_info,
+    resolve_tradfi_markets,
     scan_all,
     symbolscan_to_dict,
 )
@@ -59,6 +60,7 @@ _cache: dict = {
     "scanned_at": None,  # datetime UTC
     "scanning": False,
     "error": None,
+    "notice": None,      # non-fatal info (e.g. unlisted TradFi symbols)
     "positions": [],     # open-position view (list of dicts)
 }
 # Previous scan's serialized symbols, kept in memory to diff market/entry
@@ -125,9 +127,19 @@ def do_scan() -> None:
         _cache["error"] = None
     try:
         log.info("Scan started: fetching symbol list …")
-        symbols = sorted(set(fetch_all_futures_symbols()) | set(TRADFI_SYMBOLS))
+        info = fetch_futures_symbol_info()
+        fut_universe = set(fetch_all_futures_symbols(info=info))
+        # TradFi 후보는 선물 전체(모든 contractType) → 현물 순으로 상장 확인
+        fut_all = {s["symbol"] for s in info if s["status"] == "TRADING"}
+        markets, missing = resolve_tradfi_markets(fut_all)
+        with _lock:
+            _cache["notice"] = (
+                "바이낸스 미상장 TradFi 심볼: " + ", ".join(missing)
+                if missing else None
+            )
+        symbols = sorted(fut_universe | set(markets))
         log.info("Scanning %d symbols × 4 timeframes …", len(symbols))
-        results = scan_all(symbols)
+        results = scan_all(symbols, markets=markets)
         scanned_at = datetime.datetime.utcnow()
         positions_view = _process_signals(results, scanned_at)
         with _lock:
@@ -174,6 +186,7 @@ def dashboard():
         scanned_at: Optional[datetime.datetime] = _cache["scanned_at"]
         scanning: bool = _cache["scanning"]
         error: Optional[str] = _cache["error"]
+        notice: Optional[str] = _cache.get("notice")
         positions: list = list(_cache["positions"])
     return render_template(
         "dashboard.html",
@@ -181,6 +194,7 @@ def dashboard():
         scanned_at=scanned_at,
         scanning=scanning,
         error=error,
+        notice=notice,
         static_mode=False,
         positions=positions,
     )

@@ -62,6 +62,11 @@
       background: rgba(255,74,90,.14); border: 1px solid var(--bear);
       border-radius: 8px; color: var(--bear); font-size: 12px;
     }
+    .notice-bar {
+      margin: 8px 10px; padding: 6px 12px;
+      background: rgba(255,196,0,.10); border: 1px solid rgba(255,196,0,.5);
+      border-radius: 8px; color: #ffc400; font-size: 11px;
+    }
 
     /* ── Table wrap — both scroll axes so sticky works ───────── */
     .table-wrap {
@@ -179,6 +184,9 @@
 
 {% if error %}
 <div class="error-bar">⚠️ 스캔 오류: {{ error }}</div>
+{% endif %}
+{% if notice %}
+<div class="notice-bar">ℹ️ {{ notice }}</div>
 {% endif %}
 
 {#
@@ -493,7 +501,11 @@ setTimeout(reloadFresh, (secsToNext15m() + 20) * 1000);
 /* ── Layout heights ────────────────────────────────────────── */
 function setTableHeight() {
   const topbar = document.getElementById("topbar");
-  if (topbar) document.documentElement.style.setProperty("--topbar-h", topbar.offsetHeight + "px");
+  let h = topbar ? topbar.offsetHeight : 0;
+  // error/notice 바가 있으면 그 높이(+마진)만큼 테이블 높이에서 빼야
+  // 페이지 전체 스크롤이 생기지 않는다 (스티키 헤더 유지 조건)
+  document.querySelectorAll(".error-bar, .notice-bar").forEach(el => { h += el.offsetHeight + 16; });
+  document.documentElement.style.setProperty("--topbar-h", h + "px");
   const hdrRow = document.querySelector("#mainTable thead tr:first-child");
   if (hdrRow) document.documentElement.style.setProperty("--hdr-h", hdrRow.offsetHeight + "px");
 }

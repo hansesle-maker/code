@@ -14,15 +14,29 @@ from typing import Dict, List, Optional
 
 import requests as _req
 
-from .data import FUTURES_BASE_URL, FUTURES_KLINES_PATH, fetch_klines
+from .data import (
+    FUTURES_BASE_URL,
+    FUTURES_KLINES_PATH,
+    MARKETS,
+    SPOT_BASE_URL,
+    fetch_klines,
+)
 from .indicators import true_strength_index
 
 log = logging.getLogger(__name__)
 
 TIMEFRAMES = ("12h", "4h", "1h", "15m")
 
-# Extra TradFi symbols to always include (merged with auto-fetched list).
-TRADFI_SYMBOLS: List[str] = ["XAUUSDT"]
+# TradFi 후보 심볼 (금·미국주식 페어 등). 매 스캔마다 바이낸스 선물 →
+# 현물 순서로 실제 상장 여부를 확인해서(:func:`resolve_tradfi_markets`)
+# 있는 마켓의 API로 가져오고, 어느 쪽에도 없으면 대시보드에 "미상장"
+# 안내를 띄운다. 여기에 심볼만 추가하면 나머지는 자동.
+TRADFI_SYMBOLS: List[str] = [
+    "XAUUSDT",   # 금 (없으면 미상장 표시 — 금 프록시는 PAXGUSDT 선물이 자동 포함됨)
+    "NVDAUSDT",
+    "TSLAUSDT",
+    "AAPLUSDT",
+]
 
 # Only these three timeframes contribute to bull/bear score so that existing
 # alert thresholds (score == 3 = full alignment) remain unchanged.
@@ -75,41 +89,121 @@ class SymbolScan:
         )
 
 
-def fetch_all_futures_symbols(session=None) -> List[str]:
-    """Return sorted list of active USDT-M perpetual futures symbols."""
+def fetch_futures_symbol_info(session=None) -> List[dict]:
+    """Raw symbol entries from USDT-M futures exchangeInfo (one HTTP call)."""
     http = session or _req
     resp = http.get(f"{FUTURES_BASE_URL}/fapi/v1/exchangeInfo", timeout=20)
     resp.raise_for_status()
+    return resp.json()["symbols"]
+
+
+def fetch_all_futures_symbols(session=None,
+                              info: Optional[List[dict]] = None) -> List[str]:
+    """Return sorted list of active USDT-M perpetual futures symbols."""
+    if info is None:
+        info = fetch_futures_symbol_info(session)
     return sorted(
         s["symbol"]
-        for s in resp.json()["symbols"]
+        for s in info
         if s["status"] == "TRADING"
         and s["contractType"] == "PERPETUAL"
         and s["quoteAsset"] == "USDT"
     )
 
 
-def _find_last_inflection(sig_vals: List[float], max_bars: int = 45):
-    """시그널선의 가장 최근 고점(하락변곡) 또는 저점(상승변곡) 탐지.
+def fetch_spot_symbols(session=None) -> set:
+    """All TRADING symbols on Binance spot (tokenized stocks live here if
+    they are not listed as USDT-M perpetuals)."""
+    http = session or _req
+    resp = http.get(f"{SPOT_BASE_URL}/api/v3/exchangeInfo", timeout=30)
+    resp.raise_for_status()
+    return {s["symbol"] for s in resp.json()["symbols"]
+            if s["status"] == "TRADING"}
 
-    - "하락변곡": 기울기 + → -  (신호선이 실제로 고점 찍고 하락 전환)
-    - "상승변곡": 기울기 - → +  (신호선이 실제로 저점 찍고 상승 전환)
 
-    1차 도함수(기울기) 부호가 바뀌는 지점. 신호선이 아직 상승 중인데
-    "하락변곡"이 뜨는 일은 없음.
-    bars_ago = (n-1) - j  (j = n-2 이면 1봉전)
+def resolve_tradfi_markets(futures_all: set, session=None):
+    """TradFi 후보 심볼을 실제 상장 마켓에 매핑한다.
+
+    확인 순서: USDT-M 선물(모든 contractType 포함) → 현물.
+    반환: (markets, missing)
+      markets: {symbol: "futures" | "spot"}  — 상장 확인된 심볼
+      missing: [symbol, ...]                 — 어느 마켓에도 없는 심볼
+    """
+    markets: Dict[str, str] = {}
+    missing: List[str] = []
+    spot: Optional[set] = None
+    for sym in TRADFI_SYMBOLS:
+        if sym in futures_all:
+            markets[sym] = "futures"
+            continue
+        if spot is None:
+            try:
+                spot = fetch_spot_symbols(session)
+            except Exception as exc:
+                log.warning("Spot exchangeInfo fetch failed: %s", exc)
+                spot = set()
+        if sym in spot:
+            markets[sym] = "spot"
+        else:
+            missing.append(sym)
+            log.warning("TradFi symbol %s not listed on Binance futures or spot", sym)
+    if markets:
+        log.info("TradFi symbols resolved: %s",
+                 ", ".join(f"{s}({m})" for s, m in markets.items()))
+    return markets, missing
+
+
+def _find_last_inflection(sig_vals: List[float], max_bars: int = 45,
+                          min_run: int = 2):
+    """시그널선의 수학적 변곡점(2차 도함수 부호 전환) 탐지.
+
+        accel[k] = sig[k+2] - 2·sig[k+1] + sig[k]   (이산 2차 도함수)
+
+    - accel + → - : "하락변곡" (위로 볼록 전환 — 상승 둔화/하락 가속 시작)
+    - accel - → + : "상승변곡" (아래로 볼록 전환 — 하락 둔화/상승 가속 시작)
+
+    노이즈 필터: 전환 전·후의 곡률 부호가 각각 ``min_run``봉 이상 유지된
+    "확정 변곡"만 인정. 1봉짜리 부호 반전(잔물결)은 무시되므로 TSI가
+    한 봉 흔들릴 때마다 변곡 표시가 왔다갔다 하지 않는다.
+
+    반환: (bars_ago, 종류). 확정 변곡이 ``max_bars`` 안에 없으면 (-1, "").
     """
     n = len(sig_vals)
-    if n < 3:
+    if n < 5:
         return -1, ""
-    slopes = [sig_vals[i] - sig_vals[i - 1] for i in range(1, n)]
-    j_min  = max(1, len(slopes) - max_bars)
-    for j in range(len(slopes) - 1, j_min - 1, -1):
-        prev_s, cur_s = slopes[j - 1], slopes[j]
-        if prev_s > 0 and cur_s < 0:
-            return (n - 1) - j, "하락변곡"
-        if prev_s < 0 and cur_s > 0:
-            return (n - 1) - j, "상승변곡"
+    accel = [sig_vals[k + 2] - 2.0 * sig_vals[k + 1] + sig_vals[k]
+             for k in range(n - 2)]
+    signs: List[int] = []
+    for a in accel:
+        if a > 0:
+            signs.append(1)
+        elif a < 0:
+            signs.append(-1)
+        else:  # 정확히 0이면 직전 부호 유지 (전환으로 치지 않음)
+            signs.append(signs[-1] if signs else 0)
+
+    # 최신 → 과거 방향으로 같은 부호 구간(run) 목록 생성
+    runs: List[tuple] = []  # (sign, start, end) — accel 인덱스 기준
+    i = len(signs) - 1
+    while i >= 0:
+        j = i
+        while j > 0 and signs[j - 1] == signs[i]:
+            j -= 1
+        runs.append((signs[i], j, i))
+        i = j - 1
+
+    # 인접 run 쌍에서 부호 반전 + 양쪽 min_run 이상 유지 → 확정 변곡
+    for r in range(len(runs) - 1):
+        new_sign, new_start, new_end = runs[r]
+        old_sign, old_start, old_end = runs[r + 1]
+        if new_sign == 0 or old_sign == 0 or new_sign == old_sign:
+            continue
+        if (new_end - new_start + 1) < min_run or (old_end - old_start + 1) < min_run:
+            continue  # 1봉짜리 잔물결 — 확정 변곡 아님
+        bars_ago = (n - 1) - (new_start + 2)  # accel[k] = sig[k+2] 시점의 곡률
+        if bars_ago > max_bars:
+            break
+        return bars_ago, ("하락변곡" if new_sign < 0 else "상승변곡")
     return -1, ""
 
 
@@ -146,15 +240,18 @@ def _state_from_closes(closes: List[float]) -> Optional[TFState]:
     )
 
 
-def _fetch_with_retry(symbol: str, tf: str, http, retries: int = 3) -> list:
+def _fetch_with_retry(symbol: str, tf: str, http,
+                      base_url: str = FUTURES_BASE_URL,
+                      path: str = FUTURES_KLINES_PATH,
+                      retries: int = 3) -> list:
     """Fetch klines with up to ``retries`` retries on 429 / 5xx errors."""
     for attempt in range(retries):
         try:
             candles = fetch_klines(
                 symbol, tf,
                 limit=KLINE_LIMIT,
-                base_url=FUTURES_BASE_URL,
-                path=FUTURES_KLINES_PATH,
+                base_url=base_url,
+                path=path,
                 drop_unclosed=True,
                 session=http,
             )
@@ -173,14 +270,19 @@ def _fetch_with_retry(symbol: str, tf: str, http, retries: int = 3) -> list:
     return []
 
 
-def scan_symbol(symbol: str, session=None) -> SymbolScan:
-    """Fetch klines for all four timeframes and compute TSI states."""
+def scan_symbol(symbol: str, session=None, market: str = "futures") -> SymbolScan:
+    """Fetch klines for all four timeframes and compute TSI states.
+
+    ``market`` selects the API ("futures" | "spot", see :data:`MARKETS`) —
+    TradFi symbols may live on spot instead of USDT-M futures.
+    """
     http = session or _req
+    base_url, path = MARKETS.get(market, MARKETS["futures"])
     tf_states: Dict[str, Optional[TFState]] = {}
     latest_ts = 0
     last_price = 0.0
     for tf in TIMEFRAMES:
-        candles = _fetch_with_retry(symbol, tf, http)
+        candles = _fetch_with_retry(symbol, tf, http, base_url, path)
         if candles:
             latest_ts = max(latest_ts, candles[-1].open_time)
             closes = [c.close for c in candles]
@@ -197,14 +299,19 @@ def scan_all(
     symbols: List[str],
     max_workers: int = 6,
     progress_every: int = 50,
+    markets: Optional[Dict[str, str]] = None,
 ) -> List[SymbolScan]:
     """Scan all symbols concurrently and return results sorted by symbol name.
+
+    ``markets`` maps symbol → "futures"/"spot" for symbols not on USDT-M
+    futures (TradFi); unlisted symbols default to futures.
 
     ``max_workers=6`` with ``KLINE_LIMIT=99`` (weight=1) keeps us comfortably
     under Binance's 2400-weight/min limit even for 500+ symbol universes.
     Each thread gets its own session to avoid connection-pool contention.
     """
     results: List[SymbolScan] = []
+    markets = markets or {}
 
     def _make_session() -> _req.Session:
         s = _req.Session()
@@ -216,7 +323,8 @@ def scan_all(
 
     with ThreadPoolExecutor(max_workers=max_workers,
                             initializer=None) as pool:
-        futs = {pool.submit(scan_symbol, sym, _make_session()): sym
+        futs = {pool.submit(scan_symbol, sym, _make_session(),
+                            markets.get(sym, "futures")): sym
                 for sym in symbols}
         for fut in as_completed(futs):
             try:
