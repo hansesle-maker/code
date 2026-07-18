@@ -252,7 +252,8 @@ def _find_last_inflection(sig_vals: List[float], max_bars: int = 60,
     return bars_ago, typ
 
 
-def _state_from_closes(closes: List[float]) -> Optional[TFState]:
+def _state_from_closes(closes: List[float],
+                       swing_frac: float = 0.25) -> Optional[TFState]:
     if len(closes) < 55:
         return None
     tsi_vals, sig_vals = true_strength_index(closes)
@@ -269,7 +270,7 @@ def _state_from_closes(closes: List[float]) -> Optional[TFState]:
     else:
         fresh_cross = 0
 
-    inf_bars, inf_type = _find_last_inflection(sig_vals)
+    inf_bars, inf_type = _find_last_inflection(sig_vals, swing_frac=swing_frac)
 
     return TFState(
         tsi=round(cur, 4),
@@ -315,11 +316,13 @@ def _fetch_with_retry(symbol: str, tf: str, http,
     return []
 
 
-def scan_symbol(symbol: str, session=None, market: str = "futures") -> SymbolScan:
+def scan_symbol(symbol: str, session=None, market: str = "futures",
+                swing_frac: float = 0.25) -> SymbolScan:
     """Fetch klines for all four timeframes and compute TSI states.
 
     ``market`` selects the API ("futures" | "spot", see :data:`MARKETS`) —
     TradFi symbols may live on spot instead of USDT-M futures.
+    ``swing_frac`` tunes inflection sensitivity (see _find_last_inflection).
     """
     http = session or _req
     base_url, path = MARKETS.get(market, MARKETS["futures"])
@@ -333,7 +336,7 @@ def scan_symbol(symbol: str, session=None, market: str = "futures") -> SymbolSca
             closes = [c.close for c in candles]
             if tf == "15m":
                 last_price = closes[-1]
-            tf_states[tf] = _state_from_closes(closes)
+            tf_states[tf] = _state_from_closes(closes, swing_frac)
         else:
             tf_states[tf] = None
     return SymbolScan(symbol=symbol, ts=latest_ts, tf=tf_states,
@@ -345,11 +348,13 @@ def scan_all(
     max_workers: int = 6,
     progress_every: int = 50,
     markets: Optional[Dict[str, str]] = None,
+    swing_frac: float = 0.25,
 ) -> List[SymbolScan]:
     """Scan all symbols concurrently and return results sorted by symbol name.
 
     ``markets`` maps symbol → "futures"/"spot" for symbols not on USDT-M
     futures (TradFi); unlisted symbols default to futures.
+    ``swing_frac`` is forwarded to the inflection detector.
 
     ``max_workers=6`` with ``KLINE_LIMIT=99`` (weight=1) keeps us comfortably
     under Binance's 2400-weight/min limit even for 500+ symbol universes.
@@ -369,7 +374,7 @@ def scan_all(
     with ThreadPoolExecutor(max_workers=max_workers,
                             initializer=None) as pool:
         futs = {pool.submit(scan_symbol, sym, _make_session(),
-                            markets.get(sym, "futures")): sym
+                            markets.get(sym, "futures"), swing_frac): sym
                 for sym in symbols}
         for fut in as_completed(futs):
             try:

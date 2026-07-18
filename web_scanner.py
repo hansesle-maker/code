@@ -7,12 +7,14 @@ Usage:
     python web_scanner.py --no-scan        # skip initial scan (show empty state)
 
 Open http://<your-ip>:5000 in iOS Safari, then "Add to Home Screen" for an
-app-like experience. The dashboard auto-refreshes at each 15-minute candle close.
+app-like experience. The dashboard auto-refreshes on an interval that is
+adjustable in the UI (default: every 15 minutes, at candle close).
 """
 from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import logging
 import os
 import threading
@@ -68,18 +70,65 @@ _cache: dict = {
 # alerts between runs (positions persist to disk separately).
 _prev_symbols: Dict[str, dict] = {}
 
+# ---------------------------------------------------------------------------
+# Runtime-adjustable settings (web UI) — persisted so restarts keep them
+# ---------------------------------------------------------------------------
+SETTINGS_PATH = os.environ.get("TSI_SETTINGS", "web_settings.json")
+DEFAULT_SETTINGS = {
+    "swing_frac": 0.25,   # 변곡 민감도 (낮을수록 민감; scanner._find_last_inflection)
+    "refresh_min": 15,    # 자동 스캔/새로고침 주기 (분)
+}
+_settings: dict = dict(DEFAULT_SETTINGS)
+
+
+def _clamp_settings(d: dict) -> dict:
+    """Validate/clamp incoming settings; ignore unknown or malformed keys."""
+    out: dict = {}
+    if "swing_frac" in d:
+        try:
+            out["swing_frac"] = min(0.60, max(0.05, round(float(d["swing_frac"]), 2)))
+        except (TypeError, ValueError):
+            pass
+    if "refresh_min" in d:
+        try:
+            out["refresh_min"] = min(240, max(5, int(d["refresh_min"])))
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def _load_settings() -> None:
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as f:
+            _settings.update(_clamp_settings(json.load(f)))
+        log.info("Settings loaded from %s: %s", SETTINGS_PATH, _settings)
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        log.warning("Settings load failed (%s) — using defaults", exc)
+
+
+def _save_settings_locked() -> None:
+    """Write settings to disk. Caller must hold ``_lock``."""
+    try:
+        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(_settings, f)
+    except Exception as exc:
+        log.warning("Settings save failed: %s", exc)
+
+
+_load_settings()
+
 
 # ---------------------------------------------------------------------------
 # Scanning helpers
 # ---------------------------------------------------------------------------
 
-def _secs_to_next_15m(buffer: int = 8) -> float:
-    """Seconds until the next 15-minute candle close plus a small buffer."""
-    now = datetime.datetime.utcnow()
-    total_secs = now.minute * 60 + now.second
-    slot_secs = (total_secs // 900 + 1) * 900  # 900 = 15 * 60
-    remain = slot_secs - total_secs + buffer
-    return remain if remain > 0 else remain + 900
+def _secs_to_next_boundary(minutes: int, buffer: int = 8) -> float:
+    """Seconds until the next N-minute boundary (UTC epoch) plus a buffer."""
+    step = max(1, int(minutes)) * 60
+    now = time.time()
+    return (int(now) // step + 1) * step - now + buffer
 
 
 def _process_signals(results: List[SymbolScan],
@@ -126,6 +175,7 @@ def do_scan() -> None:
             return
         _cache["scanning"] = True
         _cache["error"] = None
+        swing_frac = _settings["swing_frac"]
     try:
         log.info("Scan started: fetching symbol list …")
         info = fetch_futures_symbol_info()
@@ -148,7 +198,7 @@ def do_scan() -> None:
             _cache["notice"] = " · ".join(parts) if parts else None
         symbols = sorted(fut_universe | auto_tradfi | set(markets))
         log.info("Scanning %d symbols × 4 timeframes …", len(symbols))
-        results = scan_all(symbols, markets=markets)
+        results = scan_all(symbols, markets=markets, swing_frac=swing_frac)
         scanned_at = datetime.datetime.utcnow()
         positions_view = _process_signals(results, scanned_at)
         with _lock:
@@ -167,11 +217,28 @@ def do_scan() -> None:
 
 
 def _background_loop() -> None:
-    """Sleep until each 15-minute candle close, then trigger a scan."""
+    """Sleep until the next refresh boundary, then trigger a scan.
+
+    The interval (``refresh_min`` setting) is re-read every few seconds so a
+    change made in the web UI takes effect without restarting the server.
+    """
     while True:
-        wait = _secs_to_next_15m()
-        log.info("Next scan in %.0f s (at next 15 m close + 8 s)", wait)
-        time.sleep(wait)
+        with _lock:
+            iv = _settings["refresh_min"]
+        target = time.time() + _secs_to_next_boundary(iv)
+        log.info("Next scan in %.0f s (every %d min + 8 s)", target - time.time(), iv)
+        while True:
+            with _lock:
+                iv2 = _settings["refresh_min"]
+            if iv2 != iv:
+                iv = iv2
+                target = time.time() + _secs_to_next_boundary(iv)
+                log.info("Refresh interval changed → next scan in %.0f s (every %d min)",
+                         target - time.time(), iv)
+            remain = target - time.time()
+            if remain <= 0:
+                break
+            time.sleep(min(10.0, remain))
         do_scan()
 
 
@@ -197,6 +264,7 @@ def dashboard():
         error: Optional[str] = _cache["error"]
         notice: Optional[str] = _cache.get("notice")
         positions: list = list(_cache["positions"])
+        settings = dict(_settings)
     return render_template(
         "dashboard.html",
         results=results,
@@ -206,6 +274,7 @@ def dashboard():
         notice=notice,
         static_mode=False,
         positions=positions,
+        settings=settings,
     )
 
 
@@ -241,6 +310,30 @@ def manual_refresh():
     t = threading.Thread(target=do_scan, daemon=True)
     t.start()
     return jsonify({"status": "started"})
+
+
+@app.route("/settings", methods=["POST"])
+def update_settings():
+    """Update runtime settings from the web UI.
+
+    Body: {"swing_frac": float, "refresh_min": int} — either key optional.
+    A swing_frac change triggers an immediate background rescan so the new
+    sensitivity is visible without waiting for the next cycle.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    clean = _clamp_settings(data)
+    if not clean:
+        return jsonify({"ok": False, "error": "no valid settings in request"}), 400
+    with _lock:
+        rescan = ("swing_frac" in clean
+                  and clean["swing_frac"] != _settings["swing_frac"])
+        _settings.update(clean)
+        _save_settings_locked()
+        current = dict(_settings)
+    log.info("Settings updated via web: %s (rescan=%s)", current, rescan)
+    if rescan:
+        threading.Thread(target=do_scan, daemon=True).start()
+    return jsonify({"ok": True, "settings": current, "rescan": rescan})
 
 
 # ---------------------------------------------------------------------------

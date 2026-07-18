@@ -49,6 +49,13 @@
     }
     button:active { opacity: .7; }
     button.active { border-color: var(--accent); color: var(--text); background: rgba(106,106,255,.15); }
+    .ctl-select {
+      background: var(--surface); border: 1px solid var(--border);
+      color: var(--muted); border-radius: 8px; font-size: 12px;
+      padding: 5px 6px; cursor: pointer;
+    }
+    .ctl-select:focus { outline: none; border-color: var(--accent); }
+    .ctl-select:disabled { opacity: .45; cursor: default; }
     .search {
       width: 100%; padding: 7px 12px;
       background: var(--surface); border: 1px solid var(--border);
@@ -156,6 +163,11 @@
 </head>
 <body>
 
+{% set st = settings if settings is defined and settings
+            else {"swing_frac": 0.25, "refresh_min": 15} %}
+{% set swing_options = ([0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50] + [st.swing_frac]) | unique | sort %}
+{% set refresh_options = ([5, 10, 15, 30, 60] + [st.refresh_min]) | unique | sort %}
+
 <!-- Topbar -->
 <div class="topbar" id="topbar">
   <div class="topbar-row">
@@ -172,6 +184,19 @@
       </div>
     </div>
     <div class="ctrl-group">
+      <select id="setSwing" class="ctl-select" onchange="saveSettings(true)"
+              title="변곡 민감도 (swing_frac) — 낮을수록 잔굽이까지 검출, 높을수록 큰 굽이만"
+              {% if static_mode %}disabled{% endif %}>
+        {% for v in swing_options %}
+        <option value="{{ v }}" {% if v == st.swing_frac %}selected{% endif %}>변곡 {{ '%.2f'|format(v) }}</option>
+        {% endfor %}
+      </select>
+      <select id="setRefresh" class="ctl-select" onchange="saveSettings(false)"
+              title="자동 갱신(스캔) 주기" {% if static_mode %}disabled{% endif %}>
+        {% for m in refresh_options %}
+        <option value="{{ m }}" {% if m == st.refresh_min %}selected{% endif %}>{{ m }}분</option>
+        {% endfor %}
+      </select>
       <a href="/backtest" style="text-decoration:none"><button title="Cardwell RSI 백테스트">📊 백테스트</button></a>
       <button id="bmBtn" onclick="toggleBmFilter(this)" title="즐겨찾기만 보기">⭐ 즐겨찾기</button>
       <button onclick="resetSort()" title="기본 정렬 (심볼 순)">↩</button>
@@ -483,20 +508,57 @@ function manualRefresh(btn) {
     .catch(() => { if (btn) { btn.disabled = false; btn.textContent = "↻"; } });
 }
 
-/* ── Countdown to next 15m close ───────────────────────────── */
-function secsToNext15m() {
-  const now = new Date();
-  const s = now.getUTCMinutes() * 60 + now.getUTCSeconds();
-  return (Math.floor(s / 900) + 1) * 900 - s;
+/* ── Settings (변곡 민감도 / 갱신 주기) ─────────────────────── */
+let REFRESH_MIN = {{ st.refresh_min }};
+let _rescanMsgUntil = 0;
+
+function saveSettings(isSwing) {
+  if (STATIC_MODE) return;
+  const body = {
+    swing_frac:  parseFloat(document.getElementById("setSwing").value),
+    refresh_min: parseInt(document.getElementById("setRefresh").value, 10),
+  };
+  fetch("/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+    .then(r => r.json())
+    .then(res => {
+      if (!res.ok) return;
+      REFRESH_MIN = res.settings.refresh_min;
+      if (res.rescan) {
+        // 민감도 변경 → 서버가 재스캔 시작; 끝날 즈음 페이지 갱신
+        _rescanMsgUntil = Date.now() + 115000;
+        armReload(120);
+      } else {
+        armReload();
+      }
+    })
+    .catch(() => {});
+}
+
+/* ── Countdown / auto-reload (interval-aware) ──────────────── */
+function secsToNextReload() {
+  const now = Date.now() / 1000, step = REFRESH_MIN * 60;
+  return (Math.floor(now / step) + 1) * step - now;
 }
 function updateCountdown() {
-  const s = secsToNext15m(), m = Math.floor(s / 60);
   const el = document.getElementById("countdown");
-  if (el) el.textContent = m + ":" + String(s % 60).padStart(2, "0");
+  if (!el) return;
+  if (Date.now() < _rescanMsgUntil) { el.textContent = "재스캔 중…"; return; }
+  const s = Math.round(secsToNextReload()), m = Math.floor(s / 60);
+  el.textContent = m + ":" + String(s % 60).padStart(2, "0");
+}
+let _reloadTimer = null;
+function armReload(overrideSecs) {
+  if (_reloadTimer) clearTimeout(_reloadTimer);
+  const wait = (overrideSecs != null ? overrideSecs : secsToNextReload() + 20);
+  _reloadTimer = setTimeout(reloadFresh, wait * 1000);
 }
 setInterval(updateCountdown, 1000);
 updateCountdown();
-setTimeout(reloadFresh, (secsToNext15m() + 20) * 1000);
+armReload();
 
 /* ── Layout heights ────────────────────────────────────────── */
 function setTableHeight() {

@@ -7,3 +7,6 @@ venv/
 signals*.csv
 config/symbols.csv
 .pytest_cache/
+# runtime state (web dashboard)
+positions.json
+web_settings.json
