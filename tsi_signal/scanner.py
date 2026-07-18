@@ -183,58 +183,73 @@ def resolve_tradfi_markets(futures_all: set, session=None):
     return markets, missing
 
 
-def _find_last_inflection(sig_vals: List[float], max_bars: int = 45,
-                          min_run: int = 2):
-    """시그널선의 수학적 변곡점(2차 도함수 부호 전환) 탐지.
+def _slope_pivots(sig_vals: List[float], swing_frac: float) -> List[tuple]:
+    """시그널선 기울기 시리즈의 확정 극값(ZigZag 피벗) 목록.
 
-        accel[k] = sig[k+2] - 2·sig[k+1] + sig[k]   (이산 2차 도함수)
+    기울기의 극대 = 곡률 + → - 전환점 = "하락변곡",
+    기울기의 극소 = 곡률 - → + 전환점 = "상승변곡".
 
-    - accel + → - : "하락변곡" (위로 볼록 전환 — 상승 둔화/하락 가속 시작)
-    - accel - → + : "상승변곡" (아래로 볼록 전환 — 하락 둔화/상승 가속 시작)
+    극값은 기울기가 반대 방향으로 ``th = 기울기범위 × swing_frac`` 이상
+    되돌렸을 때 확정된다. 미세한 흔들림은 th를 못 넘어 피벗이 되지
+    않으므로, 차트에서 눈에 보이는 큰 굽어짐만 — 파동당 상승·하락
+    각 1개 수준 — 검출된다.
 
-    노이즈 필터: 전환 전·후의 곡률 부호가 각각 ``min_run``봉 이상 유지된
-    "확정 변곡"만 인정. 1봉짜리 부호 반전(잔물결)은 무시되므로 TSI가
-    한 봉 흔들릴 때마다 변곡 표시가 왔다갔다 하지 않는다.
-
-    반환: (bars_ago, 종류). 확정 변곡이 ``max_bars`` 안에 없으면 (-1, "").
+    반환: [(sig 인덱스, 종류), ...] 시간순.
     """
     n = len(sig_vals)
-    if n < 5:
+    if n < 8:
+        return []
+    s = [sig_vals[i] - sig_vals[i - 1] for i in range(1, n)]
+    rng = max(s) - min(s)
+    if rng <= 0.0:
+        return []
+    th = rng * swing_frac
+    pivots: List[tuple] = []
+    direction = 0                      # +1 기울기 상승 추적, -1 하락 추적
+    cur_max, cur_max_i = s[0], 0
+    cur_min, cur_min_i = s[0], 0
+    for i in range(1, len(s)):
+        v = s[i]
+        if direction >= 0:
+            if v > cur_max:
+                cur_max, cur_max_i = v, i
+            if cur_max - v >= th:      # 기울기 고점 확정 → 하락변곡
+                pivots.append((cur_max_i + 1, "하락변곡"))  # s[j]는 sig[j+1] 시점
+                direction = -1
+                cur_min, cur_min_i = v, i
+                continue
+        if direction <= 0:
+            if v < cur_min:
+                cur_min, cur_min_i = v, i
+            if v - cur_min >= th:      # 기울기 저점 확정 → 상승변곡
+                pivots.append((cur_min_i + 1, "상승변곡"))
+                direction = 1
+                cur_max, cur_max_i = v, i
+    return pivots
+
+
+def _find_last_inflection(sig_vals: List[float], max_bars: int = 60,
+                          swing_frac: float = 0.25, window: int = 85):
+    """시그널선의 가장 최근 '유의미한' 수학적 변곡점.
+
+    2차 도함수 부호 전환(= 기울기의 극대/극소) 중에서 전환 전후의
+    기울기 변화량이 최근 기울기 범위의 ``swing_frac`` 이상인 것만
+    변곡으로 인정한다(기울기 시리즈에 대한 ZigZag). 봉 단위 미세
+    곡률 반전은 전부 무시된다.
+
+    ``window``: TSI/EMA 웜업 구간이 기울기 범위 계산을 왜곡하지 않도록
+    최근 window봉만 사용. 반환: (bars_ago, 종류) 또는 (-1, "").
+    """
+    tail = sig_vals[-window:] if len(sig_vals) > window else sig_vals
+    off = len(sig_vals) - len(tail)
+    piv = _slope_pivots(tail, swing_frac)
+    if not piv:
         return -1, ""
-    accel = [sig_vals[k + 2] - 2.0 * sig_vals[k + 1] + sig_vals[k]
-             for k in range(n - 2)]
-    signs: List[int] = []
-    for a in accel:
-        if a > 0:
-            signs.append(1)
-        elif a < 0:
-            signs.append(-1)
-        else:  # 정확히 0이면 직전 부호 유지 (전환으로 치지 않음)
-            signs.append(signs[-1] if signs else 0)
-
-    # 최신 → 과거 방향으로 같은 부호 구간(run) 목록 생성
-    runs: List[tuple] = []  # (sign, start, end) — accel 인덱스 기준
-    i = len(signs) - 1
-    while i >= 0:
-        j = i
-        while j > 0 and signs[j - 1] == signs[i]:
-            j -= 1
-        runs.append((signs[i], j, i))
-        i = j - 1
-
-    # 인접 run 쌍에서 부호 반전 + 양쪽 min_run 이상 유지 → 확정 변곡
-    for r in range(len(runs) - 1):
-        new_sign, new_start, new_end = runs[r]
-        old_sign, old_start, old_end = runs[r + 1]
-        if new_sign == 0 or old_sign == 0 or new_sign == old_sign:
-            continue
-        if (new_end - new_start + 1) < min_run or (old_end - old_start + 1) < min_run:
-            continue  # 1봉짜리 잔물결 — 확정 변곡 아님
-        bars_ago = (n - 1) - (new_start + 2)  # accel[k] = sig[k+2] 시점의 곡률
-        if bars_ago > max_bars:
-            break
-        return bars_ago, ("하락변곡" if new_sign < 0 else "상승변곡")
-    return -1, ""
+    idx, typ = piv[-1]
+    bars_ago = (len(sig_vals) - 1) - (idx + off)
+    if bars_ago > max_bars:
+        return -1, ""
+    return bars_ago, typ
 
 
 def _state_from_closes(closes: List[float]) -> Optional[TFState]:
