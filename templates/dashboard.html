@@ -117,7 +117,6 @@
       position: sticky; left: 0; z-index: 5;
       background: var(--bg); border-right: 1px solid var(--border);
     }
-    /* filter row sym cell: also sticky left at same z-index 21 */
     #mainTable thead tr.filter-row th.th-sym { z-index: 21; }
 
     .th-sortable { cursor: pointer; user-select: none; }
@@ -143,7 +142,7 @@
     }
     .bm-star.on { color: #ffd700; }
 
-    /* Filter dropdowns */
+    /* Filter dropdowns + clear button */
     .filter-row select {
       background: var(--bg); color: var(--text);
       border: 1px solid var(--border); border-radius: 4px;
@@ -151,6 +150,9 @@
       max-width: 100%;
     }
     .filter-row select:focus { outline: none; border-color: var(--accent); }
+    .clr-btn {
+      font-size: 11px; padding: 2px 8px; border-radius: 4px;
+    }
 
     .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
     .spinner {
@@ -204,7 +206,7 @@
     </div>
   </div>
   <input class="search" id="search" type="search"
-         placeholder="심볼 검색 (예: BTC, ETH, XAU…)" oninput="applyFilter()">
+         placeholder="심볼 검색 (예: BTC, ETH, NVDA…)" oninput="applyFilter()">
 </div>
 
 {% if error %}
@@ -216,38 +218,47 @@
 
 {#
   Cell layout (0-based index):
-    0  심볼 (sticky left)
-    1  12h 변곡     sig_inflect (N봉전/하락변곡|상승변곡)
-    2  12h TSI↕     rising × above_zero
-    3  12h 시그↕    sig_slope × sig_above_zero
-    4  4h  변곡
-    5  4h  TSI↕
-    6  4h  시그↕
-    7  1h  시그0    sig_above_zero → "시그 > 0" / "시그 < 0"
-    8  1h  TSI↕
-    9  1h  시그↕
+    0      심볼 (sticky left)
+    1-4    변곡: 12h, 4h, 1h, 15m   (스캔 시점 기준 시그널선 변곡)
+    5-6    12h TSI, 12h 시그
+    7-8    4h  TSI, 4h  시그
+    9-10   1h  TSI, 1h  시그
+    11-12  15m TSI, 15m 시그
 #}
 
-{% macro tf_cells(s, first, is_1h=False) %}
-{% if s %}
-  {% if is_1h %}
-<td class="{{ 'up' if s.sig_above_zero else 'dn' }}{% if first %} th-sep{% endif %}"
-    data-v="{{ 1 if s.sig_above_zero else 0 }}">{{ '시그 > 0' if s.sig_above_zero else '시그 < 0' }}</td>
-  {% elif s.sig_inflect_bars >= 0 %}
+{% macro inf_cell(s, first=False) %}
+{% if s and s.sig_inflect_bars >= 0 %}
 <td class="{{ 'up' if s.sig_inflect_type == '상승변곡' else 'dn' }}{% if first %} th-sep{% endif %}"
     data-v="{{ s.sig_inflect_bars }}">{{ s.sig_inflect_bars }}봉전 / {{ s.sig_inflect_type }}</td>
-  {% else %}
-<td class="na{% if first %} th-sep{% endif %}" data-v="9999">—</td>
-  {% endif %}
-<td class="{{ 'up' if s.rising else 'dn' }}"
-    data-v="{{ (1 if s.rising else 0) * 2 + (1 if s.above_zero else 0) }}">{{ '증가' if s.rising else '감소' }} / {{ '상승추세' if s.above_zero else '하락추세' }}</td>
-<td class="{{ 'up' if s.sig_slope else 'dn' }}"
-    data-v="{{ (1 if s.sig_slope else 0) * 2 + (1 if s.sig_above_zero else 0) }}">{{ '증가' if s.sig_slope else '감소' }} / {{ '상승추세' if s.sig_above_zero else '하락추세' }}</td>
 {% else %}
 <td class="na{% if first %} th-sep{% endif %}" data-v="9999">—</td>
-<td class="na" data-v="-1">—</td>
-<td class="na" data-v="-1">—</td>
 {% endif %}
+{% endmacro %}
+
+{% macro val_cells(s) %}
+{% if s %}
+<td class="{{ 'up' if s.tsi > 0 else 'dn' }} th-sep" data-v="{{ s.tsi }}">{{ s.tsi|fmt_tsi }}</td>
+<td class="{{ 'up' if s.signal > 0 else 'dn' }}" data-v="{{ s.signal }}">{{ s.signal|fmt_tsi }}</td>
+{% else %}
+<td class="na th-sep" data-v="">—</td>
+<td class="na" data-v="">—</td>
+{% endif %}
+{% endmacro %}
+
+{% macro inf_filter(col) %}
+<select data-col="{{ col }}" onchange="applyFilter()">
+  <option value="">전체</option>
+  <option value="하락변곡">하락변곡</option>
+  <option value="상승변곡">상승변곡</option>
+</select>
+{% endmacro %}
+
+{% macro sign_filter(col) %}
+<select data-col="{{ col }}" onchange="applyFilter()">
+  <option value="">전체</option>
+  <option value="pos">&gt; 0</option>
+  <option value="neg">&lt; 0</option>
+</select>
 {% endmacro %}
 
 {% if results %}
@@ -259,94 +270,34 @@
         <th class="th-sym th-sortable" onclick="sortBy('sym')" title="심볼명">
           심볼<span id="dir-sym" class="sort-dir"></span>
         </th>
-        <th class="th-sortable th-sep" onclick="sortBy('12h-0')" title="12h 시그널선 변곡 (고점→하락/저점→상승)">12h 변곡<span id="dir-12h-0" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('12h-1')" title="12h TSI 기울기 + TSI vs 0">12h TSI↕<span id="dir-12h-1" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('12h-2')" title="12h 시그널 기울기 + 시그 vs 0">12h 시그↕<span id="dir-12h-2" class="sort-dir"></span></th>
-        <th class="th-sortable th-sep" onclick="sortBy('4h-0')"  title="4h 시그널선 변곡">4h 변곡<span id="dir-4h-0" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('4h-1')"  title="4h TSI 기울기 + TSI vs 0">4h TSI↕<span id="dir-4h-1" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('4h-2')"  title="4h 시그널 기울기 + 시그 vs 0">4h 시그↕<span id="dir-4h-2" class="sort-dir"></span></th>
-        <th class="th-sortable th-sep" onclick="sortBy('1h-0')"  title="1h 시그널선 0선 위/아래">1h 시그0<span id="dir-1h-0" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('1h-1')"  title="1h TSI 기울기 + TSI vs 0">1h TSI↕<span id="dir-1h-1" class="sort-dir"></span></th>
-        <th class="th-sortable"        onclick="sortBy('1h-2')"  title="1h 시그널 기울기 + 시그 vs 0">1h 시그↕<span id="dir-1h-2" class="sort-dir"></span></th>
+        <th class="th-sortable th-sep" onclick="sortBy('12h-inf')" title="12h 시그널선 변곡 (스캔 시점 기준)">12h 변곡<span id="dir-12h-inf" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('4h-inf')"  title="4h 시그널선 변곡">4h 변곡<span id="dir-4h-inf" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('1h-inf')"  title="1h 시그널선 변곡">1h 변곡<span id="dir-1h-inf" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('15m-inf')" title="15m 시그널선 변곡">15m 변곡<span id="dir-15m-inf" class="sort-dir"></span></th>
+        <th class="th-sortable th-sep" onclick="sortBy('12h-tsi')" title="12h TSI (스캔 시점)">12h TSI<span id="dir-12h-tsi" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('12h-sig')" title="12h 시그널선">12h 시그<span id="dir-12h-sig" class="sort-dir"></span></th>
+        <th class="th-sortable th-sep" onclick="sortBy('4h-tsi')"  title="4h TSI">4h TSI<span id="dir-4h-tsi" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('4h-sig')"  title="4h 시그널선">4h 시그<span id="dir-4h-sig" class="sort-dir"></span></th>
+        <th class="th-sortable th-sep" onclick="sortBy('1h-tsi')"  title="1h TSI">1h TSI<span id="dir-1h-tsi" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('1h-sig')"  title="1h 시그널선">1h 시그<span id="dir-1h-sig" class="sort-dir"></span></th>
+        <th class="th-sortable th-sep" onclick="sortBy('15m-tsi')" title="15m TSI">15m TSI<span id="dir-15m-tsi" class="sort-dir"></span></th>
+        <th class="th-sortable"        onclick="sortBy('15m-sig')" title="15m 시그널선">15m 시그<span id="dir-15m-sig" class="sort-dir"></span></th>
       </tr>
       <!-- Row 2: column filters -->
       <tr class="filter-row">
-        <th class="th-sym"></th>
-        <th class="th-sep">
-          <select data-col="12h-0" onchange="applyFilter()">
-            <option value="">전체</option>
-            <option value="하락변곡">하락변곡</option>
-            <option value="상승변곡">상승변곡</option>
-          </select>
-        </th>
-        <th>
-          <select data-col="12h-1" onchange="applyFilter()">
-            <option value="">전체</option>
-            <option value="증가">증가↑</option>
-            <option value="감소">감소↓</option>
-            <option value="상승추세">0선 위</option>
-            <option value="하락추세">0선 아래</option>
-          </select>
-        </th>
-        <th>
-          <select data-col="12h-2" onchange="applyFilter()">
-            <option value="">전체</option>
-            <option value="증가">증가↑</option>
-            <option value="감소">감소↓</option>
-            <option value="상승추세">0선 위</option>
-            <option value="하락추세">0선 아래</option>
-          </select>
-        </th>
-        <th class="th-sep">
-          <select data-col="4h-0" onchange="applyFilter()">
-            <option value="">전체</option>
-            <option value="하락변곡">하락변곡</option>
-            <option value="상승변곡">상승변곡</option>
-          </select>
-        </th>
-        <th>
-          <select data-col="4h-1" onchange="applyFilter()">
-            <option value="">전체</option>
-            <option value="증가">증가↑</option>
-            <option value="감소">감소↓</option>
-            <option value="상승추세">0선 위</option>
-            <option value="하락추세">0선 아래</option>
-          </select>
-        </th>
-        <th>
-          <select data-col="4h-2" onchange="applyFilter()">
-            <option value="">전체</option>
-            <option value="증가">증가↑</option>
-            <option value="감소">감소↓</option>
-            <option value="상승추세">0선 위</option>
-            <option value="하락추세">0선 아래</option>
-          </select>
-        </th>
-        <th class="th-sep">
-          <select data-col="1h-0" onchange="applyFilter()">
-            <option value="">전체</option>
-            <option value="&gt; 0">&gt; 0</option>
-            <option value="&lt; 0">&lt; 0</option>
-          </select>
-        </th>
-        <th>
-          <select data-col="1h-1" onchange="applyFilter()">
-            <option value="">전체</option>
-            <option value="증가">증가↑</option>
-            <option value="감소">감소↓</option>
-            <option value="상승추세">0선 위</option>
-            <option value="하락추세">0선 아래</option>
-          </select>
-        </th>
-        <th>
-          <select data-col="1h-2" onchange="applyFilter()">
-            <option value="">전체</option>
-            <option value="증가">증가↑</option>
-            <option value="감소">감소↓</option>
-            <option value="상승추세">0선 위</option>
-            <option value="하락추세">0선 아래</option>
-          </select>
-        </th>
+        <th class="th-sym"><button class="clr-btn" onclick="clearFilters()" title="검색·즐겨찾기·칼럼 필터 전체 해제">해제</button></th>
+        <th class="th-sep">{{ inf_filter('12h-inf') }}</th>
+        <th>{{ inf_filter('4h-inf') }}</th>
+        <th>{{ inf_filter('1h-inf') }}</th>
+        <th>{{ inf_filter('15m-inf') }}</th>
+        <th class="th-sep">{{ sign_filter('12h-tsi') }}</th>
+        <th>{{ sign_filter('12h-sig') }}</th>
+        <th class="th-sep">{{ sign_filter('4h-tsi') }}</th>
+        <th>{{ sign_filter('4h-sig') }}</th>
+        <th class="th-sep">{{ sign_filter('1h-tsi') }}</th>
+        <th>{{ sign_filter('1h-sig') }}</th>
+        <th class="th-sep">{{ sign_filter('15m-tsi') }}</th>
+        <th>{{ sign_filter('15m-sig') }}</th>
       </tr>
     </thead>
     <tbody id="tbody">
@@ -354,13 +305,19 @@
     {% set s12 = r.tf.get('12h') %}
     {% set s4  = r.tf.get('4h') %}
     {% set s1  = r.tf.get('1h') %}
+    {% set s15 = r.tf.get('15m') %}
     <tr data-sym="{{ r.symbol }}">
       <td class="td-sym" data-v="{{ r.symbol }}">
         {{ r.symbol[:-4] if r.symbol.endswith('USDT') else r.symbol }}<span class="bm-star" data-sym="{{ r.symbol }}">☆</span>
       </td>
-      {{ tf_cells(s12, True) }}
-      {{ tf_cells(s4,  True) }}
-      {{ tf_cells(s1,  True, True) }}
+      {{ inf_cell(s12, True) }}
+      {{ inf_cell(s4) }}
+      {{ inf_cell(s1) }}
+      {{ inf_cell(s15) }}
+      {{ val_cells(s12) }}
+      {{ val_cells(s4) }}
+      {{ val_cells(s1) }}
+      {{ val_cells(s15) }}
     </tr>
     {% endfor %}
     </tbody>
@@ -375,7 +332,7 @@
   {% else %}
     <p>아직 데이터가 없습니다.</p>
     {% if static_mode %}
-    <p style="font-size:12px;margin-top:6px">다음 자동 갱신(매 15분)을 기다리거나, GitHub Actions에서 워크플로를 수동 실행하세요.</p>
+    <p style="font-size:12px;margin-top:6px">다음 자동 갱신을 기다리거나, GitHub Actions에서 워크플로를 수동 실행하세요.</p>
     <button onclick="reloadFresh()" style="margin-top:12px;padding:8px 20px">새로고침</button>
     {% else %}
     <button onclick="manualRefresh(this)" style="margin-top:12px;padding:8px 20px">지금 스캔 시작</button>
@@ -393,9 +350,32 @@ function reloadFresh() {
   location.href = location.pathname + "?t=" + Date.now();
 }
 
-/* ── Bookmarks ─────────────────────────────────────────────── */
-let bookmarks = new Set(JSON.parse(localStorage.getItem("tsi_bm") || "[]"));
+/* ── Bookmarks — 서버(bookmarks.json)가 원본, localStorage는 백업 ── */
+let bookmarks = new Set({{ (bookmarks if bookmarks is defined and bookmarks else []) | tojson }});
 let showBmOnly = false;
+
+function pushBookmarks() {
+  localStorage.setItem("tsi_bm", JSON.stringify([...bookmarks]));
+  if (STATIC_MODE) return;
+  fetch("/bookmarks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ symbols: [...bookmarks] }),
+  }).catch(() => {});
+}
+
+(function initBookmarks() {
+  let ls = [];
+  try { ls = JSON.parse(localStorage.getItem("tsi_bm") || "[]"); } catch (e) {}
+  if (STATIC_MODE) {
+    bookmarks = new Set(ls);
+    return;
+  }
+  // 서버 목록이 원본; 예전 localStorage 북마크는 1회 병합 이관
+  const before = bookmarks.size;
+  ls.forEach(s => bookmarks.add(s));
+  if (bookmarks.size !== before) pushBookmarks();
+})();
 
 function renderStars() {
   document.querySelectorAll("#tbody .bm-star").forEach(star => {
@@ -408,7 +388,7 @@ function renderStars() {
 function toggleBm(sym) {
   if (bookmarks.has(sym)) bookmarks.delete(sym);
   else bookmarks.add(sym);
-  localStorage.setItem("tsi_bm", JSON.stringify([...bookmarks]));
+  pushBookmarks();
   renderStars();
   applyFilter();
 }
@@ -428,9 +408,11 @@ document.getElementById("tbody")?.addEventListener("click", e => {
 
 /* ── Column index map ──────────────────────────────────────── */
 const COL = {
-  "12h-0": 1, "12h-1": 2, "12h-2": 3,
-  "4h-0":  4, "4h-1":  5, "4h-2":  6,
-  "1h-0":  7, "1h-1":  8, "1h-2":  9,
+  "12h-inf": 1, "4h-inf": 2, "1h-inf": 3, "15m-inf": 4,
+  "12h-tsi": 5, "12h-sig": 6,
+  "4h-tsi":  7, "4h-sig":  8,
+  "1h-tsi":  9, "1h-sig": 10,
+  "15m-tsi": 11, "15m-sig": 12,
 };
 
 /* ── Unified filter ────────────────────────────────────────── */
@@ -450,7 +432,13 @@ function applyFilter() {
       const sel = document.querySelector(`select[data-col="${key}"]`);
       if (!sel || !sel.value) continue;
       const cell = row.cells[idx];
-      if (cell && !cell.textContent.includes(sel.value)) { pass = false; break; }
+      if (!cell) continue;
+      if (sel.value === "pos" || sel.value === "neg") {
+        const x = parseFloat(cell.dataset.v);
+        if (!(sel.value === "pos" ? x > 0 : x < 0)) { pass = false; break; }
+      } else if (!cell.textContent.includes(sel.value)) {
+        pass = false; break;
+      }
     }
     row.style.display = pass ? "" : "none";
     if (pass) visible++;
@@ -458,6 +446,15 @@ function applyFilter() {
 
   const lbl = document.getElementById("countLbl");
   if (lbl) lbl.textContent = (visible < total ? visible + "/" + total : visible) + " 종목";
+}
+
+function clearFilters() {
+  const s = document.getElementById("search");
+  if (s) s.value = "";
+  document.querySelectorAll("select[data-col]").forEach(sel => { sel.value = ""; });
+  showBmOnly = false;
+  document.getElementById("bmBtn")?.classList.remove("active");
+  applyFilter();
 }
 
 /* ── Sort ──────────────────────────────────────────────────── */
@@ -477,7 +474,8 @@ function _val(row) {
   const idx = COL[_key];
   if (idx == null) return 9999;
   const cell = row.cells[idx];
-  return cell ? parseFloat(cell.dataset.v ?? 9999) : 9999;
+  const x = cell ? parseFloat(cell.dataset.v) : NaN;
+  return isNaN(x) ? 9999 : x;
 }
 
 function _doSort() {

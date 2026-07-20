@@ -27,17 +27,12 @@ log = logging.getLogger(__name__)
 
 TIMEFRAMES = ("12h", "4h", "1h", "15m")
 
-# TradFi 안전망 후보. 기본 탐색은 :func:`discover_tradfi_futures`가
-# exchangeInfo의 underlyingType/underlyingSubType로 자동 수행하며, 여기
-# 리스트는 자동 탐색에 안 걸리는 심볼을 수동 추가하는 용도다. 매 스캔마다
+# TradFi 수동 후보 (안전망). 기본 탐색은 :func:`discover_tradfi_futures`가
+# exchangeInfo의 underlyingType/underlyingSubType로 자동 수행하므로 보통
+# 비워 둔다. 자동 탐색에 안 걸리는 심볼이 있으면 여기 추가 — 매 스캔마다
 # 선물 → 현물 순으로 상장 확인 후(:func:`resolve_tradfi_markets`) 맞는
 # API로 가져오고, 어느 쪽에도 없으면 대시보드에 "미상장"으로 표시된다.
-TRADFI_SYMBOLS: List[str] = [
-    "XAUUSDT",   # 금 (미상장이면 안내 표시 — 금 프록시로는 PAXGUSDT 퍼프가 자동 포함)
-    "NVDAUSDT",
-    "TSLAUSDT",
-    "AAPLUSDT",
-]
+TRADFI_SYMBOLS: List[str] = []
 
 # Only these three timeframes contribute to bull/bear score so that existing
 # alert thresholds (score == 3 = full alignment) remain unchanged.
@@ -68,9 +63,9 @@ class TFState:
 @dataclass
 class SymbolScan:
     symbol: str
-    ts: int                             # epoch ms of latest closed bar
+    ts: int                             # epoch ms of latest bar (진행 중 봉 포함)
     tf: Dict[str, Optional[TFState]]    # "12h"/"4h"/"1h"/"15m" -> TFState | None
-    last_price: float = 0.0             # latest closed 15m price (entry/exit ref)
+    last_price: float = 0.0             # scan-time 15m price (entry/exit ref)
     error: Optional[str] = None
 
     @property
@@ -298,7 +293,8 @@ def _fetch_with_retry(symbol: str, tf: str, http,
                 limit=KLINE_LIMIT,
                 base_url=base_url,
                 path=path,
-                drop_unclosed=True,
+                # 진행 중인 봉 포함 → 마감봉이 아닌 "스캔 시점" 실시간 값 기준
+                drop_unclosed=False,
                 session=http,
             )
             return candles

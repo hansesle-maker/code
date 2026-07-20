@@ -10,3 +10,4 @@ config/symbols.csv
 # runtime state (web dashboard)
 positions.json
 web_settings.json
+bookmarks.json

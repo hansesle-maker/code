@@ -119,6 +119,38 @@ def _save_settings_locked() -> None:
 
 _load_settings()
 
+# ---------------------------------------------------------------------------
+# Bookmarks — server-side persistence (localStorage는 iOS에서 유실될 수 있음)
+# ---------------------------------------------------------------------------
+BOOKMARKS_PATH = os.environ.get("TSI_BOOKMARKS", "bookmarks.json")
+_bookmarks: set = set()
+
+
+def _load_bookmarks() -> None:
+    global _bookmarks
+    try:
+        with open(BOOKMARKS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            _bookmarks = {str(s)[:32] for s in data if isinstance(s, str)}
+        log.info("Bookmarks loaded: %d symbols", len(_bookmarks))
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        log.warning("Bookmarks load failed: %s", exc)
+
+
+def _save_bookmarks_locked() -> None:
+    """Write bookmarks to disk. Caller must hold ``_lock``."""
+    try:
+        with open(BOOKMARKS_PATH, "w", encoding="utf-8") as f:
+            json.dump(sorted(_bookmarks), f)
+    except Exception as exc:
+        log.warning("Bookmarks save failed: %s", exc)
+
+
+_load_bookmarks()
+
 
 # ---------------------------------------------------------------------------
 # Scanning helpers
@@ -185,17 +217,14 @@ def do_scan() -> None:
         # TradFi ②: 안전망 후보를 선물 전체(모든 contractType) → 현물 순 확인
         fut_all = {s["symbol"] for s in info if s["status"] == "TRADING"}
         markets, missing = resolve_tradfi_markets(fut_all)
-        tradfi_syms = sorted(auto_tradfi | set(markets))
-        parts = []
-        if tradfi_syms:
-            shown = ", ".join(tradfi_syms[:12])
-            if len(tradfi_syms) > 12:
-                shown += f" 외 {len(tradfi_syms) - 12}종목"
-            parts.append(f"TradFi {len(tradfi_syms)}종목 포함: {shown}")
-        if missing:
-            parts.append("바이낸스 미상장: " + ", ".join(missing))
+        if auto_tradfi or markets:
+            log.info("TradFi included: %d symbols", len(auto_tradfi | set(markets)))
         with _lock:
-            _cache["notice"] = " · ".join(parts) if parts else None
+            # 미상장 수동 후보만 경고 (자동 포함 목록은 UI에 표시하지 않음)
+            _cache["notice"] = (
+                "바이낸스 미상장 TradFi 심볼: " + ", ".join(missing)
+                if missing else None
+            )
         symbols = sorted(fut_universe | auto_tradfi | set(markets))
         log.info("Scanning %d symbols × 4 timeframes …", len(symbols))
         results = scan_all(symbols, markets=markets, swing_frac=swing_frac)
@@ -265,6 +294,7 @@ def dashboard():
         notice: Optional[str] = _cache.get("notice")
         positions: list = list(_cache["positions"])
         settings = dict(_settings)
+        bookmarks = sorted(_bookmarks)
     return render_template(
         "dashboard.html",
         results=results,
@@ -275,6 +305,7 @@ def dashboard():
         static_mode=False,
         positions=positions,
         settings=settings,
+        bookmarks=bookmarks,
     )
 
 
@@ -334,6 +365,25 @@ def update_settings():
     if rescan:
         threading.Thread(target=do_scan, daemon=True).start()
     return jsonify({"ok": True, "settings": current, "rescan": rescan})
+
+
+@app.route("/bookmarks", methods=["POST"])
+def update_bookmarks():
+    """Replace the bookmark list. Body: {"symbols": ["BTCUSDT", ...]}.
+
+    서버 파일(bookmarks.json)에 저장되므로 새로고침·재시작·기기 변경에도
+    유지된다 (localStorage는 백업 용도로만 사용).
+    """
+    global _bookmarks
+    data = request.get_json(force=True, silent=True) or {}
+    syms = data.get("symbols")
+    if not isinstance(syms, list):
+        return jsonify({"ok": False, "error": "symbols must be a list"}), 400
+    clean = sorted({str(s)[:32] for s in syms if isinstance(s, str)})[:500]
+    with _lock:
+        _bookmarks = set(clean)
+        _save_bookmarks_locked()
+    return jsonify({"ok": True, "count": len(clean)})
 
 
 # ---------------------------------------------------------------------------
