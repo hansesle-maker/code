@@ -184,10 +184,11 @@ def _slope_pivots(sig_vals: List[float], swing_frac: float) -> List[tuple]:
     기울기의 극대 = 곡률 + → - 전환점 = "하락변곡",
     기울기의 극소 = 곡률 - → + 전환점 = "상승변곡".
 
-    극값은 기울기가 반대 방향으로 ``th = 기울기범위 × swing_frac`` 이상
-    되돌렸을 때 확정된다. 미세한 흔들림은 th를 못 넘어 피벗이 되지
-    않으므로, 차트에서 눈에 보이는 큰 굽어짐만 — 파동당 상승·하락
-    각 1개 수준 — 검출된다.
+    극값은 기울기가 반대 방향으로 ``th`` 이상 되돌렸을 때 확정된다.
+    th 스케일은 max-min 대신 |기울기|의 90퍼센타일을 쓴다 — 극단봉
+    하나가 창에 들고날 때마다 th가 출렁이며 피벗 분해 전체가 재편되는
+    것(새로고침마다 변곡이 널뛰는 원인)을 막기 위함. 클린 사인파 기준
+    2·p90(|s|) ≈ max-min 이라 기존 swing_frac 캘리브레이션은 유지된다.
 
     반환: [(sig 인덱스, 종류), ...] 시간순.
     """
@@ -195,10 +196,11 @@ def _slope_pivots(sig_vals: List[float], swing_frac: float) -> List[tuple]:
     if n < 8:
         return []
     s = [sig_vals[i] - sig_vals[i - 1] for i in range(1, n)]
-    rng = max(s) - min(s)
-    if rng <= 0.0:
+    a = sorted(abs(x) for x in s)
+    p90 = a[min(len(a) - 1, int(0.9 * (len(a) - 1) + 0.5))]
+    if p90 <= 0.0:
         return []
-    th = rng * swing_frac
+    th = 2.0 * p90 * swing_frac
     pivots: List[tuple] = []
     direction = 0                      # +1 기울기 상승 추적, -1 하락 추적
     cur_max, cur_max_i = s[0], 0
@@ -223,25 +225,32 @@ def _slope_pivots(sig_vals: List[float], swing_frac: float) -> List[tuple]:
     return pivots
 
 
-def _find_last_inflection(sig_vals: List[float], max_bars: int = 60,
-                          swing_frac: float = 0.25, window: int = 85):
+def _find_last_inflection(sig_vals: List[float], max_bars: int = 45,
+                          swing_frac: float = 0.25, window: int = 50):
     """시그널선의 가장 최근 '유의미한' 수학적 변곡점.
 
     2차 도함수 부호 전환(= 기울기의 극대/극소) 중에서 전환 전후의
-    기울기 변화량이 최근 기울기 범위의 ``swing_frac`` 이상인 것만
-    변곡으로 인정한다(기울기 시리즈에 대한 ZigZag). 봉 단위 미세
-    곡률 반전은 전부 무시된다.
+    기울기 변화량이 ``swing_frac`` 스케일 이상인 것만 변곡으로
+    인정한다(기울기 시리즈에 대한 ZigZag). 안정성을 위해:
 
-    ``window``: TSI/EMA 웜업 구간이 기울기 범위 계산을 왜곡하지 않도록
-    최근 window봉만 사용. 반환: (bars_ago, 종류) 또는 (-1, "").
+    - **마감봉만 사용**: 마지막(진행 중) 봉은 제외한다. 진행 봉의
+      기울기는 스캔마다 흔들려 새로고침할 때마다 변곡 보고가 널뛰는
+      원인이었다. 변곡은 새 봉이 닫힐 때만 갱신된다 (bars_ago 표시는
+      진행 중 봉 기준으로 +1 보정).
+    - ``window=50``: TSI(EMA 3중첩)의 웜업 왜곡 구간(99봉 fetch의 앞쪽
+      ~50봉)을 기울기 스케일 계산에서 배제 — 전체 히스토리를 쓰는
+      실제 차트(트레이딩뷰)와의 불일치를 줄인다.
+
+    반환: (bars_ago, 종류) 또는 (-1, "").
     """
-    tail = sig_vals[-window:] if len(sig_vals) > window else sig_vals
-    off = len(sig_vals) - len(tail)
+    closed = sig_vals[:-1] if len(sig_vals) >= 2 else sig_vals
+    tail = closed[-window:] if len(closed) > window else closed
+    off = len(closed) - len(tail)
     piv = _slope_pivots(tail, swing_frac)
     if not piv:
         return -1, ""
     idx, typ = piv[-1]
-    bars_ago = (len(sig_vals) - 1) - (idx + off)
+    bars_ago = (len(closed) - 1) - (idx + off) + 1  # 진행 중 봉 기준 N봉전
     if bars_ago > max_bars:
         return -1, ""
     return bars_ago, typ
