@@ -26,6 +26,11 @@ from flask import Flask, jsonify, render_template, request
 from cardwell_web import bp as cardwell_bp
 from cardwell_web import _refresh_symbols as _refresh_cardwell_symbols
 from tsi_signal.alerts import build_messages, diff_alerts, send_telegram
+from tsi_signal.data import (
+    FUTURES_BASE_URL,
+    SPOT_BASE_URL,
+    fetch_ticker_price,
+)
 from tsi_signal.positions import (
     DEFAULT_DISASTER_PCT,
     evaluate_exits,
@@ -341,6 +346,57 @@ def manual_refresh():
     t = threading.Thread(target=do_scan, daemon=True)
     t.start()
     return jsonify({"status": "started"})
+
+
+# ---------------------------------------------------------------------------
+# Compound realizer (복리 실현기) — live price proxy + persisted state
+# ---------------------------------------------------------------------------
+COMPOUND_PATH = os.environ.get("TSI_COMPOUND", "compound.json")
+_compound_lock = threading.Lock()
+
+
+@app.route("/api/price")
+def api_price():
+    """Live last price for a symbol (futures by default, spot optional)."""
+    symbol = (request.args.get("symbol") or "").upper().strip()
+    market = request.args.get("market", "futures")
+    if not symbol:
+        return jsonify({"ok": False, "error": "symbol required"}), 400
+    base = SPOT_BASE_URL if market == "spot" else FUTURES_BASE_URL
+    try:
+        price = fetch_ticker_price(symbol, base_url=base)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 502
+    return jsonify({"ok": True, "symbol": symbol, "market": market, "price": price})
+
+
+@app.route("/compound")
+def compound_page():
+    return render_template("compound.html")
+
+
+@app.route("/api/compound/state", methods=["GET", "POST"])
+def compound_state():
+    """Persist the compound-realizer config + realize log to a JSON file so
+    the setup and history survive refreshes, restarts and device changes."""
+    if request.method == "GET":
+        try:
+            with open(COMPOUND_PATH, encoding="utf-8") as f:
+                return jsonify({"ok": True, "state": json.load(f)})
+        except FileNotFoundError:
+            return jsonify({"ok": True, "state": None})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+    data = request.get_json(force=True, silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "state must be an object"}), 400
+    try:
+        with _compound_lock:
+            with open(COMPOUND_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    return jsonify({"ok": True})
 
 
 @app.route("/settings", methods=["POST"])

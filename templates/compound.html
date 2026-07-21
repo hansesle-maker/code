@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="복리 실현기">
+  <title>복리 실현기 — Compound Realizer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:#0b0b18; --surface:#13132a; --surface2:#1a1a35; --border:#242450;
+      --text:#dde0ff; --muted:#7070a0; --accent:#6a6aff;
+      --bull:#00d47e; --bear:#ff4a5a; --warn:#ffb340; --radius:10px;
+    }
+    html { background: var(--bg); }
+    body { color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+           font-size: 13px; min-height: 100vh; -webkit-text-size-adjust: 100%; }
+    .topbar { position: sticky; top: 0; z-index: 200; background: var(--bg);
+      border-bottom: 1px solid var(--border); padding: 10px 16px;
+      padding-top: max(10px, env(safe-area-inset-top,0));
+      display: flex; align-items: center; gap: 12px; }
+    .back { font-size: 12px; color: var(--muted); text-decoration: none; padding: 4px 8px;
+            border: 1px solid var(--border); border-radius: 6px; white-space: nowrap; }
+    .back:hover { color: var(--accent); border-color: var(--accent); }
+    .title { font-size: 15px; font-weight: 700; color: var(--accent); }
+    .subtitle { font-size: 11px; color: var(--muted); margin-top: 1px; }
+    .price-badge { margin-left: auto; text-align: right; font-size: 11px; color: var(--muted); }
+    .price-badge b { display: block; font-size: 14px; color: var(--text); font-variant-numeric: tabular-nums; }
+    .container { max-width: 760px; margin: 0 auto; padding: 14px 12px 80px; }
+    .section { background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); margin-bottom: 12px; overflow: hidden; }
+    .section > summary, .section-hd { display: flex; align-items: center; gap: 8px; padding: 11px 14px;
+      font-weight: 700; font-size: 13px; cursor: pointer; user-select: none; }
+    .section > summary { list-style: none; }
+    .section > summary::-webkit-details-marker { display: none; }
+    .section > summary .chev { margin-left: auto; color: var(--muted); font-size: 11px; transition: transform .2s; }
+    details[open] > summary .chev { transform: rotate(90deg); }
+    .section-hd .hint, summary .hint { font-size: 11px; color: var(--muted); font-weight: 400; }
+    .section-body { padding: 14px; border-top: 1px solid var(--border); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap: 10px; }
+    .fld { display: flex; flex-direction: column; gap: 4px; }
+    .fld label { font-size: 11px; color: var(--muted); }
+    input[type="text"], input[type="number"], input[type="datetime-local"], select {
+      background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+      border-radius: 6px; font-size: 13px; padding: 7px 10px; width: 100%;
+      font-variant-numeric: tabular-nums; }
+    input:focus, select:focus { outline: none; border-color: var(--accent); }
+    .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+    .seg button { background: var(--surface2); color: var(--muted); border: none; padding: 7px 12px;
+      font-size: 12px; cursor: pointer; }
+    .seg button.on { background: var(--accent); color: #fff; font-weight: 700; }
+    .seg.long button.on { background: var(--bull); }
+    .seg.short button.on { background: var(--bear); }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    /* Hero signal card */
+    .hero { text-align: center; padding: 20px 14px; border-radius: var(--radius);
+      border: 2px solid var(--border); background: var(--surface); margin-bottom: 12px; transition: all .25s; }
+    .hero.go   { border-color: var(--bull); background: linear-gradient(180deg, rgba(0,212,126,.16), rgba(0,212,126,.03)); animation: pulse 1.4s infinite; }
+    .hero.wait { border-color: var(--warn); background: linear-gradient(180deg, rgba(255,179,64,.10), rgba(255,179,64,.02)); }
+    .hero.flat { border-color: var(--border); }
+    @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(0,212,126,.35);} 50% { box-shadow: 0 0 0 10px rgba(0,212,126,0);} }
+    .hero .sig { font-size: 26px; font-weight: 800; letter-spacing: -.5px; }
+    .hero.go .sig   { color: var(--bull); }
+    .hero.wait .sig { color: var(--warn); }
+    .hero .gap { font-size: 13px; color: var(--muted); margin-top: 6px; }
+    .hero .gap b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+    .stat-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 1px; background: var(--border);
+      border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 12px; }
+    .stat { background: var(--surface); padding: 11px 13px; }
+    .stat .k { font-size: 11px; color: var(--muted); }
+    .stat .v { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+    .stat .sub { font-size: 11px; color: var(--muted); margin-top: 1px; font-variant-numeric: tabular-nums; }
+    .pos { color: var(--bull); } .neg { color: var(--bear); } .neu { color: var(--text); }
+
+    .bar-wrap { height: 12px; background: var(--surface2); border-radius: 6px; overflow: hidden; margin: 4px 0 2px;
+      border: 1px solid var(--border); position: relative; }
+    .bar-fill { height: 100%; width: 0; background: var(--warn); transition: width .3s, background .3s; }
+    .bar-fill.go { background: var(--bull); }
+
+    button.action { width: 100%; font-size: 15px; font-weight: 800; padding: 14px; border: none;
+      border-radius: 10px; cursor: pointer; background: var(--accent); color: #fff; margin-top: 4px; }
+    button.action.go { background: var(--bull); }
+    button.action:active { opacity: .82; }
+    .realize-note { font-size: 11px; color: var(--muted); text-align: center; margin-top: 7px; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { padding: 7px 8px; text-align: right; border-bottom: 1px solid rgba(36,36,80,.6);
+      white-space: nowrap; font-variant-numeric: tabular-nums; }
+    th { color: var(--muted); font-weight: 600; font-size: 11px; }
+    th:first-child, td:first-child { text-align: left; }
+    tr.now td { background: rgba(106,106,255,.14); }
+    tr.now td:first-child { font-weight: 700; color: var(--accent); }
+    .tbl-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+    .chart-wrap { padding: 6px 4px 0; }
+    svg { width: 100%; height: 150px; display: block; }
+
+    .mini-btn { font-size: 11px; color: var(--muted); background: var(--surface2);
+      border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+    .mini-btn:hover { color: var(--accent); border-color: var(--accent); }
+    .hist-empty { color: var(--muted); font-size: 12px; text-align: center; padding: 16px; }
+    .save-dot { font-size: 10px; color: var(--muted); margin-left: 8px; }
+    .toggle-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .info { font-size: 11px; color: var(--muted); line-height: 1.6; }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <a href="/" class="back">← 스캐너</a>
+  <div>
+    <div class="title">💰 복리 실현기</div>
+    <div class="subtitle">목표수익 도달 시 기계적 실현 → 자본 복리 성장</div>
+  </div>
+  <div class="price-badge" id="priceBadge">현재가<b id="priceVal">—</b></div>
+</div>
+
+<div class="container">
+
+  <!-- ── Setup ─────────────────────────────────────────── -->
+  <details class="section" id="setupSection" open>
+    <summary>⚙️ 포지션 설정 <span class="hint">진입 정보 · 목표 설정</span><span class="save-dot" id="saveDot"></span><span class="chev">▶</span></summary>
+    <div class="section-body">
+      <div class="grid">
+        <div class="fld">
+          <label>심볼 (선택 · 실시간 손익용)</label>
+          <input type="text" id="symbol" placeholder="BTCUSDT" autocapitalize="characters">
+        </div>
+        <div class="fld">
+          <label>마켓</label>
+          <select id="market"><option value="futures">USDT-M 선물</option><option value="spot">현물</option></select>
+        </div>
+        <div class="fld">
+          <label>방향</label>
+          <div class="seg long short" id="sideSeg">
+            <button type="button" data-side="1" class="on">롱</button>
+            <button type="button" data-side="-1">숏</button>
+          </div>
+        </div>
+        <div class="fld">
+          <label>진입 시점</label>
+          <input type="datetime-local" id="entryTs">
+        </div>
+        <div class="fld">
+          <label>진입 가격</label>
+          <input type="number" id="entryPrice" step="any" placeholder="예: 65000">
+        </div>
+        <div class="fld">
+          <label>진입 자본 (USDT · 목표 기준)</label>
+          <input type="number" id="capital" step="any" placeholder="예: 1000">
+        </div>
+        <div class="fld">
+          <label>레버리지 (x)</label>
+          <input type="number" id="leverage" step="any" value="1" placeholder="1">
+        </div>
+        <div class="fld">
+          <label>목표 수익률 (%/주기)</label>
+          <input type="number" id="targetPct" step="any" placeholder="예: 1">
+        </div>
+        <div class="fld">
+          <label>목표 주기</label>
+          <div class="row2">
+            <input type="number" id="periodVal" step="any" value="1" placeholder="1">
+            <select id="periodUnit"><option value="m">분</option><option value="h" selected>시간</option><option value="d">일</option></select>
+          </div>
+        </div>
+        <div class="fld">
+          <label>목표 성장</label>
+          <select id="compound"><option value="1">복리 (compound)</option><option value="0">단리 (linear)</option></select>
+        </div>
+        <div class="fld">
+          <label>손익 입력 방식</label>
+          <select id="pnlMode"><option value="live">실시간 가격</option><option value="manual">직접 입력</option></select>
+        </div>
+        <div class="fld" id="manualWrap" style="display:none">
+          <label>현재 미실현손익 (USDT)</label>
+          <input type="number" id="manualPnl" step="any" placeholder="예: 12.5">
+        </div>
+      </div>
+      <div class="info" id="qtyInfo" style="margin-top:10px"></div>
+    </div>
+  </details>
+
+  <!-- ── Hero signal ───────────────────────────────────── -->
+  <div class="hero flat" id="hero">
+    <div class="sig" id="heroSig">설정을 입력하세요</div>
+    <div class="gap" id="heroGap"></div>
+  </div>
+
+  <!-- ── Live stats ────────────────────────────────────── -->
+  <div class="stat-grid">
+    <div class="stat"><div class="k">경과 시간</div><div class="v neu" id="stElapsed">—</div><div class="sub" id="stCycle"></div></div>
+    <div class="stat"><div class="k">현재 미실현손익</div><div class="v" id="stPnl">—</div><div class="sub" id="stRoi"></div></div>
+    <div class="stat"><div class="k">현재 목표수익 <span id="stCycleK"></span></div><div class="v neu" id="stTarget">—</div><div class="sub" id="stTargetPct"></div></div>
+    <div class="stat"><div class="k">목표 도달까지</div><div class="v neu" id="stNext">—</div><div class="sub" id="stTargetPrice"></div></div>
+  </div>
+
+  <div class="section"><div class="section-body" style="border-top:none">
+    <div class="bar-wrap"><div class="bar-fill" id="barFill"></div></div>
+    <div class="info" id="barLbl" style="text-align:center;margin-top:6px"></div>
+    <button class="action" id="realizeBtn" onclick="realize()">✅ 실현 (복리 반영)</button>
+    <div class="realize-note" id="realizeNote"></div>
+  </div></div>
+
+  <!-- ── Target curve ──────────────────────────────────── -->
+  <div class="section">
+    <div class="section-hd">📈 복리 목표 궤도 <span class="hint">주기별 누적 목표 vs 현재 손익</span></div>
+    <div class="chart-wrap"><svg id="chart" viewBox="0 0 400 150" preserveAspectRatio="none"></svg></div>
+    <div class="info" id="chartLbl" style="padding:6px 14px 12px;text-align:center"></div>
+  </div>
+
+  <!-- ── Schedule ──────────────────────────────────────── -->
+  <details class="section" open>
+    <summary>🗓️ 주기별 목표수익 <span class="hint">복리 누적 목표</span><span class="chev">▶</span></summary>
+    <div class="tbl-scroll">
+      <table id="schedTable">
+        <thead><tr>
+          <th>주기</th><th>시각</th><th>경과</th><th>목표 총자본</th><th>목표 수익</th><th>수익률</th><th>목표가</th>
+        </tr></thead>
+        <tbody id="schedBody"></tbody>
+      </table>
+    </div>
+  </details>
+
+  <!-- ── History ───────────────────────────────────────── -->
+  <details class="section">
+    <summary>📜 실현 기록 <span class="hint" id="histHint"></span><span class="chev">▶</span></summary>
+    <div class="section-body">
+      <div class="toggle-row" style="margin-bottom:10px;justify-content:flex-end">
+        <button class="mini-btn" onclick="newCycle()">🔄 새 사이클 (지금 재진입)</button>
+        <button class="mini-btn" onclick="resetAll()">🗑️ 전체 초기화</button>
+      </div>
+      <div class="tbl-scroll">
+        <table id="histTable">
+          <thead><tr><th>회차</th><th>실현 시각</th><th>실현 전 자본</th><th>실현 수익</th><th>실현 후 자본</th><th>누적 수익률</th></tr></thead>
+          <tbody id="histBody"></tbody>
+        </table>
+      </div>
+      <div class="hist-empty" id="histEmpty">아직 실현 기록이 없습니다.</div>
+    </div>
+  </details>
+
+  <div class="info" style="text-align:center;line-height:1.7">
+    미실현손익이 <b style="color:var(--warn)">현재 목표수익</b> 이상이면 신호가 초록으로 바뀝니다.<br>
+    <b>실현</b>을 누르면 수익이 자본에 더해지고(복리), 진입 시점·가격이 지금으로 초기화됩니다.<br>
+    설정·기록은 서버에 저장되어 새로고침·재시작에도 유지됩니다.
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const UNIT_SEC = { m: 60, h: 3600, d: 86400 };
+const UNIT_LBL = { m: "분", h: "시간", d: "일" };
+const N_PERIODS = 12;
+
+let S = null;            // state {cfg, initialCapital, history}
+let livePrice = null;    // last fetched price
+let livePriceTs = 0;
+let saveTimer = null;
+let priceTimer = null;
+
+function defaults() {
+  return {
+    cfg: {
+      symbol: "", market: "futures", side: 1,
+      entryTs: Date.now(), entryPrice: null, capital: 1000, leverage: 1,
+      targetPct: 1, periodVal: 1, periodUnit: "h",
+      compound: true, pnlMode: "live", manualPnl: 0,
+    },
+    initialCapital: 1000,
+    history: [],
+  };
+}
+
+/* ── formatting ─────────────────────────────────────────── */
+function fmtUsd(v) {
+  if (v == null || isNaN(v)) return "—";
+  const s = Math.abs(v) >= 1000 ? v.toLocaleString(undefined, { maximumFractionDigits: 2 })
+                                : v.toFixed(2);
+  return s;
+}
+function fmtSigned(v) { return (v >= 0 ? "+" : "") + fmtUsd(v); }
+function fmtPct(v) { return (v >= 0 ? "+" : "") + v.toFixed(2) + "%"; }
+function fmtPrice(v) {
+  if (v == null || isNaN(v)) return "—";
+  const d = Math.abs(v) >= 100 ? 2 : Math.abs(v) >= 1 ? 4 : 6;
+  return v.toLocaleString(undefined, { maximumFractionDigits: d });
+}
+function fmtDur(sec) {
+  sec = Math.max(0, Math.floor(sec));
+  const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600),
+        m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  if (d) return `${d}일 ${h}시간 ${m}분`;
+  if (h) return `${h}시간 ${m}분`;
+  if (m) return `${m}분 ${s}초`;
+  return `${s}초`;
+}
+function fmtClock(ts) {
+  const dt = new Date(ts), now = new Date();
+  const hm = dt.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
+  const sameDay = dt.toDateString() === now.toDateString();
+  return sameDay ? hm : `${dt.getMonth() + 1}/${dt.getDate()} ${hm}`;
+}
+
+/* ── state <-> form ─────────────────────────────────────── */
+function toLocalInput(ts) {
+  const d = new Date(ts - new Date().getTimezoneOffset() * 60000);
+  return d.toISOString().slice(0, 16);
+}
+function loadForm() {
+  const c = S.cfg;
+  document.getElementById("symbol").value = c.symbol || "";
+  document.getElementById("market").value = c.market;
+  document.getElementById("entryPrice").value = c.entryPrice ?? "";
+  document.getElementById("capital").value = c.capital ?? "";
+  document.getElementById("leverage").value = c.leverage ?? 1;
+  document.getElementById("targetPct").value = c.targetPct ?? "";
+  document.getElementById("periodVal").value = c.periodVal ?? 1;
+  document.getElementById("periodUnit").value = c.periodUnit;
+  document.getElementById("compound").value = c.compound ? "1" : "0";
+  document.getElementById("pnlMode").value = c.pnlMode;
+  document.getElementById("manualPnl").value = c.manualPnl ?? "";
+  document.getElementById("entryTs").value = toLocalInput(c.entryTs || Date.now());
+  document.querySelectorAll("#sideSeg button").forEach(b =>
+    b.classList.toggle("on", Number(b.dataset.side) === c.side));
+  document.getElementById("manualWrap").style.display = c.pnlMode === "manual" ? "" : "none";
+}
+function readForm() {
+  const c = S.cfg;
+  const prevHadHistory = S.history.length > 0;
+  c.symbol = (document.getElementById("symbol").value || "").toUpperCase().trim();
+  c.market = document.getElementById("market").value;
+  c.entryPrice = parseFloat(document.getElementById("entryPrice").value) || null;
+  const newCap = parseFloat(document.getElementById("capital").value) || 0;
+  c.leverage = parseFloat(document.getElementById("leverage").value) || 1;
+  c.targetPct = parseFloat(document.getElementById("targetPct").value) || 0;
+  c.periodVal = parseFloat(document.getElementById("periodVal").value) || 1;
+  c.periodUnit = document.getElementById("periodUnit").value;
+  c.compound = document.getElementById("compound").value === "1";
+  c.pnlMode = document.getElementById("pnlMode").value;
+  c.manualPnl = parseFloat(document.getElementById("manualPnl").value) || 0;
+  const tsv = document.getElementById("entryTs").value;
+  if (tsv) c.entryTs = new Date(tsv).getTime();
+  // capital edit before any realize also resets the compounding baseline
+  c.capital = newCap;
+  if (!prevHadHistory) S.initialCapital = newCap;
+  document.getElementById("manualWrap").style.display = c.pnlMode === "manual" ? "" : "none";
+}
+
+/* ── persistence ───────────────────────────────────────── */
+function save() {
+  try { localStorage.setItem("tsi_compound", JSON.stringify(S)); } catch (e) {}
+  const dot = document.getElementById("saveDot");
+  if (dot) dot.textContent = "저장 중…";
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    fetch("/api/compound/state", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(S),
+    }).then(() => { if (dot) dot.textContent = "저장됨 ✓"; })
+      .catch(() => { if (dot) dot.textContent = "로컬 저장"; });
+  }, 400);
+}
+function onFormChange() { readForm(); save(); refreshPricePoll(); render(); }
+
+/* ── live price ────────────────────────────────────────── */
+function refreshPricePoll() {
+  clearInterval(priceTimer);
+  if (S.cfg.pnlMode === "live" && S.cfg.symbol) {
+    fetchPrice();
+    priceTimer = setInterval(fetchPrice, 10000);
+  } else {
+    livePrice = null;
+    document.getElementById("priceVal").textContent = "—";
+  }
+}
+function fetchPrice() {
+  const c = S.cfg;
+  if (!c.symbol) return;
+  fetch(`/api/price?symbol=${encodeURIComponent(c.symbol)}&market=${c.market}`)
+    .then(r => r.json())
+    .then(res => {
+      if (res.ok) {
+        livePrice = res.price; livePriceTs = Date.now();
+        document.getElementById("priceVal").textContent = fmtPrice(res.price);
+      } else {
+        document.getElementById("priceVal").textContent = "조회실패";
+      }
+    })
+    .catch(() => { document.getElementById("priceVal").textContent = "오프라인"; });
+}
+
+/* ── core math ─────────────────────────────────────────── */
+function periodSec() { return Math.max(1, S.cfg.periodVal * (UNIT_SEC[S.cfg.periodUnit] || 3600)); }
+function elapsedSec() { return Math.max(0, (Date.now() - S.cfg.entryTs) / 1000); }
+function targetProfitAt(k) {
+  const c = S.cfg, r = c.targetPct / 100;
+  return c.compound ? c.capital * (Math.pow(1 + r, k) - 1) : c.capital * r * k;
+}
+function currentCycle() { return Math.max(1, Math.ceil(elapsedSec() / periodSec())); }
+function unrealized() {
+  const c = S.cfg;
+  if (c.pnlMode === "manual") return c.manualPnl || 0;
+  if (livePrice && c.entryPrice) return c.capital * c.side * (livePrice / c.entryPrice - 1) * c.leverage;
+  return null;
+}
+function priceForProfit(P) {
+  const c = S.cfg;
+  if (!c.entryPrice || !c.capital || !c.leverage) return null;
+  return c.entryPrice * (1 + c.side * P / (c.capital * c.leverage));
+}
+
+/* ── render ────────────────────────────────────────────── */
+function render() {
+  const c = S.cfg;
+  const k = currentCycle();
+  const target = targetProfitAt(k);
+  const pnl = unrealized();
+  const e = elapsedSec();
+  const T = periodSec();
+
+  // stats
+  document.getElementById("stElapsed").textContent = fmtDur(e);
+  document.getElementById("stCycle").textContent =
+    `${c.targetPct}% / ${c.periodVal}${UNIT_LBL[c.periodUnit]} · ${c.compound ? "복리" : "단리"}`;
+  document.getElementById("stCycleK").textContent = `(${k}주기)`;
+
+  const pnlEl = document.getElementById("stPnl"), roiEl = document.getElementById("stRoi");
+  if (pnl == null) {
+    pnlEl.textContent = "—"; pnlEl.className = "v neu";
+    roiEl.textContent = c.pnlMode === "live" ? "심볼·진입가 입력 필요" : "";
+  } else {
+    pnlEl.textContent = fmtSigned(pnl); pnlEl.className = "v " + (pnl >= 0 ? "pos" : "neg");
+    roiEl.textContent = c.capital ? "자본 대비 " + fmtPct(pnl / c.capital * 100) : "";
+  }
+
+  document.getElementById("stTarget").textContent = fmtUsd(target);
+  document.getElementById("stTargetPct").textContent =
+    c.capital ? "자본 대비 +" + (target / c.capital * 100).toFixed(2) + "%" : "";
+
+  const tPrice = priceForProfit(target);
+  document.getElementById("stTargetPrice").textContent =
+    tPrice != null ? "목표가 " + fmtPrice(tPrice) : "";
+  const toNext = T - (e % T);
+  document.getElementById("stNext").textContent = fmtDur(toNext);
+
+  // hero + bar
+  const hero = document.getElementById("hero"), sig = document.getElementById("heroSig"),
+        gap = document.getElementById("heroGap"), bar = document.getElementById("barFill"),
+        barLbl = document.getElementById("barLbl");
+  if (pnl == null || !c.capital || !c.targetPct) {
+    hero.className = "hero flat";
+    sig.textContent = "설정을 입력하세요";
+    gap.textContent = c.pnlMode === "live" ? "심볼·진입가·자본·목표를 입력하면 신호가 표시됩니다." : "자본·목표·손익을 입력하세요.";
+    bar.style.width = "0"; barLbl.textContent = "";
+  } else {
+    const diff = pnl - target;
+    const pct = target > 0 ? Math.max(0, pnl / target * 100) : (pnl > 0 ? 100 : 0);
+    bar.style.width = Math.min(100, pct) + "%";
+    if (pnl >= target && pnl > 0) {
+      hero.className = "hero go"; bar.classList.add("go");
+      sig.textContent = "🎯 지금 실현하세요";
+      gap.innerHTML = `목표 초과 <b class="pos">${fmtSigned(diff)} USDT</b> · 목표의 <b>${pct.toFixed(0)}%</b> 달성`;
+      barLbl.innerHTML = `미실현 <b>${fmtSigned(pnl)}</b> ≥ 목표 <b>${fmtUsd(target)}</b> USDT`;
+    } else {
+      hero.className = "hero wait"; bar.classList.remove("go");
+      sig.textContent = "⏳ 대기";
+      gap.innerHTML = `목표까지 <b>${fmtUsd(Math.max(0, -diff))} USDT</b> 부족 · <b>${pct.toFixed(0)}%</b> 진행`;
+      barLbl.innerHTML = `미실현 <b>${fmtSigned(pnl)}</b> / 목표 <b>${fmtUsd(target)}</b> USDT`;
+    }
+  }
+
+  // realize preview
+  const note = document.getElementById("realizeNote"), rbtn = document.getElementById("realizeBtn");
+  if (pnl != null && c.capital) {
+    const after = c.capital + pnl;
+    note.innerHTML = `실현 시 자본 <b>${fmtUsd(c.capital)}</b> → <b class="${pnl >= 0 ? "pos" : "neg"}">${fmtUsd(after)}</b> USDT` +
+      (S.initialCapital ? ` · 누적 <b>${fmtPct((after / S.initialCapital - 1) * 100)}</b>` : "");
+    rbtn.className = "action" + (pnl >= target && pnl > 0 ? " go" : "");
+  } else {
+    note.textContent = "미실현손익이 확인되면 실현할 수 있습니다.";
+    rbtn.className = "action";
+  }
+
+  // qty info
+  const qi = document.getElementById("qtyInfo");
+  if (c.entryPrice && c.capital) {
+    const notional = c.capital * c.leverage, qty = notional / c.entryPrice;
+    const moveNeeded = c.targetPct / c.leverage;
+    qi.innerHTML = `포지션 규모 ≈ <b>${fmtUsd(notional)}</b> USDT (수량 ${qty.toLocaleString(undefined, { maximumFractionDigits: 4 })}) · ` +
+      `1주기 목표(${c.targetPct}%)에 필요한 가격 변동 ≈ <b>${moveNeeded.toFixed(3)}%</b>`;
+  } else {
+    qi.textContent = "";
+  }
+
+  renderSchedule(k);
+  renderChart(k, pnl);
+  renderHistory();
+}
+
+function renderSchedule(kNow) {
+  const c = S.cfg, T = periodSec(), body = document.getElementById("schedBody");
+  let rows = "";
+  for (let k = 1; k <= N_PERIODS; k++) {
+    const tp = targetProfitAt(k), ts = c.entryTs + k * T * 1000;
+    const price = priceForProfit(tp);
+    rows += `<tr class="${k === kNow ? "now" : ""}">` +
+      `<td>${k}주기</td><td>${fmtClock(ts)}</td><td>${fmtDur(k * T)}</td>` +
+      `<td>${fmtUsd(c.capital + tp)}</td><td class="pos">${fmtSigned(tp)}</td>` +
+      `<td>+${(c.capital ? tp / c.capital * 100 : 0).toFixed(2)}%</td>` +
+      `<td>${price != null ? fmtPrice(price) : "—"}</td></tr>`;
+  }
+  body.innerHTML = rows;
+}
+
+function renderChart(kNow, pnl) {
+  const svg = document.getElementById("chart"), W = 400, H = 150, pad = 6;
+  const c = S.cfg;
+  const maxT = targetProfitAt(N_PERIODS);
+  const yTop = Math.max(maxT, pnl != null ? pnl : 0, 1e-9);
+  const x = k => pad + (W - 2 * pad) * (k / N_PERIODS);
+  const y = v => H - pad - (H - 2 * pad) * (v / yTop);
+  let path = "";
+  for (let k = 0; k <= N_PERIODS; k++) path += (k ? "L" : "M") + x(k).toFixed(1) + "," + y(targetProfitAt(k)).toFixed(1) + " ";
+  const eFrac = Math.min(N_PERIODS, elapsedSec() / periodSec());
+  const cx = x(eFrac);
+  let dot = "";
+  if (pnl != null) {
+    const cy = y(Math.max(0, Math.min(yTop, pnl)));
+    const above = pnl >= targetProfitAt(currentCycle()) && pnl > 0;
+    dot = `<line x1="${cx.toFixed(1)}" y1="${pad}" x2="${cx.toFixed(1)}" y2="${H - pad}" stroke="#3a3a66" stroke-dasharray="3 3"/>` +
+      `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="5" fill="${above ? "#00d47e" : "#ffb340"}"/>`;
+  }
+  svg.innerHTML =
+    `<line x1="${pad}" y1="${H - pad}" x2="${W - pad}" y2="${H - pad}" stroke="#242450"/>` +
+    `<path d="${path}" fill="none" stroke="#6a6aff" stroke-width="2"/>` + dot;
+  document.getElementById("chartLbl").innerHTML =
+    `보라선 = 복리 누적 목표 · 점 = 현재 손익 위치 (초록: 목표 이상, 주황: 미달) · 가로축 ${N_PERIODS}주기`;
+}
+
+function renderHistory() {
+  const body = document.getElementById("histBody"), empty = document.getElementById("histEmpty");
+  const hint = document.getElementById("histHint");
+  if (!S.history.length) {
+    body.innerHTML = ""; empty.style.display = ""; hint.textContent = "";
+    document.getElementById("histTable").style.display = "none";
+    return;
+  }
+  empty.style.display = "none";
+  document.getElementById("histTable").style.display = "";
+  let tot = 0, rows = "";
+  S.history.forEach(h => {
+    tot += h.profit;
+    rows += `<tr><td>${h.round}</td><td>${fmtClock(h.ts)}</td><td>${fmtUsd(h.before)}</td>` +
+      `<td class="${h.profit >= 0 ? "pos" : "neg"}">${fmtSigned(h.profit)}</td>` +
+      `<td>${fmtUsd(h.after)}</td><td class="${h.cumRoi >= 0 ? "pos" : "neg"}">${fmtPct(h.cumRoi)}</td></tr>`;
+  });
+  body.innerHTML = rows;
+  hint.textContent = `${S.history.length}회 · 누적 ${fmtSigned(tot)} USDT`;
+}
+
+/* ── actions ───────────────────────────────────────────── */
+function realize() {
+  const c = S.cfg, pnl = unrealized();
+  if (pnl == null) { alert("미실현손익을 확인할 수 없습니다. 심볼·진입가를 입력하거나 손익을 직접 입력하세요."); return; }
+  const before = c.capital, after = before + pnl;
+  const enterPrice = (c.pnlMode === "live" && livePrice) ? livePrice : c.entryPrice;
+  S.history.push({
+    round: S.history.length + 1, ts: Date.now(),
+    before: before, profit: pnl, after: after,
+    price: enterPrice, cumRoi: S.initialCapital ? (after / S.initialCapital - 1) * 100 : 0,
+  });
+  c.capital = after;
+  c.entryTs = Date.now();
+  if (enterPrice) c.entryPrice = enterPrice;
+  if (c.pnlMode === "manual") c.manualPnl = 0;
+  loadForm(); save(); render();
+}
+function newCycle() {
+  S.cfg.entryTs = Date.now();
+  if (S.cfg.pnlMode === "live" && livePrice) S.cfg.entryPrice = livePrice;
+  loadForm(); save(); render();
+}
+function resetAll() {
+  if (!confirm("실현 기록과 설정을 모두 초기화할까요?")) return;
+  S = defaults(); loadForm(); save(); refreshPricePoll(); render();
+}
+
+/* ── wiring ────────────────────────────────────────────── */
+function wire() {
+  ["symbol", "market", "entryPrice", "capital", "leverage", "targetPct",
+   "periodVal", "periodUnit", "compound", "pnlMode", "manualPnl", "entryTs"]
+    .forEach(id => {
+      const el = document.getElementById(id);
+      el.addEventListener("change", onFormChange);
+      if (el.tagName === "INPUT" && el.type !== "datetime-local") el.addEventListener("input", () => { readForm(); render(); });
+    });
+  document.querySelectorAll("#sideSeg button").forEach(b =>
+    b.addEventListener("click", () => {
+      S.cfg.side = Number(b.dataset.side);
+      document.querySelectorAll("#sideSeg button").forEach(x => x.classList.toggle("on", x === b));
+      save(); render();
+    }));
+}
+
+function init(state) {
+  S = state && state.cfg ? state : defaults();
+  if (S.initialCapital == null) S.initialCapital = S.cfg.capital;
+  if (!Array.isArray(S.history)) S.history = [];
+  loadForm(); wire(); refreshPricePoll(); render();
+  setInterval(render, 1000);
+}
+
+// server state first (source of truth); fall back to localStorage
+fetch("/api/compound/state").then(r => r.json()).then(res => {
+  if (res.ok && res.state) { init(res.state); return; }
+  let ls = null;
+  try { ls = JSON.parse(localStorage.getItem("tsi_compound") || "null"); } catch (e) {}
+  init(ls);
+}).catch(() => {
+  let ls = null;
+  try { ls = JSON.parse(localStorage.getItem("tsi_compound") || "null"); } catch (e) {}
+  init(ls);
+});
+</script>
+</body>
+</html>

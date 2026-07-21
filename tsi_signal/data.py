@@ -97,6 +97,25 @@ def fetch_klines(
     return candles
 
 
+def fetch_ticker_price(
+    symbol: str,
+    base_url: str = FUTURES_BASE_URL,
+    session: Optional[object] = None,
+) -> float:
+    """Latest traded price for ``symbol`` from Binance's public ticker.
+
+    Uses ``/fapi/v1/ticker/price`` for USDⓈ-M futures (``base_url`` contains
+    ``fapi``) or ``/api/v3/ticker/price`` for spot. Weight 1, no auth.
+    """
+    import requests  # imported lazily so offline use needs no dependency
+
+    path = "/fapi/v1/ticker/price" if "fapi" in base_url else "/api/v3/ticker/price"
+    http = session or requests
+    resp = http.get(f"{base_url}{path}", params={"symbol": symbol}, timeout=10)
+    resp.raise_for_status()
+    return float(resp.json()["price"])
+
+
 def _raw_to_candles(raw) -> List[Candle]:
     return [
         Candle(int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5]))

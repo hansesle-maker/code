@@ -11,3 +11,4 @@ config/symbols.csv
 positions.json
 web_settings.json
 bookmarks.json
+compound.json
