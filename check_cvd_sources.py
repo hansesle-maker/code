@@ -69,7 +69,8 @@ def check(exchange: str, symbol: str | None, need: int) -> int:
         desc = ("신호 없음" if sig is None else
                 f"{sig.direction} {sig.bars_ago}봉전 "
                 f"강도{sig.strength}({strength_label(sig.strength)})"
-                f"{'' if sig.active else ' [만료]'}")
+                f"{'' if sig.active else ' [만료]'}"
+                f"{' [미확정]' if sig.provisional else ''}")
         print(f"  ✅ {tf:>4}: {len(candles):>4}봉  마지막 {_iso(times[-1])}  "
               f"간격 {sorted(gaps)[:2]}ms  → {desc}")
 

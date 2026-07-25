@@ -190,16 +190,23 @@ def _bithumb_minutes_paged(market: str, unit: int, need: int,
     return out
 
 
-def aggregate(candles: Sequence[Candle], step_ms: int, parts: int) -> List[Candle]:
-    """Group candles into ``step_ms`` buckets, keeping only complete buckets."""
+def aggregate(candles: Sequence[Candle], step_ms: int, parts: int,
+              allow_partial_last: bool = False) -> List[Candle]:
+    """Group candles into ``step_ms`` buckets.
+
+    Only complete buckets are kept, except that ``allow_partial_last`` keeps a
+    short newest bucket — that one is the still-forming higher-timeframe bar.
+    """
     buckets: Dict[int, List[Candle]] = {}
     for c in candles:
         buckets.setdefault(c.open_time // step_ms, []).append(c)
     out: List[Candle] = []
-    for b in sorted(buckets):
+    keys = sorted(buckets)
+    for b in keys:
         group = sorted(buckets[b], key=lambda c: c.open_time)
         if len(group) != parts:
-            continue                       # partial (or gapped) bucket
+            if not (allow_partial_last and b == keys[-1] and group):
+                continue                   # partial (or gapped) bucket
         out.append(Candle(
             open_time=b * step_ms,
             open=group[0].open,
@@ -221,17 +228,24 @@ def _drop_forming(candles: List[Candle], tf: str) -> List[Candle]:
 
 
 def fetch_bithumb_candles(market: str, tf: str, need: int = 150,
-                          session=None) -> List[Candle]:
+                          session=None, closed_only: bool = False) -> List[Candle]:
+    """Bithumb candles, oldest first.
+
+    The still-forming bar is kept by default (``closed_only=False``) because
+    pivot-based indicators need it to see the freshest pivot, exactly as
+    TradingView does.
+    """
     if tf in _BITHUMB_MIN_UNIT:
         candles = _bithumb_minutes_paged(market, _BITHUMB_MIN_UNIT[tf],
                                          need + 2, session)
     elif tf == "12h":
         raw = _bithumb_minutes_paged(market, 240,
                                      (need + 2) * _AGG_12H_PARTS, session)
-        candles = aggregate(raw, TF_MS["12h"], _AGG_12H_PARTS)
+        candles = aggregate(raw, TF_MS["12h"], _AGG_12H_PARTS,
+                            allow_partial_last=not closed_only)
     else:
         raise ValueError(f"unsupported Bithumb timeframe: {tf}")
-    return _drop_forming(candles, tf)
+    return _drop_forming(candles, tf) if closed_only else candles
 
 
 def fetch_bithumb_volumes(markets: Sequence[str], session=None) -> Dict[str, float]:
@@ -276,16 +290,19 @@ def fetch_binance_volumes(session=None) -> Dict[str, float]:
 
 
 def get_candles(exchange: str, symbol: str, tf: str, need: int = 150,
-                session=None) -> List[Candle]:
-    """Closed candles, oldest first, for either exchange."""
+                session=None, closed_only: bool = False) -> List[Candle]:
+    """Candles, oldest first, for either exchange.
+
+    The last element is the still-forming bar unless ``closed_only`` is set.
+    """
     if exchange == BITHUMB:
-        return fetch_bithumb_candles(symbol, tf, need, session)
+        return fetch_bithumb_candles(symbol, tf, need, session, closed_only)
     return fetch_klines(
         symbol, tf,
         limit=min(1500, need + 2),
         base_url=FUTURES_BASE_URL,
         path=FUTURES_KLINES_PATH,
-        drop_unclosed=True,
+        drop_unclosed=closed_only,
         session=session,
     )
 

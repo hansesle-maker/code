@@ -48,17 +48,18 @@ MIN_BARS = 90
 
 @dataclass
 class CVDSignal:
-    """Most recent confirmed divergence on one timeframe."""
+    """Most recent divergence on one timeframe."""
     direction: str          # BULL ("강세") | BEAR ("약세")
     bars_ago: int           # pivot distance from the current (forming) bar
     strength: int           # consecutive divergent fractals: 1=일반 2=양호 3+=강함
     phase: bool             # Hist crossed zero between the two pivots
     active: bool            # Pine's Time_Condition still true on the last bar
-    hist: float             # Hist on the last closed bar
+    hist: float             # Hist on the newest bar
     pivot_price: float      # newest pivot's price
     prev_price: float       # previous pivot's price
     pivot_hist: float       # newest pivot's Hist
     prev_hist: float        # previous pivot's Hist
+    provisional: bool = False  # confirmation used the still-forming bar (can repaint)
 
 
 def strength_label(k: int) -> str:
@@ -160,14 +161,17 @@ def scan_divergence(
     max_gap: int = DEF_MAX_GAP,
     window: int = DEF_WINDOW,
 ) -> Optional[CVDSignal]:
-    """Return the most recent confirmed divergence, or ``None``.
+    """Return the most recent divergence, or ``None``.
 
-    ``candles`` must be closed bars, oldest first. Pine's per-bar execution
-    is replicated: fractals confirm ``n`` bars after the pivot, so the
-    freshest possible signal sits ``n`` bars back.
+    ``candles`` is oldest-first and **includes the still-forming bar**, the
+    way TradingView evaluates the script. That matters: a pivot needs ``n``
+    bars to its right, so dropping the live bar hides the freshest pivot and
+    makes an older divergence look like the current one.
 
-    ``bars_ago`` counts from the current (forming) bar — the last closed bar
-    is 1봉전 — matching the TSI dashboard's convention.
+    ``bars_ago`` counts back from the forming bar, so it reads the same as the
+    chart: ``n``봉전 is the freshest a signal can be. Such a signal is flagged
+    ``provisional`` because its confirmation used the live bar and can repaint
+    until that bar closes; everything older is fixed.
     """
     N = len(candles)
     if N < max(MIN_BARS, ema_len + period + 2 * n + 2):
@@ -245,10 +249,12 @@ def scan_divergence(
         return None
 
     # bars_ago held the absolute pivot index during the walk; convert to a
-    # distance from the current forming bar (last closed bar = 1봉전).
+    # distance from the newest (forming) bar, matching how the chart reads.
     pivot_idx = latest.bars_ago
-    latest.bars_ago = (N - 1) - pivot_idx + 1
+    latest.bars_ago = (N - 1) - pivot_idx
     latest.active = (pivot_idx + window) > (N - 1)
+    # Confirmed at pivot + n; if that is the live bar the signal can repaint.
+    latest.provisional = (pivot_idx + n) >= (N - 1)
     last_hist = hist[-1]
     latest.hist = round(last_hist, 4) if last_hist is not None else 0.0
     return latest

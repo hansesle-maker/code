@@ -61,6 +61,7 @@ def _sig_dict(sig) -> dict:
         "strength_label": strength_label(sig.strength),
         "phase": sig.phase,
         "active": sig.active,
+        "provisional": sig.provisional,
         "hist": sig.hist,
         "pivot_price": sig.pivot_price,
         "prev_price": sig.prev_price,

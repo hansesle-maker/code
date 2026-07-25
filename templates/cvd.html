@@ -154,7 +154,9 @@
   <b>CVD Divergence Oscillator</b> (TradingFinder, Pine v5 포팅) · Hist = 볼륨델타 21봉 누적<br>
   <b style="color:var(--bear)">약세</b>: 가격 고점↑ + CVD 고점↓ (-RD) &nbsp;·&nbsp;
   <b style="color:var(--bull)">강세</b>: 가격 저점↓ + CVD 저점↑ (+RD)<br>
-  숫자 = 다이버전스 발생 봉(현재 진행봉 기준 N봉전) · 흐린 표시 = 30봉 경과(만료) · 셀을 누르면 상세
+  숫자 = 다이버전스 발생 봉(현재 진행봉 기준 N봉전, 차트 라벨과 동일 기준) · 항상 <b>가장 최근 신호</b><br>
+  흐린 표시 = 30봉 경과(만료) · <b>*</b> = 미확정(현재봉 마감 시 확정, 그때까지 변경 가능) ·
+  <b>⁑/⁂</b> = 강도 양호/강함 · 셀을 누르면 상세
 </div>
 
 <script>
@@ -256,13 +258,15 @@ function cellHtml(c, tf, label) {
   if (!c) return '<td class="na" data-v="9999">—</td>';
   const cls = (c.dir === "강세" ? "bull" : "bear") + (c.active ? "" : " stale");
   const mark = c.strength >= 3 ? "⁂" : c.strength === 2 ? "⁑" : "";
+  const prov = c.provisional ? "*" : "";
   const tip = `<b>${label} · ${tf} · ${c.dir} 다이버전스</b><br>` +
     `발생: ${c.bars}봉전 · 강도 ${c.strength} (${c.strength_label})` +
     (c.active ? "" : " · <b>만료</b>(30봉 경과)") + "<br>" +
     `가격 ${c.prev_price} → ${c.pivot_price} · CVD ${c.prev_hist} → ${c.pivot_hist}<br>` +
-    `현재 Hist ${c.hist}` + (c.phase ? " · 구간 내 0선 교차" : "");
-  return `<td class="${cls}" data-v="${c.bars}" data-tip="${esc(tip)}">` +
-    `${c.bars}봉전 / ${c.dir}${mark}</td>`;
+    `현재 Hist ${c.hist}` + (c.phase ? " · 구간 내 0선 교차" : "") +
+    (c.provisional ? "<br><b>미확정</b> — 현재봉이 마감되면 확정 (변경 가능)" : "");
+  return `<td class="${cls}" data-v="${c.bars}"${c.provisional ? ' data-prov="1"' : ""}` +
+    ` data-tip="${esc(tip)}">${c.bars}봉전 / ${c.dir}${mark}${prov}</td>`;
 }
 
 function render() {
@@ -324,7 +328,8 @@ function render() {
     ${TFS.map(tf => `<th><select data-tf="${tf}" onchange="applyFilter()">
       <option value="">전체</option><option value="강세">강세</option>
       <option value="약세">약세</option><option value="any">신호있음</option>
-      <option value="live">유효(30봉내)</option></select></th>`).join("")}
+      <option value="live">유효(30봉내)</option>
+      <option value="fixed">확정만</option></select></th>`).join("")}
   </tr>`;
 
   const body = sorted.map(r => {
@@ -370,6 +375,7 @@ function applyFilter() {
         const has = txt !== "—";
         if (want === "any") { if (!has) { show = false; break; } }
         else if (want === "live") { if (!has || td.classList.contains("stale")) { show = false; break; } }
+        else if (want === "fixed") { if (!has || td.dataset.prov) { show = false; break; } }
         else if (!txt.includes(want)) { show = false; break; }
       }
     }
