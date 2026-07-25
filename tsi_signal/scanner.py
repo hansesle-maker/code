@@ -22,6 +22,17 @@ from .data import (
     fetch_klines,
 )
 from .indicators import true_strength_index
+from .ratelimit import BINANCE_WEIGHTS, klines_weight
+
+
+def _note_weight(resp) -> None:
+    """Sync the shared budget from Binance's used-weight header."""
+    try:
+        used = resp.headers.get("X-MBX-USED-WEIGHT-1M")
+        if used:
+            BINANCE_WEIGHTS.observe(float(used))
+    except Exception:
+        pass
 
 log = logging.getLogger(__name__)
 
@@ -294,8 +305,16 @@ def _fetch_with_retry(symbol: str, tf: str, http,
                       base_url: str = FUTURES_BASE_URL,
                       path: str = FUTURES_KLINES_PATH,
                       retries: int = 3) -> list:
-    """Fetch klines with up to ``retries`` retries on 429 / 5xx errors."""
+    """Fetch klines with up to ``retries`` retries on 429 / 5xx errors.
+
+    Weight is drawn from the process-wide Binance budget so this scan and the
+    CVD scanner cannot together overrun the IP's 2400 weight/min.
+    """
+    is_futures = base_url == FUTURES_BASE_URL
+    weight = klines_weight(KLINE_LIMIT)
     for attempt in range(retries):
+        if is_futures:
+            BINANCE_WEIGHTS.acquire(weight)
         try:
             candles = fetch_klines(
                 symbol, tf,
@@ -305,6 +324,7 @@ def _fetch_with_retry(symbol: str, tf: str, http,
                 # 진행 중인 봉 포함 → 마감봉이 아닌 "스캔 시점" 실시간 값 기준
                 drop_unclosed=False,
                 session=http,
+                on_response=_note_weight if is_futures else None,
             )
             return candles
         except Exception as exc:
@@ -314,7 +334,10 @@ def _fetch_with_retry(symbol: str, tf: str, http,
                     wait = 2 ** attempt
                     log.warning("Rate-limited fetching %s %s (attempt %d/%d) — waiting %ds",
                                 symbol, tf, attempt + 1, retries, wait)
-                    time.sleep(wait)
+                    if is_futures:
+                        BINANCE_WEIGHTS.penalize(wait)
+                    else:
+                        time.sleep(wait)
             else:
                 log.debug("Fetch error %s %s: %s", symbol, tf, exc)
                 break

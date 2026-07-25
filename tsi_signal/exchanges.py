@@ -17,13 +17,12 @@ from __future__ import annotations
 
 import datetime
 import logging
-import os
-import threading
 import time
 from typing import Dict, List, Optional, Sequence
 
 import requests as _req
 
+from . import ratelimit
 from .data import (
     FUTURES_BASE_URL,
     FUTURES_KLINES_PATH,
@@ -62,35 +61,58 @@ _AGG_12H_PARTS = 3           # 12h = 3 × 4h
 _AGG_12H_CAP = 110           # 12h bars to build from 4h (2 pages, > MIN_BARS)
 
 
-class RateLimiter:
-    """Simple thread-safe cap of ``rate`` requests per second."""
+# Pacing lives in tsi_signal.ratelimit so the TSI scanner and this module
+# share one Binance weight budget — separate limiters cannot prevent a 429.
+BITHUMB_LIMITER = ratelimit.BITHUMB_LIMITER
+BINANCE_WEIGHTS = ratelimit.BINANCE_WEIGHTS
+RateLimiter = ratelimit.RateLimiter        # re-exported for convenience
 
-    def __init__(self, rate: float):
-        self._min_gap = 1.0 / rate if rate > 0 else 0.0
-        self._lock = threading.Lock()
-        self._next = 0.0
-
-    def wait(self) -> None:
-        if self._min_gap <= 0:
-            return
-        with self._lock:
-            now = time.monotonic()
-            if self._next > now:
-                delay = self._next - now
-            else:
-                delay = 0.0
-            self._next = max(now, self._next) + self._min_gap
-        if delay > 0:
-            time.sleep(delay)
+# 429/418 backoff for the Binance klines path.
+_RETRIES = 3
 
 
-# Request pacing. Both are the real governors of scan speed, so they are
-# env-tunable: raise them if your IP has headroom, lower them on 429s.
-#   Bithumb: public API caps well below Binance's.
-#   Binance: klines with limit 100–499 cost weight 2, and the budget is
-#            2400 weight/min → 20 req/s. 19 leaves a little headroom.
-BITHUMB_LIMITER = RateLimiter(float(os.environ.get("TSI_CVD_RATE_BITHUMB", 18.0)))
-BINANCE_LIMITER = RateLimiter(float(os.environ.get("TSI_CVD_RATE_BINANCE", 19.0)))
+def _note_binance_headers(resp) -> None:
+    """Keep the shared budget in sync with Binance's own accounting."""
+    try:
+        used = resp.headers.get("X-MBX-USED-WEIGHT-1M")
+        if used:
+            BINANCE_WEIGHTS.observe(float(used))
+    except Exception:                       # header parsing must never break a scan
+        pass
+
+
+def _fetch_binance_klines(symbol: str, tf: str, limit: int, session,
+                          closed_only: bool) -> List[Candle]:
+    """Weight-limited klines fetch that retries through rate-limit errors."""
+    weight = ratelimit.klines_weight(limit)
+    last_exc: Optional[Exception] = None
+    for attempt in range(_RETRIES):
+        BINANCE_WEIGHTS.acquire(weight)
+        try:
+            return fetch_klines(
+                symbol, tf,
+                limit=limit,
+                base_url=FUTURES_BASE_URL,
+                path=FUTURES_KLINES_PATH,
+                drop_unclosed=closed_only,
+                session=session,
+                on_response=_note_binance_headers,
+            )
+        except Exception as exc:
+            last_exc = exc
+            resp = getattr(exc, "response", None)
+            status = getattr(resp, "status_code", None)
+            if status in (429, 418):
+                retry_after = 0.0
+                try:
+                    retry_after = float((resp.headers or {}).get("Retry-After", 0))
+                except (TypeError, ValueError):
+                    retry_after = 0.0
+                # Park every worker, not just this one, then try again.
+                BINANCE_WEIGHTS.penalize(retry_after or (5.0 * (attempt + 1)))
+                continue
+            raise
+    raise last_exc if last_exc else RuntimeError("klines fetch failed")
 
 
 def _num(row: dict, *keys) -> float:
@@ -287,7 +309,9 @@ def fetch_bithumb_volumes(markets: Sequence[str], session=None) -> Dict[str, flo
 def fetch_binance_volumes(session=None) -> Dict[str, float]:
     """24h quote volume per USDⓈ-M futures symbol (single weight-40 call)."""
     http = session or _req
+    BINANCE_WEIGHTS.acquire(40)          # all-symbol ticker is weight 40
     resp = http.get(f"{FUTURES_BASE_URL}/fapi/v1/ticker/24hr", timeout=30)
+    _note_binance_headers(resp)
     resp.raise_for_status()
     out: Dict[str, float] = {}
     for r in resp.json():
@@ -306,15 +330,8 @@ def get_candles(exchange: str, symbol: str, tf: str, need: int = 150,
     """
     if exchange == BITHUMB:
         return fetch_bithumb_candles(symbol, tf, need, session, closed_only)
-    BINANCE_LIMITER.wait()
-    return fetch_klines(
-        symbol, tf,
-        limit=min(1500, need + 2),
-        base_url=FUTURES_BASE_URL,
-        path=FUTURES_KLINES_PATH,
-        drop_unclosed=closed_only,
-        session=session,
-    )
+    return _fetch_binance_klines(symbol, tf, min(1500, need + 2), session,
+                                 closed_only)
 
 
 def get_universe(exchange: str, top_n: Optional[int] = None,

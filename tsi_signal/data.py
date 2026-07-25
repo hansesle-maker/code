@@ -58,8 +58,12 @@ def fetch_klines(
     path: str = SPOT_KLINES_PATH,
     drop_unclosed: bool = True,
     session: Optional[object] = None,
+    on_response: Optional[Callable[[object], None]] = None,
 ) -> List[Candle]:
     """Fetch OHLCV klines from Binance's public REST API (no auth required).
+
+    ``on_response``, when given, is called with the raw response before it is
+    parsed — used to read rate-limit headers (``X-MBX-USED-WEIGHT-1M``).
 
     Works for spot (``base_url``/``path`` defaults) or USDⓈ-M futures
     (``FUTURES_BASE_URL`` + ``FUTURES_KLINES_PATH``); the row format is the
@@ -78,6 +82,8 @@ def fetch_klines(
     params = {"symbol": symbol, "interval": interval, "limit": limit}
     http = session or requests
     resp = http.get(url, params=params, timeout=15)
+    if on_response is not None:
+        on_response(resp)
     resp.raise_for_status()
     raw = resp.json()
 

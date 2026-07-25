@@ -35,9 +35,13 @@ log = logging.getLogger(__name__)
 
 bp = Blueprint("cvd", __name__)
 
-# Bars fetched per timeframe: EMA50 warmup + 21-bar Hist + 30-bar divergence
-# window needs ≥90; 150 keeps Binance at weight 2 and Bithumb at one page.
-CVD_NEED = 150
+# Bars fetched per timeframe, per exchange. Binance charges the same weight
+# (2) for any limit in 100–499, so depth there is free: on synthetic markets
+# 350 bars reproduced full-history detection 100% of the time versus 88% at
+# 150. Bithumb pages at 200 rows, so 198 keeps it to one request per
+# timeframe while still beating the old 150.
+CVD_NEED = {BINANCE: 350, BITHUMB: 198}
+CVD_NEED_DEFAULT = 200
 TOP_N_CHOICES = (50, 120, 250, 0)   # 0 = 전체
 DEFAULT_TOP_N = 0                   # 전체 종목
 DEFAULT_TFS = ("4h", "1h", "15m")   # 스캔·표시 기본 타임프레임
@@ -100,7 +104,8 @@ def _scan_cell(exchange: str, symbol: str, tf: str, n: int, period: int,
                mode: str):
     """One request's worth of work: (symbol, tf) → cell dict or error."""
     try:
-        candles = get_candles(exchange, symbol, tf, CVD_NEED, _session())
+        need = CVD_NEED.get(exchange, CVD_NEED_DEFAULT)
+        candles = get_candles(exchange, symbol, tf, need, _session())
         sig = scan_divergence(candles, n=n, period=period, mode=mode)
         return symbol, tf, (_sig_dict(sig) if sig else None), None
     except Exception as exc:
@@ -162,7 +167,13 @@ def do_scan(exchange: str, top_n: int, n: int = DEF_N,
                      f"({dead}/{total} 종목 실패). 첫 오류: "
                      + (all_errs[0] if all_errs else "알 수 없음"))
         elif all_errs:
+            rate_hits = sum(1 for e in all_errs if "429" in e or "418" in e)
             warn = f"{len(all_errs)}건의 개별 요청 실패 (예: {all_errs[0]})"
+            if rate_hits:
+                warn = (f"{len(all_errs)}건 실패 중 {rate_hits}건이 요청 한도(429) "
+                        f"— 재시도 후에도 실패한 건입니다. TSI 스캔과 겹쳤다면 "
+                        f"TSI_BINANCE_WEIGHT_PER_MIN 값을 낮춰 보세요. "
+                        f"(예: {all_errs[0]})")
 
         took = time.monotonic() - t0
         with _lock:
