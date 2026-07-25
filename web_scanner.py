@@ -98,7 +98,9 @@ def _clamp_settings(d: dict) -> dict:
             pass
     if "refresh_min" in d:
         try:
-            out["refresh_min"] = min(240, max(5, int(d["refresh_min"])))
+            v = int(d["refresh_min"])
+            # 0 = 자동 스캔 끄기; 그 외에는 5~240분
+            out["refresh_min"] = 0 if v <= 0 else min(240, max(5, v))
         except (TypeError, ValueError):
             pass
     return out
@@ -257,15 +259,26 @@ def _background_loop() -> None:
 
     The interval (``refresh_min`` setting) is re-read every few seconds so a
     change made in the web UI takes effect without restarting the server.
+    ``refresh_min = 0`` turns the periodic TSI scan off entirely — the web
+    server (and the CVD / 복리 pages) keep running, and the whole Binance
+    weight budget is left to whatever else is scanning.
     """
     while True:
         with _lock:
             iv = _settings["refresh_min"]
+        if iv <= 0:
+            time.sleep(10)          # off; re-check so the UI can switch it on
+            continue
         target = time.time() + _secs_to_next_boundary(iv)
         log.info("Next scan in %.0f s (every %d min + 8 s)", target - time.time(), iv)
+        turned_off = False
         while True:
             with _lock:
                 iv2 = _settings["refresh_min"]
+            if iv2 <= 0:
+                log.info("TSI auto-scan turned off via settings")
+                turned_off = True
+                break
             if iv2 != iv:
                 iv = iv2
                 target = time.time() + _secs_to_next_boundary(iv)
@@ -275,7 +288,8 @@ def _background_loop() -> None:
             if remain <= 0:
                 break
             time.sleep(min(10.0, remain))
-        do_scan()
+        if not turned_off:
+            do_scan()
 
 
 # ---------------------------------------------------------------------------
@@ -701,12 +715,18 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=5000)
     parser.add_argument("--no-scan", action="store_true",
                         help="skip the initial scan on startup")
+    parser.add_argument("--no-tsi-scan", action="store_true",
+                        help="TSI 전체 스캔(초기+주기)을 끔 — 웹 서버와 "
+                             "/cvd·/compound·/backtest는 그대로 동작")
     args = parser.parse_args()
 
-    if not args.no_scan:
-        threading.Thread(target=do_scan, daemon=True).start()
-
-    threading.Thread(target=_background_loop, daemon=True).start()
+    if args.no_tsi_scan:
+        log.info("TSI scan disabled (--no-tsi-scan); web server and the other "
+                 "pages keep running, full Binance budget left to /cvd")
+    else:
+        if not args.no_scan:
+            threading.Thread(target=do_scan, daemon=True).start()
+        threading.Thread(target=_background_loop, daemon=True).start()
     threading.Thread(target=_refresh_cardwell_symbols, daemon=True).start()
 
     log.info("Dashboard available at http://0.0.0.0:%d", args.port)

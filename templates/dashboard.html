@@ -168,7 +168,7 @@
 {% set st = settings if settings is defined and settings
             else {"swing_frac": 0.25, "refresh_min": 15} %}
 {% set swing_options = ([0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50] + [st.swing_frac]) | unique | sort %}
-{% set refresh_options = ([5, 10, 15, 30, 60] + [st.refresh_min]) | unique | sort %}
+{% set refresh_options = ([0, 5, 10, 15, 30, 60] + [st.refresh_min]) | unique | sort %}
 
 <!-- Topbar -->
 <div class="topbar" id="topbar">
@@ -194,9 +194,10 @@
         {% endfor %}
       </select>
       <select id="setRefresh" class="ctl-select" onchange="saveSettings(false)"
-              title="자동 갱신(스캔) 주기" {% if static_mode %}disabled{% endif %}>
+              title="자동 갱신(스캔) 주기 — 끄면 TSI 전체 스캔이 멈추고 바이낸스 요청 한도를 CVD 등이 전부 씁니다"
+              {% if static_mode %}disabled{% endif %}>
         {% for m in refresh_options %}
-        <option value="{{ m }}" {% if m == st.refresh_min %}selected{% endif %}>{{ m }}분</option>
+        <option value="{{ m }}" {% if m == st.refresh_min %}selected{% endif %}>{{ '스캔 끄기' if m == 0 else m ~ '분' }}</option>
         {% endfor %}
       </select>
       <a href="/cvd" style="text-decoration:none"><button title="CVD 다이버전스 스캐너 (바이낸스·빗썸)">📉 CVD</button></a>
@@ -538,7 +539,7 @@ function saveSettings(isSwing) {
     .catch(() => {});
 }
 
-/* ── Countdown / auto-reload (interval-aware) ──────────────── */
+/* ── Countdown / auto-reload (interval-aware; 0 = off) ──────── */
 function secsToNextReload() {
   const now = Date.now() / 1000, step = REFRESH_MIN * 60;
   return (Math.floor(now / step) + 1) * step - now;
@@ -547,12 +548,14 @@ function updateCountdown() {
   const el = document.getElementById("countdown");
   if (!el) return;
   if (Date.now() < _rescanMsgUntil) { el.textContent = "재스캔 중…"; return; }
+  if (!(REFRESH_MIN > 0)) { el.textContent = "자동 스캔 꺼짐"; return; }
   const s = Math.round(secsToNextReload()), m = Math.floor(s / 60);
   el.textContent = m + ":" + String(s % 60).padStart(2, "0");
 }
 let _reloadTimer = null;
 function armReload(overrideSecs) {
   if (_reloadTimer) clearTimeout(_reloadTimer);
+  if (overrideSecs == null && !(REFRESH_MIN > 0)) return;   // scanning is off
   const wait = (overrideSecs != null ? overrideSecs : secsToNextReload() + 20);
   _reloadTimer = setTimeout(reloadFresh, wait * 1000);
 }
