@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
 import threading
 import time
 from typing import Dict, List, Optional, Sequence
@@ -58,6 +59,7 @@ TF_MS: Dict[str, int] = {
 _BITHUMB_MIN_UNIT = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240}
 _BITHUMB_PAGE = 200          # max rows per v1 candle request
 _AGG_12H_PARTS = 3           # 12h = 3 × 4h
+_AGG_12H_CAP = 110           # 12h bars to build from 4h (2 pages, > MIN_BARS)
 
 
 class RateLimiter:
@@ -82,8 +84,13 @@ class RateLimiter:
             time.sleep(delay)
 
 
-# Bithumb's public API is rate-limited far more tightly than Binance's.
-BITHUMB_LIMITER = RateLimiter(18.0)
+# Request pacing. Both are the real governors of scan speed, so they are
+# env-tunable: raise them if your IP has headroom, lower them on 429s.
+#   Bithumb: public API caps well below Binance's.
+#   Binance: klines with limit 100–499 cost weight 2, and the budget is
+#            2400 weight/min → 20 req/s. 19 leaves a little headroom.
+BITHUMB_LIMITER = RateLimiter(float(os.environ.get("TSI_CVD_RATE_BITHUMB", 18.0)))
+BINANCE_LIMITER = RateLimiter(float(os.environ.get("TSI_CVD_RATE_BINANCE", 19.0)))
 
 
 def _num(row: dict, *keys) -> float:
@@ -239,8 +246,10 @@ def fetch_bithumb_candles(market: str, tf: str, need: int = 150,
         candles = _bithumb_minutes_paged(market, _BITHUMB_MIN_UNIT[tf],
                                          need + 2, session)
     elif tf == "12h":
-        raw = _bithumb_minutes_paged(market, 240,
-                                     (need + 2) * _AGG_12H_PARTS, session)
+        # Each 12h bar costs three 4h bars, so cap the source depth: 110 bars
+        # clears the indicator's 90-bar minimum in two pages instead of three.
+        want = min(need, _AGG_12H_CAP) * _AGG_12H_PARTS
+        raw = _bithumb_minutes_paged(market, 240, want, session)
         candles = aggregate(raw, TF_MS["12h"], _AGG_12H_PARTS,
                             allow_partial_last=not closed_only)
     else:
@@ -297,6 +306,7 @@ def get_candles(exchange: str, symbol: str, tf: str, need: int = 150,
     """
     if exchange == BITHUMB:
         return fetch_bithumb_candles(symbol, tf, need, session, closed_only)
+    BINANCE_LIMITER.wait()
     return fetch_klines(
         symbol, tf,
         limit=min(1500, need + 2),

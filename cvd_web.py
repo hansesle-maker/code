@@ -14,7 +14,9 @@ from __future__ import annotations
 import argparse
 import datetime
 import logging
+import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
@@ -36,8 +38,28 @@ bp = Blueprint("cvd", __name__)
 # Bars fetched per timeframe: EMA50 warmup + 21-bar Hist + 30-bar divergence
 # window needs ≥90; 150 keeps Binance at weight 2 and Bithumb at one page.
 CVD_NEED = 150
-_WORKERS = {BINANCE: 6, BITHUMB: 4}
 TOP_N_CHOICES = (50, 120, 250, 0)   # 0 = 전체
+
+# One request is one work item, so wall time ≈ requests / min(rate cap,
+# workers / RTT). Workers only need to be high enough to keep the rate
+# limiter in exchanges.py saturated; that limiter is what protects the IP.
+_WORKERS = {
+    BINANCE: int(os.environ.get("TSI_CVD_WORKERS_BINANCE", 16)),
+    BITHUMB: int(os.environ.get("TSI_CVD_WORKERS_BITHUMB", 10)),
+}
+
+# Thread-local HTTP sessions so connections (and TLS handshakes) are reused
+# across every request a worker makes, instead of one session per symbol.
+_tls = threading.local()
+
+
+def _session() -> _req.Session:
+    s = getattr(_tls, "session", None)
+    if s is None:
+        s = _req.Session()
+        s.headers.update({"Connection": "keep-alive"})
+        _tls.session = s
+    return s
 
 _lock = threading.Lock()
 
@@ -46,6 +68,8 @@ def _blank(top_n: int = 120) -> dict:
     return {
         "rows": [], "scanned_at": None, "scanning": False,
         "error": None, "warn": None, "done": 0, "total": 0,
+        "symbols": 0, "started_at": None, "took": None,
+        "tfs": list(TIMEFRAMES),
         "top_n": top_n, "n": DEF_N, "period": DEF_PERIOD, "mode": DEF_MODE,
     }
 
@@ -70,67 +94,63 @@ def _sig_dict(sig) -> dict:
     }
 
 
-def _scan_one(exchange: str, symbol: str, n: int, period: int, mode: str):
-    """Scan every timeframe for one symbol. Returns (row, [error strings])."""
-    session = _req.Session()
-    session.headers.update({"Connection": "keep-alive"})
-    cells: Dict[str, Optional[dict]] = {}
-    errs: List[str] = []
+def _scan_cell(exchange: str, symbol: str, tf: str, n: int, period: int,
+               mode: str):
+    """One request's worth of work: (symbol, tf) → cell dict or error."""
     try:
-        for tf in TIMEFRAMES:
-            try:
-                candles = get_candles(exchange, symbol, tf, CVD_NEED, session)
-                sig = scan_divergence(candles, n=n, period=period, mode=mode)
-                cells[tf] = _sig_dict(sig) if sig else None
-            except Exception as exc:            # per-timeframe isolation
-                cells[tf] = None
-                errs.append(f"{symbol} {tf}: {exc}")
-    finally:
-        session.close()
-    return {
-        "symbol": symbol,
-        "label": display_symbol(exchange, symbol),
-        "tf": cells,
-    }, errs
+        candles = get_candles(exchange, symbol, tf, CVD_NEED, _session())
+        sig = scan_divergence(candles, n=n, period=period, mode=mode)
+        return symbol, tf, (_sig_dict(sig) if sig else None), None
+    except Exception as exc:
+        return symbol, tf, None, f"{symbol} {tf}: {exc}"
 
 
 def do_scan(exchange: str, top_n: int, n: int = DEF_N,
-            period: int = DEF_PERIOD, mode: str = DEF_MODE) -> None:
-    """Scan the ranked universe and refresh ``_cache[exchange]``."""
+            period: int = DEF_PERIOD, mode: str = DEF_MODE,
+            tfs: Optional[List[str]] = None) -> None:
+    """Scan the ranked universe and refresh ``_cache[exchange]``.
+
+    Work is parallelised per (symbol, timeframe) so every worker stays busy
+    and fewer selected timeframes cut the time proportionally.
+    """
+    tfs = [tf for tf in (tfs or TIMEFRAMES) if tf in TIMEFRAMES] or list(TIMEFRAMES)
     with _lock:
         if _cache[exchange]["scanning"]:
             return
         _cache[exchange].update(scanning=True, error=None, warn=None,
-                                done=0, total=0, top_n=top_n,
+                                done=0, total=0, symbols=0, took=None,
+                                started_at=datetime.datetime.utcnow(),
+                                tfs=list(tfs), top_n=top_n,
                                 n=n, period=period, mode=mode)
+    t0 = time.monotonic()
     try:
         symbols = get_universe(exchange, top_n or None)
+        tasks = [(s, tf) for s in symbols for tf in tfs]
         with _lock:
-            _cache[exchange]["total"] = len(symbols)
-        log.info("CVD scan (%s): %d symbols × %d TFs …",
-                 exchange, len(symbols), len(TIMEFRAMES))
+            _cache[exchange]["total"] = len(tasks)
+            _cache[exchange]["symbols"] = len(symbols)
+        log.info("CVD scan (%s): %d symbols × %d TFs = %d requests, %d workers …",
+                 exchange, len(symbols), len(tfs), len(tasks),
+                 _WORKERS.get(exchange, 4))
 
-        rows: List[dict] = []
+        cells: Dict[str, Dict[str, Optional[dict]]] = {s: {} for s in symbols}
         all_errs: List[str] = []
-        dead = 0
+        err_count: Dict[str, int] = {s: 0 for s in symbols}
         with ThreadPoolExecutor(max_workers=_WORKERS.get(exchange, 4)) as pool:
-            futs = {pool.submit(_scan_one, exchange, s, n, period, mode): s
-                    for s in symbols}
+            futs = [pool.submit(_scan_cell, exchange, s, tf, n, period, mode)
+                    for s, tf in tasks]
             for fut in as_completed(futs):
-                try:
-                    row, errs = fut.result()
-                except Exception as exc:
-                    all_errs.append(f"{futs[fut]}: {exc}")
-                    dead += 1
-                else:
-                    rows.append(row)
-                    all_errs.extend(errs)
-                    if len(errs) == len(TIMEFRAMES):
-                        dead += 1
+                sym, tf, cell, err = fut.result()
+                cells[sym][tf] = cell
+                if err:
+                    all_errs.append(err)
+                    err_count[sym] += 1
                 with _lock:
                     _cache[exchange]["done"] += 1
 
-        rows.sort(key=lambda r: r["symbol"])
+        rows = [{"symbol": s, "label": display_symbol(exchange, s), "tf": cells[s]}
+                for s in sorted(symbols)]
+        dead = sum(1 for s in symbols if err_count[s] == len(tfs))
         total = len(symbols)
         error = warn = None
         if total and dead >= max(1, total // 2):
@@ -142,13 +162,15 @@ def do_scan(exchange: str, top_n: int, n: int = DEF_N,
         elif all_errs:
             warn = f"{len(all_errs)}건의 개별 요청 실패 (예: {all_errs[0]})"
 
+        took = time.monotonic() - t0
         with _lock:
             _cache[exchange].update(
                 rows=rows, scanned_at=datetime.datetime.utcnow(),
-                error=error, warn=warn,
+                error=error, warn=warn, took=round(took, 1),
             )
-        log.info("CVD scan (%s) done — %d rows, %d failures",
-                 exchange, len(rows), len(all_errs))
+        log.info("CVD scan (%s) done — %d rows, %d requests in %.1fs "
+                 "(%.1f req/s), %d failures", exchange, len(rows), len(tasks),
+                 took, len(tasks) / took if took else 0.0, len(all_errs))
     except Exception as exc:
         log.error("CVD scan (%s) failed: %s", exchange, exc)
         with _lock:
@@ -176,6 +198,13 @@ def _snapshot(exchange: str) -> dict:
             "warn": c["warn"],
             "done": c["done"],
             "total": c["total"],
+            "symbols": c["symbols"],
+            "tfs": list(c["tfs"]),
+            "took": c["took"],
+            "elapsed": (round((datetime.datetime.utcnow()
+                               - c["started_at"]).total_seconds(), 1)
+                        if c["started_at"] and c["scanning"] else None),
+            "workers": _WORKERS.get(exchange, 4),
             "top_n": c["top_n"],
             "n": c["n"],
             "period": c["period"],
@@ -218,13 +247,17 @@ def cvd_scan():
     except (TypeError, ValueError):
         period = DEF_PERIOD
     mode = "ema" if str(data.get("mode", DEF_MODE)).lower() == "ema" else "periodic"
+    req_tfs = data.get("tfs")
+    tfs = ([tf for tf in TIMEFRAMES if tf in set(req_tfs)]
+           if isinstance(req_tfs, list) and req_tfs else list(TIMEFRAMES))
 
     with _lock:
         if _cache[exchange]["scanning"]:
             return jsonify({"ok": True, "started": False, "reason": "already scanning"})
-    threading.Thread(target=do_scan, args=(exchange, top_n, n, period, mode),
+    threading.Thread(target=do_scan,
+                     args=(exchange, top_n, n, period, mode, tfs),
                      daemon=True).start()
-    return jsonify({"ok": True, "started": True})
+    return jsonify({"ok": True, "started": True, "tfs": tfs})
 
 
 def main() -> None:
