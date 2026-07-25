@@ -25,6 +25,7 @@ from flask import Flask, jsonify, render_template, request
 
 from cardwell_web import bp as cardwell_bp
 from cardwell_web import _refresh_symbols as _refresh_cardwell_symbols
+from cvd_web import bp as cvd_bp
 from tsi_signal.alerts import build_messages, diff_alerts, send_telegram
 from tsi_signal.data import (
     FUTURES_BASE_URL,
@@ -58,6 +59,7 @@ DISASTER_PCT = float(os.environ.get("TSI_DISASTER_PCT", DEFAULT_DISASTER_PCT))
 
 app = Flask(__name__)
 app.register_blueprint(cardwell_bp)
+app.register_blueprint(cvd_bp)
 
 # ---------------------------------------------------------------------------
 # Shared state (protected by _lock)

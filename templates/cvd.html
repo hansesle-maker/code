@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="CVD 다이버전스">
+  <title>CVD Divergence Scanner</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:#0b0b18; --surface:#13132a; --surface2:#1a1a35; --border:#242450;
+      --text:#dde0ff; --muted:#7070a0; --accent:#6a6aff;
+      --bull:#00d47e; --bear:#ff4a5a; --warn:#ffb340;
+    }
+    html { background: var(--bg); }
+    body { color: var(--text); font-size: 13px; min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", monospace;
+      -webkit-text-size-adjust: 100%; }
+
+    .topbar { position: sticky; top: 0; z-index: 200; background: var(--bg);
+      border-bottom: 1px solid var(--border); padding: 10px 14px;
+      padding-top: max(10px, env(safe-area-inset-top,0)); }
+    .topbar-row { display: flex; align-items: center; gap: 10px;
+      justify-content: space-between; margin-bottom: 8px; flex-wrap: wrap; }
+    .back { font-size: 12px; color: var(--muted); text-decoration: none;
+      padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; }
+    .back:hover { color: var(--accent); border-color: var(--accent); }
+    .title { font-size: 15px; font-weight: 700; color: var(--accent); }
+    .meta { font-size: 11px; color: var(--muted); margin-top: 1px; }
+    .ctrl-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    button, select { background: var(--surface); border: 1px solid var(--border);
+      color: var(--muted); border-radius: 8px; font-size: 12px; padding: 5px 9px;
+      cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    button:active { opacity: .7; }
+    button.active, select:focus { border-color: var(--accent); color: var(--text); }
+    button.active { background: rgba(106,106,255,.15); }
+    button.primary { background: var(--accent); color: #fff; font-weight: 700; border-color: var(--accent); }
+    button:disabled { opacity: .5; cursor: default; }
+    .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .seg button { border: none; border-radius: 0; }
+    .seg button.on { background: var(--accent); color: #fff; font-weight: 700; }
+    .search { width: 100%; padding: 7px 12px; background: var(--surface);
+      border: 1px solid var(--border); color: var(--text); border-radius: 8px; font-size: 13px; }
+    .search::placeholder { color: var(--muted); }
+    .search:focus { outline: none; border-color: var(--accent); }
+
+    .bar { margin: 8px 10px; padding: 8px 12px; border-radius: 8px; font-size: 12px; }
+    .error-bar { background: rgba(255,74,90,.14); border: 1px solid var(--bear); color: var(--bear); }
+    .warn-bar { background: rgba(255,179,64,.10); border: 1px solid rgba(255,179,64,.5); color: var(--warn); }
+    .prog-wrap { margin: 8px 10px; }
+    .prog { height: 6px; background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 4px; overflow: hidden; }
+    .prog > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+    .prog-lbl { font-size: 11px; color: var(--muted); margin-top: 4px; text-align: center; }
+
+    .table-wrap { overflow: auto; -webkit-overflow-scrolling: touch;
+      height: calc(100vh - var(--topbar-h, 150px));
+      padding-bottom: env(safe-area-inset-bottom, 12px); }
+    table { border-collapse: collapse; font-size: 12px; width: max-content; min-width: 100%; }
+    th, td { padding: 5px 8px; text-align: center; white-space: nowrap;
+      border-bottom: 1px solid var(--border); }
+    thead tr:first-child th { background: var(--surface); color: var(--muted);
+      font-size: 11px; font-weight: 600; position: sticky; top: 0; z-index: 11; }
+    thead tr.filter-row th { background: var(--surface); position: sticky;
+      top: var(--hdr-h, 30px); z-index: 10; padding: 3px 4px;
+      border-bottom: 2px solid var(--border); }
+    .th-sym { text-align: left; padding-left: 10px; min-width: 104px;
+      position: sticky; left: 0; z-index: 21; background: var(--surface); }
+    .td-sym { text-align: left; font-weight: 700; font-size: 13px; padding-left: 8px;
+      min-width: 104px; position: sticky; left: 0; z-index: 5;
+      background: var(--bg); border-right: 1px solid var(--border); }
+    .th-sortable { cursor: pointer; user-select: none; }
+    .th-sortable:hover { color: var(--text); }
+    .sort-dir { font-size: 9px; margin-left: 2px; opacity: .75; }
+    tbody tr:nth-child(even) td { background: rgba(255,255,255,.012); }
+    tbody tr:nth-child(even) .td-sym { background: #0e0e20; }
+    tbody tr:hover td { background: rgba(255,255,255,.05); }
+    tbody tr:hover .td-sym { background: #1a1a36; }
+    td.bull { color: var(--bull); font-weight: 600; }
+    td.bear { color: var(--bear); font-weight: 600; }
+    td.stale { opacity: .45; font-weight: 400; }
+    td.na { color: var(--muted); }
+    .filter-row select { font-size: 11px; padding: 2px 3px; background: var(--bg);
+      color: var(--text); max-width: 100%; }
+    .clr-btn { font-size: 11px; padding: 2px 8px; }
+    .bm-star { cursor: pointer; margin-left: 5px; font-size: 13px; color: var(--muted); }
+    .bm-star.on { color: #ffd700; }
+    .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 22px;
+      background: var(--surface2); border: 1px solid var(--accent); border-radius: 10px;
+      padding: 10px 14px; font-size: 12px; line-height: 1.6; max-width: 92vw; z-index: 500;
+      box-shadow: 0 8px 28px rgba(0,0,0,.55); display: none; }
+    .empty { text-align: center; padding: 50px 20px; color: var(--muted); line-height: 1.8; }
+    .spinner { width: 26px; height: 26px; margin: 0 auto 12px;
+      border: 3px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .legend { font-size: 11px; color: var(--muted); padding: 10px 14px; line-height: 1.7; }
+  </style>
+</head>
+<body>
+
+<div class="topbar" id="topbar">
+  <div class="topbar-row">
+    <div style="display:flex;align-items:center;gap:10px">
+      <a href="/" class="back">← 스캐너</a>
+      <div>
+        <div class="title">CVD 다이버전스 <span id="countLbl" style="font-size:11px;font-weight:400;color:var(--muted)"></span></div>
+        <div class="meta" id="metaLbl">스캔 대기</div>
+      </div>
+    </div>
+    <div class="ctrl-group">
+      <div class="seg" id="exSeg">
+        {% for ex in exchanges %}
+        <button data-ex="{{ ex.id }}" class="{{ 'on' if loop.first else '' }}">{{ '바이낸스' if ex.id == 'binance' else '빗썸 KRW' }}</button>
+        {% endfor %}
+      </div>
+      <select id="topN" title="24시간 거래대금 상위 N개 종목">
+        {% for n in top_n_choices %}
+        <option value="{{ n }}" {{ 'selected' if n == 120 else '' }}>{{ '전체' if n == 0 else '상위 ' ~ n }}</option>
+        {% endfor %}
+      </select>
+      <select id="autoMin" title="자동 재스캔 주기">
+        <option value="0" selected>수동</option>
+        <option value="15">15분</option>
+        <option value="30">30분</option>
+        <option value="60">60분</option>
+      </select>
+      <button id="bmBtn" onclick="toggleBmFilter(this)" title="즐겨찾기만 보기">⭐</button>
+      <button onclick="resetSort()" title="기본 정렬">↩</button>
+      <button class="primary" id="scanBtn" onclick="startScan()">스캔</button>
+    </div>
+  </div>
+  <input class="search" id="search" type="search" placeholder="심볼 검색 (예: BTC, ETH…)" oninput="applyFilter()">
+</div>
+
+<div id="errorBox" class="bar error-bar" style="display:none"></div>
+<div id="warnBox" class="bar warn-bar" style="display:none"></div>
+<div id="progWrap" class="prog-wrap" style="display:none">
+  <div class="prog"><div id="progFill"></div></div>
+  <div class="prog-lbl" id="progLbl"></div>
+</div>
+
+<div id="tableHost"></div>
+<div class="toast" id="toast" onclick="this.style.display='none'"></div>
+
+<div class="empty" id="emptyBox">
+  <div class="spinner" id="emptySpin" style="display:none"></div>
+  <p id="emptyMsg">스캔을 시작하세요.<br><small>거래대금 상위 종목을 6개 타임프레임(12h·4h·1h·15m·5m·1m)에서 훑습니다.</small></p>
+</div>
+
+<div class="legend">
+  <b>CVD Divergence Oscillator</b> (TradingFinder, Pine v5 포팅) · Hist = 볼륨델타 21봉 누적<br>
+  <b style="color:var(--bear)">약세</b>: 가격 고점↑ + CVD 고점↓ (-RD) &nbsp;·&nbsp;
+  <b style="color:var(--bull)">강세</b>: 가격 저점↓ + CVD 저점↑ (+RD)<br>
+  숫자 = 다이버전스 발생 봉(현재 진행봉 기준 N봉전) · 흐린 표시 = 30봉 경과(만료) · 셀을 누르면 상세
+</div>
+
+<script>
+"use strict";
+
+const TFS = {{ timeframes | tojson }};
+let EX = "binance";
+let DATA = { rows: [], scanning: false };
+let bookmarks = new Set();
+let showBmOnly = false;
+let pollTimer = null, autoTimer = null;
+let _key = "sym", _asc = true;
+
+/* ── bookmarks (shares the dashboard's server-side list) ─────── */
+function loadBookmarks() {
+  let ls = [];
+  try { ls = JSON.parse(localStorage.getItem("tsi_bm") || "[]"); } catch (e) {}
+  bookmarks = new Set(ls);
+}
+function pushBookmarks() {
+  localStorage.setItem("tsi_bm", JSON.stringify([...bookmarks]));
+  fetch("/bookmarks", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ symbols: [...bookmarks] }) }).catch(() => {});
+}
+function toggleBm(sym) {
+  if (bookmarks.has(sym)) bookmarks.delete(sym); else bookmarks.add(sym);
+  pushBookmarks(); render();
+}
+function toggleBmFilter(btn) {
+  showBmOnly = !showBmOnly;
+  btn.classList.toggle("active", showBmOnly);
+  render();
+}
+
+/* ── scan control ────────────────────────────────────────────── */
+function startScan() {
+  const body = { exchange: EX, top_n: parseInt(document.getElementById("topN").value, 10) };
+  fetch("/api/cvd/scan", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body) })
+    .then(r => r.json()).then(() => poll(true)).catch(() => {});
+}
+function poll() {
+  fetch(`/api/cvd/status?exchange=${EX}`)
+    .then(r => r.json())
+    .then(st => {
+      DATA = st;
+      render();
+      clearTimeout(pollTimer);
+      if (st.scanning) pollTimer = setTimeout(poll, 1500);
+    })
+    .catch(() => {});
+}
+/** Load the current exchange's cache; auto-scan when it has nothing yet. */
+function refresh(autoStart) {
+  fetch(`/api/cvd/status?exchange=${EX}`)
+    .then(r => r.json())
+    .then(st => {
+      DATA = st; render();
+      if (st.scanning) poll();
+      else if (autoStart && !st.rows.length) startScan();
+    })
+    .catch(() => {});
+}
+function switchExchange(ex, btn) {
+  EX = ex;
+  clearTimeout(pollTimer);
+  document.querySelectorAll("#exSeg button").forEach(b => b.classList.toggle("on", b === btn));
+  refresh(true);
+}
+function setAuto() {
+  clearInterval(autoTimer);
+  const m = parseInt(document.getElementById("autoMin").value, 10);
+  localStorage.setItem("cvd_auto", String(m));
+  if (m > 0) autoTimer = setInterval(startScan, m * 60000);
+}
+
+/* ── render ──────────────────────────────────────────────────── */
+function fmtAgo(iso) {
+  if (!iso) return "없음";
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return Math.round(s) + "초 전";
+  if (s < 3600) return Math.round(s / 60) + "분 전";
+  return Math.round(s / 3600) + "시간 전";
+}
+
+function esc(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function showToast(msg) {
+  const t = document.getElementById("toast");
+  t.innerHTML = msg;
+  t.style.display = "block";
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => { t.style.display = "none"; }, 6000);
+}
+
+function cellHtml(c, tf, label) {
+  if (!c) return '<td class="na" data-v="9999">—</td>';
+  const cls = (c.dir === "강세" ? "bull" : "bear") + (c.active ? "" : " stale");
+  const mark = c.strength >= 3 ? "⁂" : c.strength === 2 ? "⁑" : "";
+  const tip = `<b>${label} · ${tf} · ${c.dir} 다이버전스</b><br>` +
+    `발생: ${c.bars}봉전 · 강도 ${c.strength} (${c.strength_label})` +
+    (c.active ? "" : " · <b>만료</b>(30봉 경과)") + "<br>" +
+    `가격 ${c.prev_price} → ${c.pivot_price} · CVD ${c.prev_hist} → ${c.pivot_hist}<br>` +
+    `현재 Hist ${c.hist}` + (c.phase ? " · 구간 내 0선 교차" : "");
+  return `<td class="${cls}" data-v="${c.bars}" data-tip="${esc(tip)}">` +
+    `${c.bars}봉전 / ${c.dir}${mark}</td>`;
+}
+
+function render() {
+  const st = DATA;
+  // meta + progress
+  document.getElementById("metaLbl").textContent =
+    (st.exchange_label || "") + " · 갱신 " + fmtAgo(st.scanned_at) +
+    (st.top_n ? ` · 상위 ${st.top_n}` : " · 전체") +
+    (st.mode ? ` · CVD ${st.period}(${st.mode === "ema" ? "EMA" : "누적"}), n=${st.n}` : "");
+  const scanBtn = document.getElementById("scanBtn");
+  scanBtn.disabled = !!st.scanning;
+  scanBtn.textContent = st.scanning ? "스캔중" : "스캔";
+  const pw = document.getElementById("progWrap");
+  if (st.scanning) {
+    pw.style.display = "";
+    const pct = st.total ? Math.round(st.done / st.total * 100) : 0;
+    document.getElementById("progFill").style.width = pct + "%";
+    document.getElementById("progLbl").textContent =
+      st.total ? `${st.done} / ${st.total} 종목 (${pct}%)` : "종목 목록 조회 중…";
+  } else { pw.style.display = "none"; }
+
+  const eb = document.getElementById("errorBox");
+  eb.style.display = st.error ? "" : "none";
+  eb.textContent = st.error ? "⚠️ " + st.error : "";
+  const wb = document.getElementById("warnBox");
+  wb.style.display = st.warn ? "" : "none";
+  wb.textContent = st.warn ? "ℹ️ " + st.warn : "";
+
+  const rows = st.rows || [];
+  const emptyBox = document.getElementById("emptyBox");
+  if (!rows.length) {
+    document.getElementById("tableHost").innerHTML = "";
+    emptyBox.style.display = "";
+    document.getElementById("emptySpin").style.display = st.scanning ? "" : "none";
+    document.getElementById("emptyMsg").innerHTML = st.scanning
+      ? "스캔 중…<br><small>종목당 6개 타임프레임을 조회합니다.</small>"
+      : "표시할 데이터가 없습니다.<br><small>[스캔]을 눌러 시작하세요.</small>";
+    document.getElementById("countLbl").textContent = "";
+    setHeights();
+    return;
+  }
+  emptyBox.style.display = "none";
+
+  // sort
+  const sorted = rows.slice().sort((a, b) => {
+    let av, bv;
+    if (_key === "sym") { av = a.symbol; bv = b.symbol; return _asc ? av.localeCompare(bv) : bv.localeCompare(av); }
+    av = a.tf[_key] ? a.tf[_key].bars : 9999;
+    bv = b.tf[_key] ? b.tf[_key].bars : 9999;
+    return _asc ? av - bv : bv - av;
+  });
+
+  const head = `<tr>
+    <th class="th-sym th-sortable" onclick="sortBy('sym')">심볼<span class="sort-dir" id="d-sym"></span></th>
+    ${TFS.map(tf => `<th class="th-sortable" onclick="sortBy('${tf}')">${tf} 신호<span class="sort-dir" id="d-${tf}"></span></th>`).join("")}
+  </tr>
+  <tr class="filter-row">
+    <th class="th-sym"><button class="clr-btn" onclick="clearFilters()">해제</button></th>
+    ${TFS.map(tf => `<th><select data-tf="${tf}" onchange="applyFilter()">
+      <option value="">전체</option><option value="강세">강세</option>
+      <option value="약세">약세</option><option value="any">신호있음</option>
+      <option value="live">유효(30봉내)</option></select></th>`).join("")}
+  </tr>`;
+
+  const body = sorted.map(r => {
+    const on = bookmarks.has(r.symbol);
+    return `<tr data-sym="${r.symbol}">
+      <td class="td-sym">${r.label}<span class="bm-star ${on ? "on" : ""}" onclick="toggleBm('${r.symbol}')">${on ? "★" : "☆"}</span></td>
+      ${TFS.map(tf => cellHtml(r.tf[tf], tf, r.label)).join("")}
+    </tr>`;
+  }).join("");
+
+  document.getElementById("tableHost").innerHTML =
+    `<div class="table-wrap"><table id="tbl"><thead>${head}</thead><tbody id="tbody">${body}</tbody></table></div>`;
+  document.getElementById("tbody").addEventListener("click", e => {
+    const td = e.target.closest("td[data-tip]");
+    if (td) showToast(td.dataset.tip);
+  });
+  restoreFilters();
+  applyFilter();
+  updateIcons();
+  setHeights();
+}
+
+/* ── filters / sort ──────────────────────────────────────────── */
+let _filters = {};
+function restoreFilters() {
+  document.querySelectorAll("select[data-tf]").forEach(s => {
+    if (_filters[s.dataset.tf]) s.value = _filters[s.dataset.tf];
+  });
+}
+function applyFilter() {
+  const q = (document.getElementById("search").value || "").toUpperCase();
+  _filters = {};
+  document.querySelectorAll("select[data-tf]").forEach(s => { if (s.value) _filters[s.dataset.tf] = s.value; });
+  let vis = 0;
+  const trs = document.querySelectorAll("#tbody tr");
+  trs.forEach(tr => {
+    const sym = tr.dataset.sym || "";
+    let show = (!q || sym.includes(q)) && (!showBmOnly || bookmarks.has(sym));
+    if (show) {
+      for (const [tf, want] of Object.entries(_filters)) {
+        const td = tr.cells[TFS.indexOf(tf) + 1];
+        const txt = td ? td.textContent : "—";
+        const has = txt !== "—";
+        if (want === "any") { if (!has) { show = false; break; } }
+        else if (want === "live") { if (!has || td.classList.contains("stale")) { show = false; break; } }
+        else if (!txt.includes(want)) { show = false; break; }
+      }
+    }
+    tr.style.display = show ? "" : "none";
+    if (show) vis++;
+  });
+  document.getElementById("countLbl").textContent =
+    (vis < trs.length ? vis + "/" + trs.length : vis) + " 종목";
+}
+function clearFilters() {
+  document.getElementById("search").value = "";
+  _filters = {};
+  document.querySelectorAll("select[data-tf]").forEach(s => { s.value = ""; });
+  showBmOnly = false;
+  document.getElementById("bmBtn").classList.remove("active");
+  applyFilter();
+}
+function sortBy(key) { _asc = (_key === key) ? !_asc : (key === "sym"); _key = key; render(); }
+function resetSort() { _key = "sym"; _asc = true; render(); }
+function updateIcons() {
+  document.querySelectorAll(".sort-dir").forEach(e => e.textContent = "");
+  const el = document.getElementById("d-" + _key);
+  if (el) el.textContent = _asc ? "▲" : "▼";
+}
+
+/* ── layout ──────────────────────────────────────────────────── */
+function setHeights() {
+  let h = document.getElementById("topbar").offsetHeight;
+  ["errorBox", "warnBox", "progWrap"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && el.style.display !== "none") h += el.offsetHeight + 16;
+  });
+  document.documentElement.style.setProperty("--topbar-h", h + "px");
+  const hdr = document.querySelector("#tbl thead tr:first-child");
+  if (hdr) document.documentElement.style.setProperty("--hdr-h", hdr.offsetHeight + "px");
+}
+window.addEventListener("resize", setHeights);
+
+/* ── init ────────────────────────────────────────────────────── */
+document.querySelectorAll("#exSeg button").forEach(b =>
+  b.addEventListener("click", () => switchExchange(b.dataset.ex, b)));
+document.getElementById("autoMin").addEventListener("change", setAuto);
+document.getElementById("topN").addEventListener("change", () => {
+  localStorage.setItem("cvd_topn", document.getElementById("topN").value);
+});
+
+loadBookmarks();
+(function restorePrefs() {
+  const tn = localStorage.getItem("cvd_topn");
+  if (tn && document.querySelector(`#topN option[value="${tn}"]`)) document.getElementById("topN").value = tn;
+  const au = localStorage.getItem("cvd_auto");
+  if (au && document.querySelector(`#autoMin option[value="${au}"]`)) document.getElementById("autoMin").value = au;
+})();
+setAuto();
+refresh(true);                                        // first visit → auto-scan
+setInterval(() => { if (!DATA.scanning) render(); }, 30000);  // refresh "N분 전"
+</script>
+</body>
+</html>

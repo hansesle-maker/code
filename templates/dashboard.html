@@ -199,6 +199,7 @@
         <option value="{{ m }}" {% if m == st.refresh_min %}selected{% endif %}>{{ m }}분</option>
         {% endfor %}
       </select>
+      <a href="/cvd" style="text-decoration:none"><button title="CVD 다이버전스 스캐너 (바이낸스·빗썸)">📉 CVD</button></a>
       <a href="/compound" style="text-decoration:none"><button title="복리 실현기 — 목표수익 도달 시 기계적 실현">💰 복리실현</button></a>
       <a href="/backtest" style="text-decoration:none"><button title="Cardwell RSI 백테스트">📊 백테스트</button></a>
       <button id="bmBtn" onclick="toggleBmFilter(this)" title="즐겨찾기만 보기">⭐ 즐겨찾기</button>
