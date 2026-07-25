@@ -39,6 +39,8 @@ bp = Blueprint("cvd", __name__)
 # window needs ≥90; 150 keeps Binance at weight 2 and Bithumb at one page.
 CVD_NEED = 150
 TOP_N_CHOICES = (50, 120, 250, 0)   # 0 = 전체
+DEFAULT_TOP_N = 0                   # 전체 종목
+DEFAULT_TFS = ("4h", "1h", "15m")   # 스캔·표시 기본 타임프레임
 
 # One request is one work item, so wall time ≈ requests / min(rate cap,
 # workers / RTT). Workers only need to be high enough to keep the rate
@@ -64,12 +66,12 @@ def _session() -> _req.Session:
 _lock = threading.Lock()
 
 
-def _blank(top_n: int = 120) -> dict:
+def _blank(top_n: int = DEFAULT_TOP_N) -> dict:
     return {
         "rows": [], "scanned_at": None, "scanning": False,
         "error": None, "warn": None, "done": 0, "total": 0,
         "symbols": 0, "started_at": None, "took": None,
-        "tfs": list(TIMEFRAMES),
+        "tfs": list(DEFAULT_TFS),
         "top_n": top_n, "n": DEF_N, "period": DEF_PERIOD, "mode": DEF_MODE,
     }
 
@@ -113,7 +115,7 @@ def do_scan(exchange: str, top_n: int, n: int = DEF_N,
     Work is parallelised per (symbol, timeframe) so every worker stays busy
     and fewer selected timeframes cut the time proportionally.
     """
-    tfs = [tf for tf in (tfs or TIMEFRAMES) if tf in TIMEFRAMES] or list(TIMEFRAMES)
+    tfs = [tf for tf in (tfs or DEFAULT_TFS) if tf in TIMEFRAMES] or list(DEFAULT_TFS)
     with _lock:
         if _cache[exchange]["scanning"]:
             return
@@ -219,6 +221,8 @@ def cvd_page():
     return render_template(
         "cvd.html",
         timeframes=list(TIMEFRAMES),
+        default_tfs=list(DEFAULT_TFS),
+        default_top_n=DEFAULT_TOP_N,
         exchanges=[{"id": k, "label": v} for k, v in EXCHANGE_LABELS.items()],
         top_n_choices=list(TOP_N_CHOICES),
     )
@@ -234,9 +238,9 @@ def cvd_scan():
     data = request.get_json(force=True, silent=True) or {}
     exchange = _exchange_arg(data)
     try:
-        top_n = int(data.get("top_n", 120))
+        top_n = int(data.get("top_n", DEFAULT_TOP_N))
     except (TypeError, ValueError):
-        top_n = 120
+        top_n = DEFAULT_TOP_N
     top_n = 0 if top_n <= 0 else min(1000, top_n)
     try:
         n = min(5, max(1, int(data.get("n", DEF_N))))
@@ -249,7 +253,7 @@ def cvd_scan():
     mode = "ema" if str(data.get("mode", DEF_MODE)).lower() == "ema" else "periodic"
     req_tfs = data.get("tfs")
     tfs = ([tf for tf in TIMEFRAMES if tf in set(req_tfs)]
-           if isinstance(req_tfs, list) and req_tfs else list(TIMEFRAMES))
+           if isinstance(req_tfs, list) and req_tfs else list(DEFAULT_TFS))
 
     with _lock:
         if _cache[exchange]["scanning"]:

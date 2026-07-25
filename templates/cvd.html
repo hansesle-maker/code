@@ -122,7 +122,7 @@
       </div>
       <select id="topN" title="24시간 거래대금 상위 N개 종목">
         {% for n in top_n_choices %}
-        <option value="{{ n }}" {{ 'selected' if n == 120 else '' }}>{{ '전체' if n == 0 else '상위 ' ~ n }}</option>
+        <option value="{{ n }}" {{ 'selected' if n == default_top_n else '' }}>{{ '전체' if n == 0 else '상위 ' ~ n }}</option>
         {% endfor %}
       </select>
       <select id="autoMin" title="자동 재스캔 주기">
@@ -139,7 +139,7 @@
   <div class="tf-pick" id="tfPick" title="스캔할 타임프레임 — 적게 고르면 그만큼 빨라집니다">
     <span class="tf-lbl">TF</span>
     {% for tf in timeframes %}
-    <button data-tf="{{ tf }}" class="tf-chip on">{{ tf }}</button>
+    <button data-tf="{{ tf }}" class="tf-chip {{ 'on' if tf in default_tfs else '' }}">{{ tf }}</button>
     {% endfor %}
   </div>
   <input class="search" id="search" type="search" placeholder="심볼 검색 (예: BTC, ETH…)" oninput="applyFilter()">
@@ -157,7 +157,7 @@
 
 <div class="empty" id="emptyBox">
   <div class="spinner" id="emptySpin" style="display:none"></div>
-  <p id="emptyMsg">스캔을 시작하세요.<br><small>거래대금 상위 종목을 6개 타임프레임(12h·4h·1h·15m·5m·1m)에서 훑습니다.</small></p>
+  <p id="emptyMsg">스캔을 시작하세요.<br><small>선택한 타임프레임({{ default_tfs | join('·') }})에서 종목을 훑습니다.</small></p>
 </div>
 
 <div class="legend">
@@ -173,13 +173,16 @@
 "use strict";
 
 const ALL_TFS = {{ timeframes | tojson }};
-let TFS = ALL_TFS.slice();      // columns actually present in the loaded data
+const DEFAULT_TFS = {{ default_tfs | tojson }};
+let TFS = DEFAULT_TFS.slice();  // columns actually present in the loaded data
 let EX = "binance";
 let DATA = { rows: [], scanning: false };
 let bookmarks = new Set();
 let showBmOnly = false;
 let pollTimer = null, autoTimer = null;
 let _key = "sym", _asc = true;
+let _rowsSig = null;        // signature of the rows currently in the DOM
+let _skeletonTfs = null;    // column layout the table shell was built for
 
 /* ── bookmarks (shares the dashboard's server-side list) ─────── */
 function loadBookmarks() {
@@ -194,12 +197,18 @@ function pushBookmarks() {
 }
 function toggleBm(sym) {
   if (bookmarks.has(sym)) bookmarks.delete(sym); else bookmarks.add(sym);
-  pushBookmarks(); render();
+  pushBookmarks();
+  const on = bookmarks.has(sym);
+  document.querySelectorAll(`#tbody .bm-star[data-sym="${sym}"]`).forEach(s => {
+    s.textContent = on ? "★" : "☆";
+    s.classList.toggle("on", on);
+  });
+  applyFilter();          // in-place: never rebuild the table (keeps scroll)
 }
 function toggleBmFilter(btn) {
   showBmOnly = !showBmOnly;
   btn.classList.toggle("active", showBmOnly);
-  render();
+  applyFilter();
 }
 
 /* ── scan control ────────────────────────────────────────────── */
@@ -329,10 +338,12 @@ function render() {
   const emptyBox = document.getElementById("emptyBox");
   if (!rows.length) {
     document.getElementById("tableHost").innerHTML = "";
+    _skeletonTfs = null;
+    _rowsSig = null;
     emptyBox.style.display = "";
     document.getElementById("emptySpin").style.display = st.scanning ? "" : "none";
     document.getElementById("emptyMsg").innerHTML = st.scanning
-      ? "스캔 중…<br><small>종목당 6개 타임프레임을 조회합니다.</small>"
+      ? `스캔 중…<br><small>종목당 ${TFS.length}개 타임프레임을 조회합니다.</small>`
       : "표시할 데이터가 없습니다.<br><small>[스캔]을 눌러 시작하세요.</small>";
     document.getElementById("countLbl").textContent = "";
     setHeights();
@@ -340,15 +351,25 @@ function render() {
   }
   emptyBox.style.display = "none";
 
-  // sort
-  const sorted = rows.slice().sort((a, b) => {
-    let av, bv;
-    if (_key === "sym") { av = a.symbol; bv = b.symbol; return _asc ? av.localeCompare(bv) : bv.localeCompare(av); }
-    av = a.tf[_key] ? a.tf[_key].bars : 9999;
-    bv = b.tf[_key] ? b.tf[_key].bars : 9999;
-    return _asc ? av - bv : bv - av;
-  });
+  // Rebuild rows only when the data or ordering actually changed. Periodic
+  // meta refreshes must not touch the DOM here: replacing .table-wrap resets
+  // its scrollTop and yanks the reader back to the top of the page.
+  const sig = [st.scanned_at, rows.length, TFS.join(","), _key, _asc].join("|");
+  if (sig !== _rowsSig) {
+    _rowsSig = sig;
+    ensureSkeleton();
+    fillRows(rows);
+    restoreFilters();
+    applyFilter();
+  }
+  updateIcons();
+  setHeights();
+}
 
+/** Build the table shell (thead + empty tbody) once per column layout. */
+function ensureSkeleton() {
+  if (_skeletonTfs === TFS.join(",") && document.getElementById("tbody")) return;
+  _skeletonTfs = TFS.join(",");
   const head = `<tr>
     <th class="th-sym th-sortable" onclick="sortBy('sym')">심볼<span class="sort-dir" id="d-sym"></span></th>
     ${TFS.map(tf => `<th class="th-sortable" onclick="sortBy('${tf}')">${tf} 신호<span class="sort-dir" id="d-${tf}"></span></th>`).join("")}
@@ -361,25 +382,33 @@ function render() {
       <option value="live">유효(30봉내)</option>
       <option value="fixed">확정만</option></select></th>`).join("")}
   </tr>`;
-
-  const body = sorted.map(r => {
-    const on = bookmarks.has(r.symbol);
-    return `<tr data-sym="${r.symbol}">
-      <td class="td-sym">${r.label}<span class="bm-star ${on ? "on" : ""}" onclick="toggleBm('${r.symbol}')">${on ? "★" : "☆"}</span></td>
-      ${TFS.map(tf => cellHtml(r.tf[tf], tf, r.label)).join("")}
-    </tr>`;
-  }).join("");
-
   document.getElementById("tableHost").innerHTML =
-    `<div class="table-wrap"><table id="tbl"><thead>${head}</thead><tbody id="tbody">${body}</tbody></table></div>`;
+    `<div class="table-wrap" id="tableWrap"><table id="tbl"><thead>${head}</thead><tbody id="tbody"></tbody></table></div>`;
   document.getElementById("tbody").addEventListener("click", e => {
+    const star = e.target.closest(".bm-star");
+    if (star) { e.stopPropagation(); toggleBm(star.dataset.sym); return; }
     const td = e.target.closest("td[data-tip]");
     if (td) showToast(td.dataset.tip);
   });
-  restoreFilters();
-  applyFilter();
-  updateIcons();
-  setHeights();
+}
+
+/** Swap only tbody contents — .table-wrap survives, so scroll position does. */
+function fillRows(rows) {
+  const sorted = rows.slice().sort((a, b) => {
+    if (_key === "sym") {
+      return _asc ? a.symbol.localeCompare(b.symbol) : b.symbol.localeCompare(a.symbol);
+    }
+    const av = a.tf[_key] ? a.tf[_key].bars : 9999;
+    const bv = b.tf[_key] ? b.tf[_key].bars : 9999;
+    return _asc ? av - bv : bv - av;
+  });
+  document.getElementById("tbody").innerHTML = sorted.map(r => {
+    const on = bookmarks.has(r.symbol);
+    return `<tr data-sym="${r.symbol}">
+      <td class="td-sym">${r.label}<span class="bm-star ${on ? "on" : ""}" data-sym="${r.symbol}">${on ? "★" : "☆"}</span></td>
+      ${TFS.map(tf => cellHtml(r.tf[tf], tf, r.label)).join("")}
+    </tr>`;
+  }).join("");
 }
 
 /* ── filters / sort ──────────────────────────────────────────── */
@@ -451,21 +480,21 @@ document.querySelectorAll("#tfPick .tf-chip").forEach(b =>
   b.addEventListener("click", () => {
     b.classList.toggle("on");
     if (!pickedTfs().length) b.classList.add("on");   // keep at least one
-    localStorage.setItem("cvd_tfs", JSON.stringify(pickedTfs()));
+    localStorage.setItem("cvd_tfs2", JSON.stringify(pickedTfs()));
   }));
 document.getElementById("autoMin").addEventListener("change", setAuto);
 document.getElementById("topN").addEventListener("change", () => {
-  localStorage.setItem("cvd_topn", document.getElementById("topN").value);
+  localStorage.setItem("cvd_topn2", document.getElementById("topN").value);
 });
 
 loadBookmarks();
 (function restorePrefs() {
-  const tn = localStorage.getItem("cvd_topn");
+  const tn = localStorage.getItem("cvd_topn2");
   if (tn && document.querySelector(`#topN option[value="${tn}"]`)) document.getElementById("topN").value = tn;
   const au = localStorage.getItem("cvd_auto");
   if (au && document.querySelector(`#autoMin option[value="${au}"]`)) document.getElementById("autoMin").value = au;
   let saved = null;
-  try { saved = JSON.parse(localStorage.getItem("cvd_tfs") || "null"); } catch (e) {}
+  try { saved = JSON.parse(localStorage.getItem("cvd_tfs2") || "null"); } catch (e) {}
   if (Array.isArray(saved) && saved.length) {
     document.querySelectorAll("#tfPick .tf-chip").forEach(b =>
       b.classList.toggle("on", saved.includes(b.dataset.tf)));
