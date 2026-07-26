@@ -354,6 +354,8 @@ function render() {
     (st.exchange_label || "") + " · 갱신 " + fmtAgo(st.scanned_at) +
     (st.top_n ? ` · 상위 ${st.top_n}` : " · 전체") +
     (st.took != null ? ` · ${st.took}초 소요` : "") +
+    (st.rate != null ? ` (${st.rate} req/s${st.bound === "budget" ? ", 요청한도 제한" :
+                          st.bound === "network" ? ", 네트워크 제한" : ""})` : "") +
     (st.mode ? ` · CVD ${st.period}(${st.mode === "ema" ? "EMA" : "누적"}), n=${st.n}` : "");
   const scanBtn = document.getElementById("scanBtn");
   scanBtn.disabled = !!st.scanning;

@@ -28,7 +28,7 @@ from tsi_signal.cvd import (
     DEF_MODE, DEF_N, DEF_PERIOD, scan_divergence, strength_label,
 )
 from tsi_signal.exchanges import (
-    BINANCE, BITHUMB, EXCHANGE_LABELS, TIMEFRAMES,
+    BINANCE, BINANCE_WEIGHTS, BITHUMB, EXCHANGE_LABELS, TIMEFRAMES,
     display_symbol, get_candles, get_universe,
 )
 
@@ -76,6 +76,7 @@ def _blank(top_n: int = DEFAULT_TOP_N) -> dict:
         "rows": [], "scanned_at": None, "scanning": False,
         "error": None, "warn": None, "done": 0, "total": 0,
         "symbols": 0, "started_at": None, "took": None,
+        "rate": None, "bound": None,
         "tfs": list(DEFAULT_TFS),
         "top_n": top_n, "n": DEF_N, "period": DEF_PERIOD, "mode": DEF_MODE,
     }
@@ -132,7 +133,8 @@ def _persist_state() -> None:
                     "rows": c["rows"],
                     "scanned_at": c["scanned_at"].isoformat() if c["scanned_at"] else None,
                     "tfs": c["tfs"], "top_n": c["top_n"], "symbols": c["symbols"],
-                    "took": c["took"], "n": c["n"], "period": c["period"],
+                    "took": c["took"], "rate": c.get("rate"),
+                    "bound": c.get("bound"), "n": c["n"], "period": c["period"],
                     "mode": c["mode"], "warn": c["warn"],
                 }
         tmp = CVD_STATE_PATH + ".tmp"
@@ -163,6 +165,7 @@ def _load_state() -> None:
             tfs=c.get("tfs") or list(DEFAULT_TFS),
             top_n=c.get("top_n", DEFAULT_TOP_N),
             symbols=c.get("symbols", 0), took=c.get("took"),
+            rate=c.get("rate"), bound=c.get("bound"),
             n=c.get("n", DEF_N), period=c.get("period", DEF_PERIOD),
             mode=c.get("mode", DEF_MODE), warn=c.get("warn"),
         )
@@ -292,10 +295,21 @@ def do_scan(exchange: str, top_n: int, n: int = DEF_N,
                         f"(예: {all_errs[0]})")
 
         took = time.monotonic() - t0
+        rate = len(tasks) / took if took else 0.0
+        # Is the wall time set by the exchange budget or by network/CPU? At
+        # weight 2 per klines call the budget allows rate/2 requests a second.
+        limit_note = None
+        if exchange == BINANCE:
+            snap = BINANCE_WEIGHTS.snapshot()
+            ceiling_rps = snap["rate_per_s"] / 2.0
+            limit_note = ("budget" if rate >= ceiling_rps * 0.85 else "network")
+            log.info("CVD throughput %.1f req/s vs budget max %.1f req/s → %s-bound",
+                     rate, ceiling_rps, limit_note)
         with _lock:
             _cache[exchange].update(
                 rows=rows, scanned_at=datetime.datetime.utcnow(),
                 error=error, warn=warn, took=round(took, 1),
+                rate=round(rate, 1), bound=limit_note,
             )
         log.info("CVD scan (%s) done — %d rows, %d requests in %.1fs "
                  "(%.1f req/s), %d failures", exchange, len(rows), len(tasks),
@@ -331,6 +345,8 @@ def _snapshot(exchange: str) -> dict:
             "symbols": c["symbols"],
             "tfs": list(c["tfs"]),
             "took": c["took"],
+            "rate": c.get("rate"),
+            "bound": c.get("bound"),
             "elapsed": (round((datetime.datetime.utcnow()
                                - c["started_at"]).total_seconds(), 1)
                         if c["started_at"] and c["scanning"] else None),

@@ -17,6 +17,7 @@ import logging
 import os
 import threading
 import time
+from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -54,10 +55,14 @@ class WeightLimiter:
     """
 
     def __init__(self, budget: float, window: float = 60.0,
-                 burst_frac: float = 0.1, name: str = ""):
+                 burst_frac: float = 0.05, ceiling: Optional[float] = None,
+                 name: str = ""):
         self.budget = max(1.0, float(budget))
         self.window = window
         self.name = name
+        # The exchange's own hard limit, used only to decide when its
+        # used-weight header means real danger.
+        self.ceiling = float(ceiling) if ceiling else self.budget * 1.2
         self.rate = self.budget / window            # weight per second
         self.capacity = max(10.0, self.budget * burst_frac)
         self._tokens = self.capacity
@@ -105,14 +110,18 @@ class WeightLimiter:
     def observe(self, used: float) -> None:
         """React to the exchange's own used-weight header.
 
-        Traffic that never passed through this limiter still counts against
-        the IP, so when the exchange reports we are near the configured budget
-        we empty the bucket and let it refill at the safe rate.
+        Only a reading near the exchange's *hard ceiling* means trouble —
+        traffic outside this limiter is pushing us toward a ban. Reacting at
+        our own budget instead would fire on every response during a normal
+        scan (steady state sits at exactly the budget) and permanently strip
+        the burst headroom for no reason.
         """
-        if used >= self.budget:
+        if used >= self.ceiling * 0.95:
             with self._lock:
                 self._tokens = 0.0
                 self._last = time.monotonic()
+            log.warning("%s used-weight %.0f near ceiling %.0f — draining burst",
+                        self.name or "exchange", used, self.ceiling)
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -134,10 +143,13 @@ def klines_weight(limit: int) -> int:
     return 10
 
 
-# fapi allows 2400 weight/min per IP. 2000 sustained + a 200 burst stays
-# under it while leaving room for exchangeInfo / ticker / price polls.
+# fapi allows 2400 weight/min per IP. 2250 sustained + a 5% burst (112) peaks
+# at ~2362, leaving room for exchangeInfo / ticker / price polls. Raise or
+# lower with TSI_BINANCE_WEIGHT_PER_MIN; the scan time scales with it.
+BINANCE_CEILING = float(os.environ.get("TSI_BINANCE_WEIGHT_CEILING", 2400))
 BINANCE_WEIGHTS = WeightLimiter(
-    float(os.environ.get("TSI_BINANCE_WEIGHT_PER_MIN", 2000)), name="Binance fapi")
+    float(os.environ.get("TSI_BINANCE_WEIGHT_PER_MIN", 2250)),
+    ceiling=BINANCE_CEILING, name="Binance fapi")
 
 # Bithumb's public API caps requests, not weight.
 BITHUMB_LIMITER = RateLimiter(float(os.environ.get("TSI_CVD_RATE_BITHUMB", 18.0)))
