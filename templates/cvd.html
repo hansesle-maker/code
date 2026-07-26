@@ -185,15 +185,45 @@ let _rowsSig = null;        // signature of the rows currently in the DOM
 let _skeletonTfs = null;    // column layout the table shell was built for
 
 /* ── bookmarks (shares the dashboard's server-side list) ─────── */
+/* The server file is the source of truth. Pushing before it has been read
+   would overwrite it with whatever localStorage happens to hold (Safari
+   clears it), which is how bookmarks kept disappearing. */
+let _bmReady = false, _bmPending = false;
+
 function loadBookmarks() {
   let ls = [];
   try { ls = JSON.parse(localStorage.getItem("tsi_bm") || "[]"); } catch (e) {}
-  bookmarks = new Set(ls);
+  bookmarks = new Set(ls);                 // optimistic until the server answers
+  fetch("/bookmarks")
+    .then(r => r.json())
+    .then(res => {
+      if (!res || !res.ok) throw new Error("no server list");
+      const merged = new Set(res.symbols || []);
+      let added = false;
+      ls.forEach(s => { if (!merged.has(s)) { merged.add(s); added = true; } });
+      bookmarks = merged;
+      _bmReady = true;
+      if (added || _bmPending) pushBookmarks();   // migrate local-only stars
+      _bmPending = false;
+      refreshStars();
+      applyFilter();
+    })
+    .catch(() => { _bmReady = true; if (_bmPending) pushBookmarks(); });
 }
+
 function pushBookmarks() {
   localStorage.setItem("tsi_bm", JSON.stringify([...bookmarks]));
+  if (!_bmReady) { _bmPending = true; return; }   // never clobber the server
   fetch("/bookmarks", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ symbols: [...bookmarks] }) }).catch(() => {});
+}
+
+function refreshStars() {
+  document.querySelectorAll("#tbody .bm-star").forEach(s => {
+    const on = bookmarks.has(s.dataset.sym);
+    s.textContent = on ? "★" : "☆";
+    s.classList.toggle("on", on);
+  });
 }
 function toggleBm(sym) {
   if (bookmarks.has(sym)) bookmarks.delete(sym); else bookmarks.add(sym);
@@ -255,11 +285,22 @@ function switchExchange(ex, btn) {
   document.querySelectorAll("#exSeg button").forEach(b => b.classList.toggle("on", b === btn));
   refresh(true);
 }
+/** Auto-scan runs on the SERVER, so it keeps going with the page closed. */
 function setAuto() {
-  clearInterval(autoTimer);
   const m = parseInt(document.getElementById("autoMin").value, 10);
   localStorage.setItem("cvd_auto", String(m));
-  if (m > 0) autoTimer = setInterval(startScan, m * 60000);
+  fetch("/api/cvd/settings", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      auto_min: m, exchange: EX,
+      top_n: parseInt(document.getElementById("topN").value, 10),
+      tfs: pickedTfs(),
+    }),
+  }).then(r => r.json()).then(res => {
+    if (res && res.ok) showToast(m > 0
+      ? `서버에서 ${m}분마다 자동 스캔합니다 (페이지를 닫아도 계속).`
+      : "자동 스캔을 껐습니다.");
+  }).catch(() => {});
 }
 
 /* ── render ──────────────────────────────────────────────────── */
@@ -301,6 +342,13 @@ function cellHtml(c, tf, label) {
 function render() {
   const st = DATA;
   if (st.tfs && st.tfs.length) TFS = st.tfs;      // columns follow the data
+  if (st.auto_min != null) {                      // reflect the server's schedule
+    const sel = document.getElementById("autoMin");
+    if (sel && document.activeElement !== sel &&
+        document.querySelector(`#autoMin option[value="${st.auto_min}"]`)) {
+      sel.value = String(st.auto_min);
+    }
+  }
   // meta + progress
   document.getElementById("metaLbl").textContent =
     (st.exchange_label || "") + " · 갱신 " + fmtAgo(st.scanned_at) +
@@ -485,12 +533,14 @@ document.querySelectorAll("#tfPick .tf-chip").forEach(b =>
 document.getElementById("autoMin").addEventListener("change", setAuto);
 document.getElementById("topN").addEventListener("change", () => {
   localStorage.setItem("cvd_topn2", document.getElementById("topN").value);
+  if (parseInt(document.getElementById("autoMin").value, 10) > 0) setAuto();
 });
 
 loadBookmarks();
 (function restorePrefs() {
   const tn = localStorage.getItem("cvd_topn2");
   if (tn && document.querySelector(`#topN option[value="${tn}"]`)) document.getElementById("topN").value = tn;
+  // the server owns the interval now; localStorage is just a UI fallback
   const au = localStorage.getItem("cvd_auto");
   if (au && document.querySelector(`#autoMin option[value="${au}"]`)) document.getElementById("autoMin").value = au;
   let saved = null;
@@ -500,9 +550,10 @@ loadBookmarks();
       b.classList.toggle("on", saved.includes(b.dataset.tf)));
   }
 })();
-setAuto();
 refresh(true);                                        // first visit → auto-scan
 setInterval(() => { if (!DATA.scanning) render(); }, 30000);  // refresh "N분 전"
+// Pick up scans the server ran on its own (page may have been closed).
+setInterval(() => { if (!DATA.scanning) refresh(false); }, 60000);
 </script>
 </body>
 </html>

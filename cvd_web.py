@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import logging
 import os
 import threading
@@ -81,6 +82,121 @@ def _blank(top_n: int = DEFAULT_TOP_N) -> dict:
 
 
 _cache: Dict[str, dict] = {BINANCE: _blank(), BITHUMB: _blank()}
+
+# ── Auto-scan + on-disk cache ──────────────────────────────────────────────
+# The scan interval used to be a setInterval in the page, so it only fired
+# while a tab was open and awake, and results lived in memory only. Both now
+# live on the server: a background loop scans on schedule and every result is
+# written to disk, so a restart (or a phone that was asleep) still shows data.
+CVD_STATE_PATH = os.environ.get("TSI_CVD_STATE", "cvd_cache.json")
+_auto: dict = {
+    "auto_min": 0,                 # 0 = 수동
+    "exchange": BINANCE,
+    "top_n": DEFAULT_TOP_N,
+    "tfs": list(DEFAULT_TFS),
+}
+
+
+def _clean_auto(d: dict) -> dict:
+    out: dict = {}
+    if "auto_min" in d:
+        try:
+            v = int(d["auto_min"])
+            out["auto_min"] = 0 if v <= 0 else min(720, max(5, v))
+        except (TypeError, ValueError):
+            pass
+    if "exchange" in d and str(d["exchange"]).lower() in _cache:
+        out["exchange"] = str(d["exchange"]).lower()
+    if "top_n" in d:
+        try:
+            v = int(d["top_n"])
+            out["top_n"] = 0 if v <= 0 else min(1000, v)
+        except (TypeError, ValueError):
+            pass
+    if isinstance(d.get("tfs"), list) and d["tfs"]:
+        picked = [tf for tf in TIMEFRAMES if tf in set(d["tfs"])]
+        if picked:
+            out["tfs"] = picked
+    return out
+
+
+def _persist_state() -> None:
+    """Write auto-scan config + the latest rows so a restart keeps them."""
+    try:
+        with _lock:
+            payload = {"auto": dict(_auto), "cache": {}}
+            for name, c in _cache.items():
+                if not c["rows"]:
+                    continue
+                payload["cache"][name] = {
+                    "rows": c["rows"],
+                    "scanned_at": c["scanned_at"].isoformat() if c["scanned_at"] else None,
+                    "tfs": c["tfs"], "top_n": c["top_n"], "symbols": c["symbols"],
+                    "took": c["took"], "n": c["n"], "period": c["period"],
+                    "mode": c["mode"], "warn": c["warn"],
+                }
+        tmp = CVD_STATE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp, CVD_STATE_PATH)     # atomic: never leave a half file
+    except Exception as exc:
+        log.warning("CVD state save failed: %s", exc)
+
+
+def _load_state() -> None:
+    try:
+        with open(CVD_STATE_PATH, encoding="utf-8") as f:
+            payload = json.load(f)
+    except FileNotFoundError:
+        return
+    except Exception as exc:
+        log.warning("CVD state load failed: %s", exc)
+        return
+    _auto.update(_clean_auto(payload.get("auto") or {}))
+    for name, c in (payload.get("cache") or {}).items():
+        if name not in _cache or not isinstance(c, dict):
+            continue
+        ts = c.get("scanned_at")
+        _cache[name].update(
+            rows=c.get("rows") or [],
+            scanned_at=datetime.datetime.fromisoformat(ts) if ts else None,
+            tfs=c.get("tfs") or list(DEFAULT_TFS),
+            top_n=c.get("top_n", DEFAULT_TOP_N),
+            symbols=c.get("symbols", 0), took=c.get("took"),
+            n=c.get("n", DEF_N), period=c.get("period", DEF_PERIOD),
+            mode=c.get("mode", DEF_MODE), warn=c.get("warn"),
+        )
+    log.info("CVD state restored: %s, auto=%s분",
+             {k: len(v["rows"]) for k, v in _cache.items()}, _auto["auto_min"])
+
+
+_load_state()
+
+
+def _auto_loop() -> None:
+    """Scan on the configured interval, regardless of any open browser."""
+    while True:
+        with _lock:
+            minutes = _auto["auto_min"]
+            exchange = _auto["exchange"]
+            top_n = _auto["top_n"]
+            tfs = list(_auto["tfs"])
+            last = _cache[exchange]["scanned_at"]
+            busy = _cache[exchange]["scanning"]
+        if minutes > 0 and not busy:
+            due = (last is None
+                   or (datetime.datetime.utcnow() - last).total_seconds() >= minutes * 60)
+            if due:
+                log.info("CVD auto-scan firing (%s, every %d min)", exchange, minutes)
+                try:
+                    do_scan(exchange, top_n, tfs=tfs)
+                except Exception as exc:
+                    log.error("CVD auto-scan failed: %s", exc)
+        time.sleep(15)
+
+
+def start_auto_loop() -> None:
+    threading.Thread(target=_auto_loop, daemon=True).start()
 
 
 def _sig_dict(sig) -> dict:
@@ -184,6 +300,7 @@ def do_scan(exchange: str, top_n: int, n: int = DEF_N,
         log.info("CVD scan (%s) done — %d rows, %d requests in %.1fs "
                  "(%.1f req/s), %d failures", exchange, len(rows), len(tasks),
                  took, len(tasks) / took if took else 0.0, len(all_errs))
+        _persist_state()          # survive a restart
     except Exception as exc:
         log.error("CVD scan (%s) failed: %s", exchange, exc)
         with _lock:
@@ -218,6 +335,8 @@ def _snapshot(exchange: str) -> dict:
                                - c["started_at"]).total_seconds(), 1)
                         if c["started_at"] and c["scanning"] else None),
             "workers": _WORKERS.get(exchange, 4),
+            "auto_min": _auto["auto_min"],
+            "auto_exchange": _auto["exchange"],
             "top_n": c["top_n"],
             "n": c["n"],
             "period": c["period"],
@@ -242,6 +361,24 @@ def cvd_page():
 @bp.route("/api/cvd/status")
 def cvd_status():
     return jsonify({"ok": True, **_snapshot(_exchange_arg(request.args))})
+
+
+@bp.route("/api/cvd/settings", methods=["POST"])
+def cvd_settings():
+    """Set the server-side auto-scan config (interval, exchange, universe, TFs).
+
+    Body: {"auto_min": 0|5..720, "exchange": ..., "top_n": ..., "tfs": [...]}
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    clean = _clean_auto(data)
+    if not clean:
+        return jsonify({"ok": False, "error": "no valid settings"}), 400
+    with _lock:
+        _auto.update(clean)
+        current = dict(_auto)
+    _persist_state()
+    log.info("CVD auto-scan config: %s", current)
+    return jsonify({"ok": True, "auto": current})
 
 
 @bp.route("/api/cvd/scan", methods=["POST"])

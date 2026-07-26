@@ -26,6 +26,7 @@ from flask import Flask, jsonify, render_template, request
 from cardwell_web import bp as cardwell_bp
 from cardwell_web import _refresh_symbols as _refresh_cardwell_symbols
 from cvd_web import bp as cvd_bp
+from cvd_web import start_auto_loop as start_cvd_auto_loop
 from tsi_signal.alerts import build_messages, diff_alerts, send_telegram
 from tsi_signal.data import (
     FUTURES_BASE_URL,
@@ -439,14 +440,19 @@ def update_settings():
     return jsonify({"ok": True, "settings": current, "rescan": rescan})
 
 
-@app.route("/bookmarks", methods=["POST"])
+@app.route("/bookmarks", methods=["GET", "POST"])
 def update_bookmarks():
-    """Replace the bookmark list. Body: {"symbols": ["BTCUSDT", ...]}.
+    """Read (GET) or replace (POST ``{"symbols": [...]}``) the bookmark list.
 
-    서버 파일(bookmarks.json)에 저장되므로 새로고침·재시작·기기 변경에도
-    유지된다 (localStorage는 백업 용도로만 사용).
+    서버 파일(bookmarks.json)이 원본이라 새로고침·재시작·기기 변경에도
+    유지된다. GET이 있어야 다른 페이지가 서버 목록을 먼저 읽고 시작할 수
+    있다 — localStorage만 보고 저장하면 비어 있는 목록으로 덮어써서
+    즐겨찾기가 초기화된다.
     """
     global _bookmarks
+    if request.method == "GET":
+        with _lock:
+            return jsonify({"ok": True, "symbols": sorted(_bookmarks)})
     data = request.get_json(force=True, silent=True) or {}
     syms = data.get("symbols")
     if not isinstance(syms, list):
@@ -728,6 +734,7 @@ def main() -> None:
             threading.Thread(target=do_scan, daemon=True).start()
         threading.Thread(target=_background_loop, daemon=True).start()
     threading.Thread(target=_refresh_cardwell_symbols, daemon=True).start()
+    start_cvd_auto_loop()       # CVD 자동 스캔은 브라우저와 무관하게 서버에서
 
     log.info("Dashboard available at http://0.0.0.0:%d", args.port)
     app.run(host="0.0.0.0", port=args.port, debug=False, use_reloader=False)

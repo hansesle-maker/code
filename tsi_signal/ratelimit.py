@@ -17,8 +17,6 @@ import logging
 import os
 import threading
 import time
-from collections import deque
-from typing import Deque, Tuple
 
 log = logging.getLogger(__name__)
 
@@ -43,43 +41,51 @@ class RateLimiter:
 
 
 class WeightLimiter:
-    """Sliding-window weight budget shared by every caller in the process.
+    """Token-bucket weight budget shared by every caller in the process.
 
-    ``acquire`` blocks until spending ``weight`` keeps the last ``window``
-    seconds under ``budget``. ``penalize`` parks all callers after a 429/418,
-    and ``observe`` re-syncs the window from the exchange's own accounting
-    header so we stay honest even if some traffic bypassed the limiter.
+    Refills at ``budget / window`` per second with a small burst allowance,
+    which paces a long scan *evenly*. A sliding-window counter would instead
+    let the scan sprint through a whole minute's budget and then stall dead
+    until the window rolled — the same total time, but a confusing freeze
+    partway through.
+
+    Worst case over any ``window`` is ``budget + capacity``, so keep the
+    configured budget below the exchange's hard ceiling by at least the burst.
     """
 
-    def __init__(self, budget: float, window: float = 60.0, name: str = ""):
+    def __init__(self, budget: float, window: float = 60.0,
+                 burst_frac: float = 0.1, name: str = ""):
         self.budget = max(1.0, float(budget))
         self.window = window
         self.name = name
+        self.rate = self.budget / window            # weight per second
+        self.capacity = max(10.0, self.budget * burst_frac)
+        self._tokens = self.capacity
+        self._last = time.monotonic()
         self._lock = threading.Lock()
-        self._spent: Deque[Tuple[float, float]] = deque()
         self._until = 0.0          # global pause deadline (monotonic)
 
     # -- internals ---------------------------------------------------------
-    def _prune(self, now: float) -> float:
-        while self._spent and self._spent[0][0] <= now - self.window:
-            self._spent.popleft()
-        return sum(w for _, w in self._spent)
+    def _refill(self, now: float) -> None:
+        if now > self._last:
+            self._tokens = min(self.capacity,
+                               self._tokens + (now - self._last) * self.rate)
+            self._last = now
 
     # -- api ---------------------------------------------------------------
     def acquire(self, weight: float = 1.0) -> None:
-        # A single call heavier than the whole budget would never fit; clamp so
-        # it waits for an empty window instead of spinning forever.
-        weight = min(float(weight), self.budget)
+        # A call heavier than the bucket itself would never fit; clamp so it
+        # waits for a full bucket instead of spinning forever.
+        weight = min(float(weight), self.capacity)
         while True:
             with self._lock:
                 now = time.monotonic()
                 if now >= self._until:
-                    used = self._prune(now)
-                    if used + weight <= self.budget:
-                        self._spent.append((now, weight))
+                    self._refill(now)
+                    if self._tokens >= weight:
+                        self._tokens -= weight
                         return
-                    # wait for the oldest slice to age out of the window
-                    sleep_for = self._spent[0][0] + self.window - now if self._spent else 0.05
+                    sleep_for = (weight - self._tokens) / self.rate
                 else:
                     sleep_for = self._until - now
             time.sleep(max(0.01, min(sleep_for, 5.0)))
@@ -97,22 +103,24 @@ class WeightLimiter:
                     self.name or "exchange", seconds)
 
     def observe(self, used: float) -> None:
-        """Sync from the exchange's used-weight header for this window.
+        """React to the exchange's own used-weight header.
 
-        Capped at ``budget`` so a high reading slows us down without parking
-        everyone for a full window.
+        Traffic that never passed through this limiter still counts against
+        the IP, so when the exchange reports we are near the configured budget
+        we empty the bucket and let it refill at the safe rate.
         """
-        with self._lock:
-            now = time.monotonic()
-            tracked = self._prune(now)
-            delta = min(float(used), self.budget) - tracked
-            if delta > 0:           # someone spent weight without asking us
-                self._spent.append((now, delta))
+        if used >= self.budget:
+            with self._lock:
+                self._tokens = 0.0
+                self._last = time.monotonic()
 
     def snapshot(self) -> dict:
         with self._lock:
-            return {"used": self._prune(time.monotonic()), "budget": self.budget,
-                    "paused_for": max(0.0, self._until - time.monotonic())}
+            now = time.monotonic()
+            self._refill(now)
+            return {"tokens": round(self._tokens, 1), "capacity": self.capacity,
+                    "rate_per_s": round(self.rate, 2), "budget": self.budget,
+                    "paused_for": max(0.0, self._until - now)}
 
 
 def klines_weight(limit: int) -> int:
@@ -126,8 +134,8 @@ def klines_weight(limit: int) -> int:
     return 10
 
 
-# fapi allows 2400 weight/min per IP. Default to 2000 so bursts from
-# exchangeInfo / ticker / the compound page's price polls still fit.
+# fapi allows 2400 weight/min per IP. 2000 sustained + a 200 burst stays
+# under it while leaving room for exchangeInfo / ticker / price polls.
 BINANCE_WEIGHTS = WeightLimiter(
     float(os.environ.get("TSI_BINANCE_WEIGHT_PER_MIN", 2000)), name="Binance fapi")
 
