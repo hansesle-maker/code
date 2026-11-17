@@ -7,3 +7,6 @@ venv/
 signals*.csv
 config/symbols.csv
 .pytest_cache/
+
+# local audit deliverables (client data - do not commit)
+output/
